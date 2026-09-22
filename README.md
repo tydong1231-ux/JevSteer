@@ -15,6 +15,31 @@ Claude Code / Codex
 
 JevSteer keeps frontier models at the planning and recovery layer while Jev handles repetitive browser decisions cheaply.
 
+## Best use cases
+
+JevSteer is most useful for **multi-step, DOM-heavy work in authenticated web apps**:
+
+- SaaS admin, ERP, CRM and accounting workflows.
+- Repetitive 10–50 step browser tasks.
+- Search, filter, inspect, enter data, open records and download files.
+- Workflows that benefit from reusing the user's existing logged-in Chrome session.
+- High-volume browser execution where Claude/Codex should plan once, then stay out of the action loop.
+
+Typical examples:
+
+```text
+Find an organization → open Bills → filter records → inspect/download results
+Search a CRM → open matching accounts → collect fields → update allowed values
+Navigate an admin portal → check multiple records → report exceptions
+```
+
+JevSteer is **not the default choice** for:
+- 1–4 step browser tasks where direct Claude/Codex control is already cheap;
+- Canvas, maps, games, image-only or highly visual interfaces;
+- desktop cross-app automation;
+- workflows dominated by CAPTCHA, native file pickers, drag-and-drop or unsupported dialogs;
+- irreversible actions that should stay under explicit host/user control.
+
 ## Why Kapture
 
 JevSteer is built for **interactive browser work**, not deterministic test automation.
