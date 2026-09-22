@@ -38,7 +38,7 @@ For each milestone the host should provide:
 
 Do **not** give click-by-click instructions.
 
-Inside a milestone JevSteer loopd:
+Inside a milestone JevSteer loops:
 
 ```text
 observe → Jev decides → act → verify effect → observe → ...
