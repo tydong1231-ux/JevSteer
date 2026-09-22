@@ -1,7 +1,7 @@
 {
   "name": "jevsteer",
-  "version": "0.2.0",
-  "description": "Verified low-cost browser execution for coding agents: Jev decisions + Kapture control of your existing Chrome, exposed as one MCP server.",
+  "version": "0.3.0",
+  "description": "Host-planned, verified low-cost browser execution: milestones by Claude/Codex, Jev inside each milestone, Kapture on the user browser.",
   "type": "module",
   "main": "./src/index.mjs",
   "exports": {

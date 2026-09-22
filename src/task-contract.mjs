@@ -40,13 +40,14 @@ export function normalizeAssertions(assertions = []) {
   return out;
 }
 
-export function normalizeTaskContract({ goal, successCriteria, constraints, assertions } = {}) {
+export function normalizeTaskContract({ goal, successCriteria, constraints, guidance, assertions } = {}) {
   const cleanGoal = cleanString(goal, 1000);
   if (!cleanGoal) throw new Error("Task goal is required");
   return {
     goal: cleanGoal,
     success_criteria: uniqueStrings(successCriteria, { maxItems: 8, maxChars: 500 }),
     constraints: uniqueStrings(constraints, { maxItems: 8, maxChars: 500 }),
+    guidance: uniqueStrings(guidance, { maxItems: 8, maxChars: 500 }),
     assertions: normalizeAssertions(assertions),
   };
 }
@@ -56,6 +57,7 @@ export function contractForModel(contract) {
     goal: contract.goal,
     ...(contract.success_criteria.length ? { success_criteria: contract.success_criteria } : {}),
     ...(contract.constraints.length ? { constraints: contract.constraints } : {}),
+    ...(contract.guidance?.length ? { guidance: contract.guidance } : {}),
   };
 }
 
@@ -64,6 +66,9 @@ export function contractForResume(contract) {
     goal: contract.goal,
     ...(contract.success_criteria.length ? { success_criteria: contract.success_criteria } : {}),
     ...(contract.constraints.length ? { constraints: contract.constraints } : {}),
+    ...(contract.guidance?.length ? { guidance: contract.guidance } : {}),
     ...(contract.assertions.length ? { assertions: contract.assertions } : {}),
   };
 }
+
+export { cleanString, uniqueStrings };

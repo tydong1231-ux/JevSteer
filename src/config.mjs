@@ -9,6 +9,7 @@ export const config = {
   driftAutoRecoverAt: Number(process.env.JEVSTEER_DRIFT_RECOVER_AT || 0.12),
   sideEffectSafeAt: Number(process.env.JEVSTEER_SIDE_EFFECT_SAFE_AT || 0.2),
   constraintRiskAt: Number(process.env.JEVSTEER_CONSTRAINT_RISK_AT || 0.55),
+  nextStepClearAt: Number(process.env.JEVSTEER_NEXT_STEP_CLEAR_AT || 0.45),
   maxAutoRecoveries: Number(process.env.JEVSTEER_MAX_AUTO_RECOVERIES || 2),
   modelPageTextChars: Number(process.env.JEVSTEER_PAGE_TEXT_CHARS || 8000),
   maxSingleElements: 240,
@@ -18,8 +19,6 @@ export const config = {
 
 export function requireTypesafeKey() {
   const key = process.env.TYPESAFE_API_KEY;
-  if (!key) {
-    throw new Error("TYPESAFE_API_KEY is not set. Get a TypeSafe API key and expose it to the MCP process.");
-  }
+  if (!key) throw new Error("TYPESAFE_API_KEY is not set. Get a TypeSafe API key and expose it to the MCP process.");
   return key;
 }

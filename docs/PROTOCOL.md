@@ -1,66 +1,32 @@
-# JevSteer host/executor protocol
+# JevSteer protocol
 
-## Roles
+## Responsibility split
 
-- **Host (Claude Code / Codex):** understand user intent, form a Task Contract, resolve ambiguity/vision/high-risk situations.
-- **JevSteer:** execute bounded browser actions, detect drift, verify completion, return structured recovery.
-- **Jev:** typed low-cost decisions only; no free-form planning or text generation.
-- **Kapture:** observe/control the user's real Chrome tab.
+- **Host:** understand user intent/system logic, define milestones, review milestone evidence, patch guidance.
+- **Jev:** choose the next action inside one milestone.
+- **Runtime:** DOM observation, action execution, deterministic effect checks, drift/safety gates, network evidence.
+- **Kapture:** real Chrome control + DOM/network transport.
 
-## Normal flow
+## Milestone contract
 
-```text
-Host
-  -> browser_run(Task Contract)
-      -> Jev/Kapture internal loop
-      -> strict final verification
-  <- completed_verified
-```
+A milestone contains `goal`, `success_criteria`, optional `constraints`, `guidance`, and deterministic `assertions`.
 
-The host should not inspect every internal step.
+Guidance must be just-in-time workflow knowledge, not selectors or click sequences.
 
-Tool results keep a JSON text fallback and also expose structured MCP content when the host supports it, so status/recovery can be consumed without parsing prose.
+## Loop
 
-## Task Contract
+`observe -> decide -> act -> verify effect -> observe`
 
-`goal` is required.
+JevSteer never assumes an action succeeded only because the command returned. The next observation records a mechanical effect check; final milestone completion still requires strict semantic/assertion verification.
 
-For multi-step or identity-sensitive tasks, the host SHOULD provide `success_criteria`. Criteria should describe final observable facts, not instructions.
+If workflow knowledge is missing, return `needs_guidance` instead of guessing. The host patches the current milestone and resumes.
 
-Good:
+## Host review
 
-- `Customer name is exactly ABC Pte Ltd`
-- `Invoice INV-42 detail page is open`
+`strict`: return `milestone_ready_for_review` after each verified milestone. Host acceptance is expressed by starting `next_milestone_index`; rejection reruns the same milestone with corrected guidance/criteria.
 
-Bad:
+`fast`: continue automatically across internally verified milestones.
 
-- `Click Customers, type ABC, click the first row`
+## Evidence
 
-Use `constraints` for prohibited effects and `assertions` only for exact machine-checkable facts.
-
-## Completion rule
-
-Only `completed_verified` is success.
-
-`done` from the internal executor is only a candidate completion signal; it is never returned as final success.
-
-## Recovery rule
-
-When `recovery` is present:
-
-1. Follow `recovery.next_tool` if supplied.
-2. Perform the minimum correction needed.
-3. Do not expand into click-by-click manual control unless JevSteer remains blocked.
-4. If `resume_after=true`, call `browser_run` again with the same Task Contract and original values.
-
-## Visual fallback
-
-For `needs_vision`, use the host's native computer-use/vision capability (or `browser_screenshot`) for only the visual step, then resume JevSteer.
-
-## Irreversible actions
-
-For `needs_confirmation`, the host must get explicit user authorization before re-running with `allow_irreversible=true`.
-
-## Drift
-
-The internal loop continuously scores `on_track`. A wrong navigation is auto-reversed only when JevSteer can conservatively prove it was navigation-like and low-side-effect. Otherwise it returns `drifted` to the host.
+Each milestone returns a compact Evidence Packet: actions/effects, verification, final page, filtered network evidence. Relevant request/response bodies are sanitized and referenced; expand only when needed via `browser_evidence`.

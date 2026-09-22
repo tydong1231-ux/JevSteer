@@ -5,6 +5,7 @@ const MAP = {
   stuck: ["inspect_and_replan", "browser_snapshot", true],
   max_actions: ["inspect_and_replan", "browser_snapshot", true],
   drifted: ["inspect_and_replan", "browser_snapshot", true],
+  needs_guidance: ["host_guidance_patch", null, true],
   needs_vision: ["host_visual_step", "browser_screenshot", true],
   needs_login: ["user_login", null, true],
   needs_confirmation: ["user_confirmation", null, true],

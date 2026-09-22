@@ -9,12 +9,14 @@ test("task contract stays compact and deterministic assertions are strict", () =
     goal: " Open ABC's latest invoice ",
     successCriteria: ["Customer is ABC Pte Ltd", "Customer is ABC Pte Ltd", "Latest invoice is open"],
     constraints: ["Do not edit anything"],
+    guidance: ["Use the invoice list, not reports"],
     assertions: [
       { type: "url_contains", value: "/invoice/" },
       { type: "text_not_contains", value: "ABC Trading" },
     ],
   });
   assert.deepEqual(contract.success_criteria, ["Customer is ABC Pte Ltd", "Latest invoice is open"]);
+  assert.deepEqual(contract.guidance, ["Use the invoice list, not reports"]);
   const page = { url: "https://app.test/invoice/42", title: "Invoice", text: "ABC Pte Ltd INV-42" };
   const results = evaluateAssertions(page, contract.assertions);
   assert.equal(results.every((x) => x.passed), true);

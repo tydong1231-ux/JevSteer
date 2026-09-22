@@ -3,33 +3,40 @@ import * as z from "zod/v4";
 import { JevSteerRuntime } from "./runtime.mjs";
 
 const SERVER_POLICY = [
-  "Default browser executor: use browser_run for complete outcome-level browser tasks instead of issuing browser actions step by step.",
-  "For multi-step or identity-sensitive tasks, include concise success_criteria. Add constraints for actions/effects that must not happen. Add deterministic assertions only when an exact URL/title/text condition is known.",
-  "Jev runs the internal action loop cheaply. browser_run independently verifies completion before returning completed_verified.",
-  "Do not treat any other status as success. Follow recovery.next_tool and recovery.strategy when present.",
-  "For ambiguous, stuck, drifted, verification_failed or verification_uncertain, inspect with browser_snapshot and use browser_act only for one surgical correction, then resume browser_run with the same task contract.",
-  "If browser_run returns needs_vision, use browser_screenshot or the host's native computer-use/vision capability for only the visual step, then resume browser_run.",
-  "If it returns needs_confirmation, obtain explicit user authorization before re-running the same task contract with allow_irreversible=true.",
-  "Put strings to type in values. Put secrets such as passwords in values, not in goal/success_criteria/constraints; secret-like value keys are redacted before Jev sees them.",
+  "Use browser_run for outcome-level web tasks; do not micromanage clicks.",
+  "For long tasks, the HOST defines milestones. Each milestone must describe one observable outcome, measurable success criteria, constraints, and only the workflow facts needed for that stage. Do not encode click scripts as guidance.",
+  "JevSteer loops inside a milestone: observe -> decide -> act -> verify effect -> observe. It escalates instead of guessing when workflow knowledge is missing.",
+  "On needs_guidance, add one or more concise workflow facts to the CURRENT milestone guidance and rerun the same milestone_index/run_id. Do not take over the whole browser unless the task needs vision or an unsupported interaction.",
+  "In strict review_mode, browser_run returns milestone_ready_for_review after each verified milestone. Review its Evidence Packet; continue with next_milestone_index only if accepted. If rejected, rerun the same milestone with corrected guidance/criteria.",
+  "Evidence Packets contain action-effect checks, final verification and filtered network evidence. Use browser_evidence only when a referenced request/response needs deeper inspection.",
+  "Only completed_verified is automatic final success. milestone_ready_for_review means the executor passed its checks but the host still owns acceptance.",
+  "Put secrets only in values. Never bypass CAPTCHA, 2FA, security prompts, destructive confirmations or payment/legal submission confirmation.",
 ].join(" ");
 
 const text = (value) => {
   const content = [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }];
-  if (value && typeof value === "object" && !Array.isArray(value) && !Buffer.isBuffer(value)) {
-    return { content, structuredContent: value };
-  }
-  return { content };
+  return value && typeof value === "object" && !Array.isArray(value) && !Buffer.isBuffer(value)
+    ? { content, structuredContent: value }
+    : { content };
 };
 const fail = (error) => ({ isError: true, content: [{ type: "text", text: String(error?.message ?? error).split("\n")[0] }] });
-const wrap = (handler) => async (args) => {
-  try { return await handler(args); } catch (error) { return fail(error); }
-};
+const wrap = (handler) => async (args) => { try { return await handler(args); } catch (error) { return fail(error); } };
 
 const assertionSchema = z.object({
   type: z.enum(["text_contains", "text_not_contains", "title_contains", "url_contains", "url_matches"]),
   value: z.string().min(1).max(300),
   case_sensitive: z.boolean().optional().default(false),
-  flags: z.string().max(8).optional().describe("Only used by url_matches. Defaults to case-insensitive matching."),
+  flags: z.string().max(8).optional(),
+});
+
+const milestoneSchema = z.object({
+  id: z.string().min(1).max(80).optional(),
+  goal: z.string().min(1).max(1000).describe("One observable stage outcome, not click instructions."),
+  success_criteria: z.array(z.string().min(1).max(500)).max(8).optional(),
+  constraints: z.array(z.string().min(1).max(500)).max(8).optional(),
+  guidance: z.array(z.string().min(1).max(500)).max(8).optional().describe("Just-in-time workflow facts. Example: 'Save keeps the user in the editor; Continue advances to review.' Do not give selector/click scripts."),
+  assertions: z.array(assertionSchema).max(12).optional(),
+  max_actions: z.number().int().min(1).max(40).optional(),
 });
 
 export function createServer() {
@@ -37,89 +44,98 @@ export function createServer() {
   const server = new McpServer({
     name: "jevsteer",
     title: "JevSteer Browser Runtime",
-    version: "0.2.0",
-    description: "Low-cost verified browser execution: Jev decisions + Kapture control of the user's existing Chrome."
-  }, {
-    instructions: SERVER_POLICY,
-  });
+    version: "0.3.0",
+    description: "Host-planned, verified low-cost browser execution: milestones by the host, Jev inside each milestone, Kapture on the user's Chrome.",
+  }, { instructions: SERVER_POLICY });
 
   server.registerTool("browser_doctor", {
     title: "Browser Doctor",
-    description: "Check TypeSafe configuration, Kapture server status, browser extension connection, connected tabs, and tab leases. Use this first when browser tools are not working.",
+    description: "Check TypeSafe, Kapture, connected tabs and tab leases.",
     inputSchema: z.object({}),
   }, wrap(async () => text(await runtime.doctor())));
 
   server.registerTool("browser_tabs", {
     title: "List Browser Tabs",
-    description: "List Chrome/Chromium tabs currently connected through the Kapture extension, including tab ids and lease status.",
+    description: "List Chrome tabs connected through Kapture.",
     inputSchema: z.object({}),
   }, wrap(async () => text({ tabs: await runtime.tabs() })));
 
   server.registerTool("browser_open", {
     title: "Open URL",
-    description: "Open an absolute URL. By default creates a new real browser tab, preserving the user's normal Chrome profile/login environment.",
+    description: "Open an absolute URL in the user's real Chrome session.",
     inputSchema: z.object({
       url: z.string().url(),
-      tab_id: z.string().optional().describe("Existing connected Kapture tab id. Used only when new_tab=false."),
+      tab_id: z.string().optional(),
       new_tab: z.boolean().optional().default(true),
     }),
   }, wrap(async ({ url, tab_id, new_tab }) => text(await runtime.open(url, { tabId: tab_id, newTab: new_tab }))));
 
   server.registerTool("browser_run", {
-    title: "Run Verified Browser Goal",
+    title: "Run Browser Task",
     description: [
-      "DEFAULT tool for browser interaction. Give it one outcome-level goal; it executes many browser steps internally with Jev + Kapture.",
-      "For multi-step or identity-sensitive work, provide 1-5 measurable success_criteria so the final verifier can independently accept/reject the result. Example: ['Customer name is exactly ABC Pte Ltd', 'An invoice detail page is open', 'The shown invoice is the newest by date'].",
-      "Use constraints for effects that must not happen, e.g. ['Do not edit or send anything']. The executor checks constraint risk before each action.",
-      "Use assertions only for facts that can be checked deterministically from URL/title/visible text. Assertions are strict and all must pass.",
-      "Put every string that may need typing/selecting in values with meaningful keys. Secrets belong only in values.",
-      "Success status is completed_verified. Other statuses include verification_uncertain, verification_failed, needs_login, needs_confirmation, needs_vision, constraint_blocked, drifted, blocked, error, ambiguous, stuck and max_actions.",
-      "On non-success, follow the structured recovery object. Use browser_snapshot/browser_act only for one surgical correction, then resume browser_run with the same contract.",
-      "Only set allow_irreversible=true after explicit user authorization for the side effect.",
+      "DEFAULT browser executor. For short tasks, pass goal + success_criteria. For long workflows, the HOST should define milestones before execution.",
+      "A milestone is a semantic checkpoint: one outcome + measurable success_criteria + optional constraints/guidance/assertions. Guidance should contain only product/workflow facts Jev cannot infer reliably from the current DOM; never provide click-by-click instructions.",
+      "Inside each milestone JevSteer repeatedly observes the DOM, chooses one action, executes it, records a mechanical action-effect check, and re-observes before choosing the next action.",
+      "If Jev cannot safely infer the next business transition it returns needs_guidance. Patch only the current milestone guidance and rerun the same milestone_index with the same run_id.",
+      "review_mode=strict returns milestone_ready_for_review after every internally verified milestone with an Evidence Packet. The host accepts by invoking the same plan at next_milestone_index; reject by rerunning the same milestone with corrected guidance/criteria.",
+      "review_mode=fast automatically proceeds across verified milestones and only escalates uncertainty/unsupported/high-risk steps.",
+      "evidence_level=relevant captures network metadata plus sanitized request/response evidence for mutating/error requests when Kapture network monitoring is available.",
     ].join("\n"),
     inputSchema: z.object({
-      goal: z.string().min(1).max(1000).describe("One observable browser outcome, not a list of click instructions."),
-      success_criteria: z.array(z.string().min(1).max(500)).max(8).optional().describe("Measurable semantic conditions that must be true at completion. Strongly recommended for multi-step/identity-sensitive tasks."),
-      constraints: z.array(z.string().min(1).max(500)).max(8).optional().describe("Actions/effects the executor must avoid throughout the task."),
-      assertions: z.array(assertionSchema).max(12).optional().describe("Optional deterministic acceptance checks over URL/title/visible text. All assertions must pass."),
-      tab_id: z.string().optional().describe("Connected Kapture tab id. Omit to use the active/visible connected tab."),
-      values: z.record(z.string(), z.string()).optional().describe("Named strings Jev may choose to type/select. Secret-like keys are redacted before Jev sees content."),
+      goal: z.string().min(1).max(1000).describe("Overall outcome."),
+      milestones: z.array(milestoneSchema).max(12).optional().describe("Host-defined semantic checkpoints for long workflows."),
+      review_mode: z.enum(["fast", "strict"]).optional().default("fast"),
+      milestone_index: z.number().int().min(0).max(11).optional().default(0).describe("Which milestone to execute/resume. In strict mode use next_milestone_index after host acceptance."),
+      run_id: z.string().max(120).optional().describe("Reuse the returned run_id across milestone reviews/retries so evidence references remain grouped."),
+      success_criteria: z.array(z.string().min(1).max(500)).max(8).optional().describe("Single-goal mode only."),
+      constraints: z.array(z.string().min(1).max(500)).max(8).optional().describe("Global constraints; inherited by every milestone."),
+      guidance: z.array(z.string().min(1).max(500)).max(8).optional().describe("Global workflow facts; inherited by every milestone. Prefer milestone-specific guidance."),
+      assertions: z.array(assertionSchema).max(12).optional().describe("Single-goal mode only."),
+      tab_id: z.string().optional(),
+      values: z.record(z.string(), z.string()).optional().describe("Named strings Jev may type/select. Secret-like keys are hidden from Jev."),
       max_actions: z.number().int().min(1).max(40).optional().default(12),
+      evidence_level: z.enum(["none", "summary", "relevant"]).optional().default("relevant"),
       allow_irreversible: z.boolean().optional().default(false),
-      explain: z.boolean().optional().default(false).describe("Include per-round Jev probabilities for debugging."),
+      explain: z.boolean().optional().default(false),
     }),
-  }, wrap(async ({ goal, success_criteria, constraints, assertions, tab_id, values, max_actions, allow_irreversible, explain }) => text(await runtime.run(goal, {
-    tabId: tab_id,
-    values: values || {},
+  }, wrap(async ({ goal, milestones, review_mode, milestone_index, run_id, success_criteria, constraints, guidance, assertions, tab_id, values, max_actions, evidence_level, allow_irreversible, explain }) => text(await runtime.run(goal, {
+    milestones: milestones || [],
+    reviewMode: review_mode,
+    milestoneIndex: milestone_index,
+    runId: run_id,
     successCriteria: success_criteria || [],
     constraints: constraints || [],
+    guidance: guidance || [],
     assertions: assertions || [],
+    tabId: tab_id,
+    values: values || {},
     maxActions: max_actions,
+    evidenceLevel: evidence_level,
     allowIrreversible: allow_irreversible,
     explain,
   }))));
 
+  server.registerTool("browser_evidence", {
+    title: "Inspect Evidence",
+    description: "Expand one sanitized network request/response referenced by a milestone Evidence Packet. Use only when the compact packet is insufficient.",
+    inputSchema: z.object({ evidence_ref: z.string().min(1).max(300) }),
+  }, wrap(async ({ evidence_ref }) => text(runtime.getEvidence(evidence_ref))));
+
   server.registerTool("browser_check", {
     title: "Check Browser Page",
-    description: "Ask Jev a yes/no question about the current DOM-derived page state. This is a recovery/inspection helper; browser_run already performs final contract verification.",
-    inputSchema: z.object({
-      question: z.string().min(1),
-      tab_id: z.string().optional(),
-    }),
-  }, wrap(async ({ question, tab_id }) => {
-    const p = await runtime.check(question, { tabId: tab_id });
-    return text({ question, p_yes: Number(p.toFixed(3)) });
-  }));
+    description: "Ask Jev one semantic yes/no question about the current DOM state.",
+    inputSchema: z.object({ question: z.string().min(1), tab_id: z.string().optional() }),
+  }, wrap(async ({ question, tab_id }) => text({ question, p_yes: Number((await runtime.check(question, { tabId: tab_id })).toFixed(3)) })));
 
   server.registerTool("browser_snapshot", {
     title: "Browser Snapshot",
-    description: "RECOVERY tool. Compact visible text plus numbered interactive DOM elements. Use after ambiguous/stuck/drifted/verification failure, then perform at most one surgical browser_act before resuming browser_run.",
+    description: "RECOVERY tool: compact DOM state. Prefer patching milestone guidance over manual control when status=needs_guidance.",
     inputSchema: z.object({ tab_id: z.string().optional() }),
   }, wrap(async ({ tab_id }) => text(await runtime.snapshotText(tab_id))));
 
   server.registerTool("browser_act", {
     title: "Manual Browser Action",
-    description: "RECOVERY tool. Perform one low-level DOM browser action without Jev. Prefer browser_run. Element numbers must come from the latest browser_snapshot for the same tab; after correction, resume browser_run.",
+    description: "RECOVERY ONLY. Perform one surgical DOM action, then return to browser_run.",
     inputSchema: z.object({
       tab_id: z.string().optional(),
       action: z.enum(["click", "type", "press_enter", "press_key", "select", "hover", "scroll", "back", "wait"]),
@@ -131,23 +147,17 @@ export function createServer() {
 
   server.registerTool("browser_screenshot", {
     title: "Browser Screenshot",
-    description: "RECOVERY/visual fallback tool. Capture the current viewport from a connected Kapture tab. Jev itself does not consume screenshots.",
+    description: "Visual fallback for the host. Jev itself remains DOM-first.",
     inputSchema: z.object({ tab_id: z.string().optional() }),
   }, wrap(async ({ tab_id }) => {
     const tab = await runtime.selectTab(tab_id);
     const shot = await runtime.kapture.screenshot(tab.tabId, { scale: 1, format: "png" });
     if (!shot?.data) throw new Error("Kapture screenshot did not return image data");
-    return {
-      content: [{ type: "image", data: shot.data, mimeType: shot.mimeType || "image/png" }],
-    };
+    return { content: [{ type: "image", data: shot.data, mimeType: shot.mimeType || "image/png" }] };
   }));
 
   const originalClose = server.close.bind(server);
-  server.close = async () => {
-    await runtime.close().catch(() => {});
-    await originalClose();
-  };
-
+  server.close = async () => { await runtime.close().catch(() => {}); await originalClose(); };
   return server;
 }
 
