@@ -1,0 +1,4 @@
+[mcp_servers.jevsteer]
+command = "npx"
+args = ["-y", "jevsteer"]
+env_vars = ["TYPESAFE_API_KEY"]
