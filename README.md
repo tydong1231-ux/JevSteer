@@ -16,7 +16,7 @@ Host agent: plan + milestones + review
 
 JevSteer keeps expensive agents out of repetitive browser loops without asking Jev to understand an entire product.
 
-[Product portfolio](https://botly.cc) · [Agent protocol](docs/PROTOCOL.md) · [Example: Claude Code](examples/claude-code.md)
+[Agent protocol](docs/PROTOCOL.md) · [Claude Code example](examples/claude-code.md)
 
 ## What problem does it solve?
 
@@ -24,7 +24,7 @@ A powerful host agent is good at planning a multi-step business task, but spendi
 
 **JevSteer separates those responsibilities:** the host owns the plan and business judgment; the executor handles **one bounded milestone** at a time, checks the visible effect of its actions, and returns evidence or asks for guidance.
 
-**What this project demonstrates:** agent orchestration, tool boundaries, cost-aware architecture, human-in-the-loop handoffs, and outcome verification—not simply browser automation.
+**Design considerations:** bounded tool execution, cost-aware orchestration, evidence-based verification, and human handoffs when a milestone needs additional judgment.
 
 ## Best use cases
 
