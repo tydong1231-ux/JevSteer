@@ -85,7 +85,8 @@ export class JevSteerRuntime {
     if (level === "none") return { available: false, disabled: true };
     const clientId = `jevsteer-${runId}-${milestoneId}`;
     try {
-      await this.kapture.command(tabId, "network_monitor", { enabled: true, clientId });
+      const monitor = await this.kapture.command(tabId, "network_monitor", { enabled: true, clientId });
+      if (monitor?.success === false || monitor?.monitoring === false) throw new Error("Kapture network monitor was not enabled");
       const baseline = await this.kapture.command(tabId, "network_requests", { since: 0, limit: 1000 }).catch(() => ({}));
       return { available: true, clientId, cursor: Number(baseline?.cursor || 0) };
     } catch (error) {
@@ -436,9 +437,7 @@ export class JevSteerRuntime {
       if (alternate && alternate[1] >= 0.1) [targetKey, targetP] = alternate;
       else if (tool === "type" || tool === "select") tool = "click";
     }
-    if (tool === "type" && !Object.keys(values).length) tool = "click";
     const valueKey = answer.value?.choice === "__none__" ? undefined : answer.value?.choice;
-    if (tool === "type" && valueKey == null) tool = "click";
     return {
       tool,
       p_tool: answer.tool.probabilities?.[answer.tool.choice] ?? 0,
@@ -569,6 +568,13 @@ export class JevSteerRuntime {
           const prior = [...history].reverse().find((x) => x.action);
           if (prior && !prior.effect) prior.effect = lastEffect;
         }
+        // A known failed field operation must not be followed by a dependent
+        // save/submit action. Return to the host for a targeted recovery.
+        if (lastEffect?.status === "failed") {
+          status = "action_failed";
+          info = "The last action did not produce its required deterministic effect.";
+          break;
+        }
         const answer = await this.decide(page, contract, values, history.slice(-12), lastChange, lastEffect);
         const action = this.resolve(page, answer, values);
         const done = Math.max(answer.done.noul, answer.done_change?.noul ?? 0);
@@ -683,6 +689,12 @@ export class JevSteerRuntime {
         }
 
 
+        if (action.tool === "type" && action.value == null) {
+          status = "needs_guidance";
+          info = "Typing requires a named task.values entry; supply the missing value and resume the milestone.";
+          pending = { question: "Which value should be supplied for the requested input?" };
+          break;
+        }
         if (action.tool === "none" && round === 0 && !retried) {
           retried = true;
           await sleep(1200);
@@ -702,6 +714,22 @@ export class JevSteerRuntime {
           previous = page;
           lastAction = { tool: "wait", side_effect: 0, irreversible: 0 };
           continue;
+        }
+        // Do not silently execute a tool against an element of the wrong kind.
+        if (TARGETED.has(action.tool) && !action.el) {
+          status = "ambiguous";
+          info = "Jev selected an action without a valid target element.";
+          break;
+        }
+        if (action.tool === "type" && !FIELDISH(action.el)) {
+          status = "ambiguous";
+          info = "Jev selected typing on a non-editable element.";
+          break;
+        }
+        if (action.tool === "select" && !SELECTISH(action.el)) {
+          status = "ambiguous";
+          info = "Jev selected an option on a non-select control.";
+          break;
         }
         if (TARGETED.has(action.tool) && action.p_target < minTarget) {
           status = "ambiguous";
@@ -891,17 +919,24 @@ export class JevSteerRuntime {
     for (let index = start; index < plan.milestones.length; index++) {
       const milestone = plan.milestones[index];
       const capture = await this.startNetworkCapture(tab.tabId, runId, milestone.id, evidenceLevel);
-      const result = await this.runContract(milestone.goal, {
-        ...singleOptions,
-        tabId: tab.tabId,
-        successCriteria: milestone.success_criteria,
-        constraints: milestone.constraints,
-        guidance: milestone.guidance,
-        assertions: milestone.assertions,
-        maxActions: milestone.max_actions,
-      });
+      let result;
+      let network;
+      try {
+        result = await this.runContract(milestone.goal, {
+          ...singleOptions,
+          tabId: tab.tabId,
+          successCriteria: milestone.success_criteria,
+          constraints: milestone.constraints,
+          guidance: milestone.guidance,
+          assertions: milestone.assertions,
+          maxActions: milestone.max_actions,
+        });
+      } finally {
+        // Network monitoring holds a CDP debugger; release it even when a
+        // runtime or Jev error interrupts a milestone.
+        network = await this.finishNetworkCapture(tab.tabId, capture, runId, milestone.id, evidenceLevel);
+      }
       lastResult = result;
-      const network = await this.finishNetworkCapture(tab.tabId, capture, runId, milestone.id, evidenceLevel);
       const evidence = buildEvidencePacket({ runId, milestone, result, network });
       packets.push(evidence);
 
