@@ -34,7 +34,7 @@ export class KaptureClient {
     const text = await response.text();
     let data;
     try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-    if (!response.ok) {
+    if (!response.ok || data?.success === false || data?.error) {
       const message = data?.error?.message || data?.error || data?.raw || `HTTP ${response.status}`;
       throw new Error(`Kapture ${method} ${path}: ${typeof message === "string" ? message : JSON.stringify(message)}`);
     }

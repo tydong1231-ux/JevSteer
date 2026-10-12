@@ -11,6 +11,7 @@ const MAP = {
   needs_confirmation: ["user_confirmation", null, true],
   verification_uncertain: ["host_verify", "browser_snapshot", true],
   verification_failed: ["inspect_and_replan", "browser_snapshot", true],
+  action_failed: ["inspect_and_replan", "browser_snapshot", true],
   blocked: ["resolve_external_blocker", "browser_snapshot", true],
   error: ["inspect_error", "browser_snapshot", true],
   constraint_blocked: ["refine_or_confirm_contract", "browser_snapshot", false],

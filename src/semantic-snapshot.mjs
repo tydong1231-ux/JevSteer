@@ -166,11 +166,11 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
 }
 
 export async function semanticSnapshot(kapture, tabId) {
-  const [tab, raw, dom] = await Promise.all([
-    kapture.tabDetail(tabId),
-    kapture.elements(tabId, INTERACTIVE_SELECTOR),
-    kapture.dom(tabId),
-  ]);
+  // Kapture assigns unique selectors while enumerating elements, which can
+  // mutate the live DOM. Read the HTML only after the selectors exist.
+  const raw = await kapture.elements(tabId, INTERACTIVE_SELECTOR);
+  const dom = await kapture.dom(tabId);
+  const tab = await kapture.tabDetail(tabId);
 
   return buildSemanticPage({
     tab,
