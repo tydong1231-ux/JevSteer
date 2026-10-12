@@ -119,6 +119,13 @@ test("an acknowledged remote mutation with no visible effect is never submitted 
   assert.equal(result.actions[0].effect.status, "unknown");
 });
 
+test("waiting does not clear an unconfirmed mutation or permit duplicate submission", async () => {
+  const k = new MemoryKapture({ elements: [button] });
+  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { tool: "wait" }, { side_effect: 0.9 }])).run("Save a test customer", { maxActions: 8, evidenceLevel: "none" });
+  assert.equal(result.status, "action_failed");
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+});
+
 test("navigation during a decision reobserves without replaying the click", async () => {
   const k = new MemoryKapture({ elements: [button] });
   const decider = scriptedDecider([{}, () => { k.page.url = "https://fixture.test/final"; k.page.text = "Saved detail"; return decision(); }, { tool: "none", done: 0.99 }]);

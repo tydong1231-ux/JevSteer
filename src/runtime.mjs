@@ -650,11 +650,13 @@ export class JevSteerRuntime {
       let autoRecoveries = 0;
       let verification;
       let staleDecisions = 0;
+      let pendingMutation = null;
 
       for (let round = 0; round <= maxActions; round++) {
         await this.settle(tab.tabId);
         page = await this.snapshotter(this.kapture, tab.tabId);
         page.tab_id = tab.tabId;
+        if (pendingMutation && ["confirmed", "changed"].includes(verifyActionEffect(pendingMutation.before, page, pendingMutation.action)?.status)) pendingMutation = null;
         const lastChange = round && previous ? pageDiff(previous, page) : undefined;
         const lastEffect = round && previous && lastAction ? verifyActionEffect(previous, page, lastAction) : undefined;
         if (lastEffect) {
@@ -834,10 +836,10 @@ export class JevSteerRuntime {
           };
           break;
         }
-        if (lastAction && lastEffect?.status === "unknown"
-            && GUARDED.has(action.tool) && action.tool === lastAction.tool
-            && action.el?.selector === lastAction.el?.selector
-            && lastAction.side_effect >= 0.25) {
+        if (pendingMutation && GUARDED.has(action.tool)
+            && action.tool === pendingMutation.action.tool
+            && action.el?.selector === pendingMutation.action.el?.selector
+            && (action.tool !== "press_key" || action.key === pendingMutation.action.key)) {
           status = "action_failed";
           info = "The previous mutation was acknowledged but its visible effect is still unconfirmed. Inspect its outcome before retrying the same action.";
           break;
@@ -978,6 +980,7 @@ export class JevSteerRuntime {
           tool: action.tool,
           element: brief(action.el),
           el: action.el,
+          key: action.key,
           expected_value: action.value,
           side_effect: sideEffect,
           irreversible: Number(answer.irreversible.noul),
@@ -985,6 +988,7 @@ export class JevSteerRuntime {
           tag: action.el?.tag,
           role: action.el?.role,
         } : null;
+        if (actionSucceeded && GUARDED.has(action.tool) && sideEffect >= 0.25) pendingMutation = { before: page, action: lastAction };
         // Never blindly retry an action whose transport response was lost.
         // It may already have changed remote state.
         if (!actionSucceeded) break;
