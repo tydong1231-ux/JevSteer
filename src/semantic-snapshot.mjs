@@ -1,5 +1,6 @@
 import { load } from "cheerio";
 import { squash } from "./page-model.mjs";
+import { sensitiveField } from "./sensitive.mjs";
 
 export const INTERACTIVE_SELECTOR = [
   "a[href]",
@@ -60,6 +61,13 @@ function elementText(node) {
   return squash(node.text(), 180);
 }
 
+function labelText(node) {
+  if (!node?.length) return "";
+  const copy = node.clone();
+  copy.find("input,textarea,select,button,script,style,[hidden],[aria-hidden=true]").remove();
+  return elementText(copy);
+}
+
 function nearbyText(node) {
   if (!node || !node.length) return "";
   const own = elementText(node);
@@ -82,7 +90,7 @@ function nearbyText(node) {
     }
   }
   const context = contextNode.clone();
-  context.find("script,style,noscript,template,[hidden],[aria-hidden=true]").remove();
+  context.find("input,textarea,select,script,style,noscript,template,[hidden],[aria-hidden=true]").remove();
   const parent = squash(context.text(), 500);
   if (!parent) return "";
   if (!own) return parent.slice(0, 180);
@@ -101,20 +109,20 @@ function labelFor($, node, raw, tag, type) {
 
   const title = squash(node?.attr("title"), 180);
   if (title) return title;
-  const placeholder = squash(node?.attr("placeholder"), 180);
-  if (placeholder) return placeholder;
 
   const id = node?.attr("id") || raw.id;
   if (id) {
     let explicit = "";
     try {
-      explicit = squash($("label[for]").filter((_, el) => $(el).attr("for") === id).first().text(), 180);
+      explicit = labelText($("label[for]").filter((_, el) => $(el).attr("for") === id).first());
     } catch {}
     if (explicit) return explicit;
   }
 
-  const wrapping = squash(node?.closest("label").text(), 180);
+  const wrapping = labelText(node?.closest("label"));
   if (wrapping) return wrapping;
+  const placeholder = squash(node?.attr("placeholder") || node?.attr("data-placeholder"), 180);
+  if (placeholder) return placeholder;
   if (["input", "textarea", "select"].includes(tag)) {
     const cell = node?.closest("td");
     if (cell?.length) {
@@ -123,7 +131,7 @@ function labelFor($, node, raw, tag, type) {
       if (header) return header;
     }
   }
-  const text = elementText(node);
+  const text = ["input", "textarea", "select"].includes(tag) || node?.attr("contenteditable") === "true" ? "" : elementText(node);
   if (text) return text;
   const icon = node?.find('[aria-label],svg title,img[alt]').first();
   const iconLabel = squash(icon?.attr("aria-label") || icon?.attr("alt") || icon?.text(), 100);
@@ -148,6 +156,25 @@ function redactPasswordAttrs($) {
   });
 }
 
+function semanticScope($, node) {
+  const parts = [];
+  for (const el of node.parents('dialog,[role="dialog"],form,fieldset,section,[role="group"]').toArray().reverse()) {
+    const owner = $(el);
+    const referenced = (owner.attr("aria-labelledby") || "").split(/\s+/).map((id) => findById($, id)?.text()).filter(Boolean).join(" ");
+    const title = owner.attr("aria-label") || referenced || owner.children("legend,h1,h2,h3,h4").first().text() || owner.attr("name");
+    if (title) parts.push(squash(title, 120));
+  }
+  return parts.join(" > ");
+}
+
+function recordContext(node) {
+  const record = node.closest('tr,[role="row"],article,li');
+  if (!record?.length) return "";
+  const clone = record.clone();
+  clone.find('button,input,textarea,select,[role="button"],script,style,[hidden],[aria-hidden="true"]').remove();
+  return squash(clone.text(), 500);
+}
+
 export function buildSemanticPage({ tab, domHtml, rawElements }) {
   const $ = load(domHtml || "<html><body></body></html>");
   redactPasswordAttrs($);
@@ -155,44 +182,53 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
   const hiddenNode = (node) => !!node?.parents().addBack().toArray().some((el) =>
     $(el).attr("hidden") != null || $(el).attr("aria-hidden") === "true"
     || $(el).attr("inert") != null || /(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test($(el).attr("style") || ""));
-  const activeDialog = $('[role="dialog"][aria-modal="true"]').filter((_, el) => !hiddenNode($(el))).last();
+  const modalSelector = 'dialog[open],[role="dialog"][aria-modal="true"]';
+  const activeDialog = $(modalSelector).filter((_, el) => !hiddenNode($(el))).last();
 
   // A blocking modal is the current interaction surface. Its background can
   // contain thousands of virtual table rows and otherwise bury the detail
   // fields beyond the model's text budget.
   const textRoot = (activeDialog.length ? activeDialog : $("body")).clone();
   textRoot.find("script,style,noscript,template").remove();
+  textRoot.find("textarea").each((_, el) => {
+    const node = $(el);
+    if (sensitiveField({ name: node.attr("name"), label: node.attr("aria-label"), placeholder: node.attr("placeholder") })) node.text("[REDACTED]");
+  });
   textRoot.find('[hidden],[aria-hidden="true"],[inert]').remove();
   textRoot.find('[style]').each((_, el) => {
     if (/(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test($(el).attr("style") || "")) $(el).remove();
   });
   textRoot.find("div,p,li,tr,th,td,label,h1,h2,h3,h4,button,a,section").each((_, el) => { $(el).prepend(" ").append(" "); });
   let pageText = squash(textRoot.text(), 10000);
+  let backgroundContext;
   if (activeDialog.length) {
     const background = $("body").clone();
-    background.find('script,style,noscript,template,[hidden],[aria-hidden="true"],[role="dialog"]').remove();
+    background.find('script,style,noscript,template,[hidden],[aria-hidden="true"],dialog,[role="dialog"]').remove();
     background.find("div,p,li,label,h1,h2,h3,button,a").each((_, el) => { $(el).prepend(" ").append(" "); });
     // Preserve a small amount of app/organization context for contracts scoped
     // to a demo company, without restoring the background table's action space.
-    pageText += ` Background context: ${squash(background.text(), 600)}`;
+    backgroundContext = squash(background.text(), 600);
   }
   const elements = [];
 
   for (const raw of rawElements || []) {
     if (!raw?.visible || !raw.selector) continue;
     const node = safeQuery($, raw.selector);
+    // A raw element absent from this HTML may belong to a replaced DOM,
+    // unsupported iframe or shadow root. Never invent its semantics.
+    if (!node?.length) continue;
     if (hiddenNode(node)) continue;
-    if (activeDialog.length && !node?.closest('[role="dialog"][aria-modal="true"]').filter((_, el) => el === activeDialog[0]).length
+    if (activeDialog.length && !node?.closest(modalSelector).filter((_, el) => el === activeDialog[0]).length
         && !node?.closest('[role="listbox"],[role="menu"],[role="option"],[role="menuitem"]').length) continue;
     const tag = String(raw.tagName || node?.prop("tagName") || "element").toLowerCase();
     const type = squash(node?.attr("type") || "", 40).toLowerCase() || undefined;
     const role = inferRole(tag, type, squash(node?.attr("role"), 60) || undefined);
     const password = type === "password";
     const label = labelFor($, node, raw, tag, type);
-    const text = elementText(node);
+    const text = ["input", "textarea", "select"].includes(tag) ? "" : elementText(node);
     const options = Array.isArray(raw.options) ? raw.options.map((o) => ({
       text: squash(o.text, 100),
-      value: squash(o.value, 100),
+      value: String(o.value ?? ""),
       selected: !!o.selected,
       disabled: !!o.disabled,
     })) : undefined;
@@ -209,21 +245,37 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       type,
       href: squash(node?.attr("href") || raw.href, 220) || undefined,
       value: password ? "[REDACTED]" : (raw.value != null ? String(raw.value) : undefined),
-      checked: raw.checked != null ? !!raw.checked : (node?.attr("checked") != null ? true : undefined),
+      checked: raw.checked != null ? !!raw.checked : (["true", "false"].includes(node?.attr("aria-checked")) ? node.attr("aria-checked") === "true" : (node?.attr("checked") != null ? true : undefined)),
       disabled: node?.attr("disabled") != null || node?.attr("aria-disabled") === "true",
       readonly: node?.attr("readonly") != null || node?.attr("aria-readonly") === "true",
       contenteditable: node?.attr("contenteditable") === "true",
       options,
       near: nearbyText(node) || undefined,
+      context: recordContext(node) || undefined,
+      scope: semanticScope($, node) || undefined,
+      identity_version: 1,
+      invalid: node?.attr("aria-invalid") === "true",
+      expanded: ["true", "false"].includes(node?.attr("aria-expanded")) ? node.attr("aria-expanded") === "true" : undefined,
+      selected: ["true", "false"].includes(node?.attr("aria-selected")) ? node.attr("aria-selected") === "true" : undefined,
+      validation_message: (node?.attr("aria-errormessage") || "").split(/\s+/).map((id) => elementText(findById($, id))).filter(Boolean).join(" ") || undefined,
       bounds: raw.bounds,
     });
   }
 
+  for (const e of elements) {
+    if (!sensitiveField(e) || !e.value || e.value === "[REDACTED]") continue;
+    pageText = pageText.split(e.value).join("[REDACTED]");
+    if (backgroundContext) backgroundContext = backgroundContext.split(e.value).join("[REDACTED]");
+  }
   return {
     url: tab?.url || "",
     title: tab?.title || "",
+    ...(backgroundContext ? { background_context: backgroundContext } : {}),
+    loading: {
+      busy: textRoot.find('[aria-busy="true"],[role="progressbar"]').length > 0 || textRoot.attr("aria-busy") === "true",
+    },
     text: pageText + (elements.some((e) => e.value && e.label && e.type !== "password")
-      ? ` Visible field values: ${elements.filter((e) => e.value && e.label && e.type !== "password" && !/(password|secret|token|api[-_]?key|otp|2fa|pin|cvv|cvc)/i.test([e.label, e.name].join(" "))).slice(0, 40).map((e) => `${e.label}: ${squash(e.value, 160)}`).join("; ")}` : ""),
+      ? ` Visible field values: ${elements.filter((e) => e.value && e.label && !sensitiveField(e)).slice(0, 40).map((e) => `${e.label}: ${squash(e.value, 160)}`).join("; ")}` : ""),
     metrics: {
       elements: elements.length,
       dom_size: tab?.domSize,
@@ -239,6 +291,7 @@ export async function semanticSnapshot(kapture, tabId) {
   // mutate the live DOM. Read the HTML only after the selectors exist.
   const raw = await kapture.elements(tabId, INTERACTIVE_SELECTOR);
   const dom = await kapture.dom(tabId);
+  if (raw?.url && dom?.url && raw.url !== dom.url) throw new Error("SNAPSHOT_CHANGED: page navigated during observation");
   // Recent Kapture responses include tab metadata: avoid a third HTTP request.
   // Older or mocked clients fall back to tab_detail.
   const tab = (dom?.url && dom?.title) ? dom : await kapture.tabDetail(tabId);

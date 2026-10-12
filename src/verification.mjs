@@ -1,10 +1,18 @@
 import { FIELDISH, SELECTISH, squash, toModelPage } from "./page-model.mjs";
+import { sensitiveField } from "./sensitive.mjs";
 
-export function toVerificationPage(page) {
+export function matchingControls(page, assertion) {
+  const fold = (v) => assertion.case_sensitive ? String(v || "") : String(v || "").toLowerCase();
+  return page.elements.filter((e) => fold(e.label || e.placeholder || e.name || e.text) === fold(assertion.label)
+    && (!assertion.context || fold([e.context, e.scope].filter(Boolean).join(" ") || e.near).includes(fold(assertion.context))));
+}
+
+export function toVerificationPage(page, assertions = []) {
   // Verification judges the resulting text and field state. It does not need
   // hundreds of speculative click targets from a virtualized business table.
-  const controls = page.elements.filter((e) => FIELDISH(e) || SELECTISH(e)
-    || e.tag === "input" || ["checkbox", "radio", "switch"].includes(e.role)).slice(0, 80);
+  const relevant = new Set(assertions.filter((a) => a.label).flatMap((a) => matchingControls(page, a)));
+  const controls = [...relevant, ...page.elements.filter((e) => !relevant.has(e) && (FIELDISH(e) || SELECTISH(e)
+    || e.tag === "input" || ["checkbox", "radio", "switch"].includes(e.role)))].slice(0, 80);
   return toModelPage({ ...page, elements: controls, metrics: { ...page.metrics, verification_controls: controls.length } });
 }
 
@@ -32,6 +40,22 @@ export function evaluateAssertions(page, assertions = []) {
     let error;
 
     switch (assertion.type) {
+      case "field_equals":
+      case "control_checked":
+      case "element_count": {
+        const matches = matchingControls(page, assertion);
+        if (assertion.type === "element_count") { actual = String(matches.length); passed = matches.length === assertion.value; break; }
+        if (matches.length !== 1) { error = `expected one control, observed ${matches.length}`; break; }
+        const control = matches[0];
+        if (assertion.type === "control_checked") {
+          actual = String(control.checked);
+          passed = typeof control.checked === "boolean" && control.checked === assertion.value;
+        } else {
+          actual = sensitiveField(control) ? "[REDACTED]" : excerpt(control.value);
+          passed = !sensitiveField(control) && String(control.value ?? "") === assertion.value && !control.invalid;
+        }
+        break;
+      }
       case "text_contains":
         actual = matchingExcerpt(page.text, assertion.value, caseSensitive);
         passed = contains(page.text, assertion.value, caseSensitive);
@@ -65,6 +89,7 @@ export function evaluateAssertions(page, assertions = []) {
     return {
       type: assertion.type,
       expected: assertion.value,
+      ...(assertion.label ? { label: assertion.label, ...(assertion.context ? { context: assertion.context } : {}) } : {}),
       passed,
       ...(actual ? { actual } : {}),
       ...(error ? { error } : {}),

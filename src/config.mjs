@@ -19,6 +19,9 @@ export const config = {
   maxSingleElements: 240,
   maxStateChars: 70000,
   elementGroupSize: 30,
+  actionSettleMs: Number(process.env.JEVSTEER_ACTION_SETTLE_MS || 8000),
+  observationQuietMs: Number(process.env.JEVSTEER_OBSERVATION_QUIET_MS || 250),
+  maxWaits: Number(process.env.JEVSTEER_MAX_WAITS || 12),
 };
 
 export function requireTypesafeKey() {

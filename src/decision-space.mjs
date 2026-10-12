@@ -1,4 +1,5 @@
 import { FIELDISH, SELECTISH, brief, squash } from "./page-model.mjs";
+import { sensitiveField } from "./sensitive.mjs";
 
 // Same-request speculative action heads, adapted from jev-ultrafast's
 // operation-specific action space. Jev evaluates each question independently:
@@ -22,7 +23,9 @@ function describe(candidate) {
     control: `[${e.i}] ${brief(e)}`,
   };
   if (e.near) result.near = squash(e.near, 130);
-  if (e.value != null && e.type !== "password") result.current_value = squash(e.value, 80);
+  if (e.context) result.record_context = squash(e.context, 180);
+  if (e.scope) result.scope = squash(e.scope, 180);
+  if (e.value != null && !sensitiveField(e)) result.current_value = squash(e.value, 80);
   if (e.checked != null) result.checked = e.checked;
   if (e.options?.length && candidate.option == null) {
     result.selected = e.options.filter(o => o.selected).map(o => squash(o.text, 55)).slice(0, 3);

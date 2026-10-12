@@ -1,4 +1,9 @@
 import { JevSteerRuntime } from "../../src/runtime.mjs";
+import { ActionJournal } from "../../src/action-journal.mjs";
+
+export class OfflineRuntime extends JevSteerRuntime {
+  constructor(options = {}) { super({ journal: new ActionJournal({ dir: null }), observation: { maxMs: 0, quietMs: 0 }, ...options }); }
+}
 
 export function decision({ tool = "click", target = 0, value, ...scores } = {}) {
   const answers = Object.fromEntries(Object.entries({
@@ -23,6 +28,7 @@ export function scriptedDecider(steps, { verifyScore = 0.99, inspect } = {}) {
     let answers;
     if (questions.goal_complete) answers = verification(questions, verifyScore);
     else if (questions.violates) answers = { violates: { noul: 0.01 } };
+    else if (questions.action_side_effect) answers = {};
     else if (questions.option) answers = { option: { choice: Object.keys(questions.option.criteria)[0] } };
     else if (questions.key) answers = { key: { choice: "Escape" } };
     else {
@@ -55,6 +61,7 @@ export class MemoryKapture {
 export function memoryRuntime(kapture, decider) {
   const runtime = new JevSteerRuntime({
     kapture, decider,
+    journal: new ActionJournal({ dir: null }), observation: { maxMs: 0, quietMs: 0 },
     leases: { withLease: async (_tab, _meta, fn) => fn(), inspect: async () => null },
     snapshotter: async () => structuredClone(kapture.page),
   });

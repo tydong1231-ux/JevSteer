@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { JevSteerRuntime } from "../src/runtime.mjs";
+import { OfflineRuntime as JevSteerRuntime } from "./helpers/runtime.mjs";
 
 class FakeLeases {
   async withLease(_tabId, _meta, fn) { return fn(); }
@@ -146,7 +146,7 @@ test("runtime stops instead of auto-backing when drift is suspicious but not ext
   };
   const runtime = new JevSteerRuntime({ kapture, leases: new FakeLeases(), decider, snapshotter: async (k) => k.snapshot() });
   runtime.settle = async () => 0;
-  const result = await runtime.run("Open the correct customer", { maxActions: 4 });
+  const result = await runtime.run("Open the correct customer", { maxActions: 4, assertions: [{ type: "text_contains", value: "ABC Pte Ltd" }] });
   assert.equal(result.status, "drifted");
   assert.equal(result.auto_recoveries, 0);
   assert.equal(kapture.log.some((x) => x.command === "back"), false);
@@ -199,7 +199,7 @@ test("rough constraint risk is only a prefilter; the exact action guard can clea
   assert.equal(kapture.log.some((x) => x.command === "click" && x.args.selector === "#correct"), true);
 });
 
-test("uncertain click execution stops without a second mutation", async () => {
+test("lost navigation acknowledgement observes wrong destination and stops without replay", async () => {
   const kapture = new FakeKapture();
   const original = kapture.command.bind(kapture);
   kapture.command = async (tabId, command, args) => {
@@ -209,8 +209,8 @@ test("uncertain click execution stops without a second mutation", async () => {
   };
   const runtime = new JevSteerRuntime({ kapture, leases: new FakeLeases(), decider: makeDecider(), snapshotter: async k => k.snapshot() });
   runtime.settle = async () => 0;
-  const result = await runtime.run("Open the correct customer", { maxActions: 4 });
-  assert.equal(result.status, "action_failed");
+  const result = await runtime.run("Open the correct customer", { maxActions: 4, assertions: [{ type: "text_contains", value: "ABC Pte Ltd" }] });
+  assert.equal(result.status, "drifted");
   assert.equal(kapture.log.filter(x => x.command === "click").length, 1);
   assert.equal(kapture.log.some(x => x.command === "back"), false);
 });

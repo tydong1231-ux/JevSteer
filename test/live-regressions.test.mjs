@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { toVerificationPage } from "../src/verification.mjs";
 import { buildTargetSpace } from "../src/decision-space.mjs";
 import { relevantRequest, sanitizeNetworkBody } from "../src/evidence.mjs";
+import { actionIdentity } from "../src/element-identity.mjs";
 
 test("Kapture HTTP visibility enum survives boolean query coercion", async () => {
   const server = createServer((req, res) => {
@@ -74,7 +75,8 @@ test("hidden success text and script contents do not enter visible text or nearb
 test("active financial detail dialogs keep background tables out of model context", () => {
   const page = buildSemanticPage({ domHtml: `<body><table><tr><td>${"Unrelated row ".repeat(900)}</td></tr></table><button id="background">Delete</button><div role="dialog" aria-modal="true"><h1>Bill details</h1><p>Vendor Alpha Total THB 264.83</p><button id="close">Close</button></div></body>`, rawElements: [{ tagName: "button", selector: "#background", visible: true }, { tagName: "button", selector: "#close", visible: true }] });
   assert(page.text.includes("Total THB 264.83"));
-  assert(page.text.indexOf("Total THB 264.83") < page.text.indexOf("Background context"));
+  assert(!page.text.includes("Unrelated row"));
+  assert(page.background_context.includes("Unrelated row"));
   assert(page.text.length < 1000);
   assert.deepEqual(page.elements.map((e) => e.selector), ["#close"]);
 });
@@ -114,7 +116,7 @@ test("confirmed correct inputs stay available for Enter but are removed from TYP
   const runtime = new JevSteerRuntime({ decider: async (_state, questions) => { observed = questions; return { answers: { tool: { choice: "press_enter", probabilities: { press_enter: 1 } } }, ms: 1, tokens: 1 }; } });
   const page = { url: "https://demo.test", title: "Search", text: "", metrics: {}, elements: [{ i: 0, selector: "#search", tag: "input", role: "textbox", label: "Search", value: "JevSteer QA" }] };
   const contract = { goal: "Find JevSteer QA", success_criteria: [], constraints: [], guidance: [] };
-  await runtime.decide(page, contract, { search: "JevSteer QA" }, [], null, null, new Map([["#search", "JevSteer QA"]]));
+  await runtime.decide(page, contract, { search: "JevSteer QA" }, [], null, null, new Map([[actionIdentity({ tool: "type", el: page.elements[0] }, page.url), "JevSteer QA"]]));
   assert.equal(observed.type_target, undefined);
   assert(observed.press_enter_target.criteria["0"]);
 });
@@ -138,7 +140,7 @@ test("native toggle property state is read with CSS even when checked attributes
       { tagName: "input", selector: "#enabled", visible: true },
       { tagName: "input", selector: "#disabled", visible: true },
     ] }),
-    dom: async () => ({ url: "https://demo.test", title: "Controls", html: '<input id="enabled" type="checkbox"><input id="disabled" type="checkbox" checked>' }),
+    dom: async () => ({ url: "https://demo.test", title: "Controls", html: '<input id="enabled" aria-label="Enabled" type="checkbox"><input id="disabled" aria-label="Disabled" type="checkbox" checked>' }),
   };
   const page = await semanticSnapshot(kapture, "demo");
   assert.equal(page.elements[0].checked, true);

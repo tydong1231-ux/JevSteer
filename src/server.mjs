@@ -23,8 +23,10 @@ const fail = (error) => ({ isError: true, content: [{ type: "text", text: String
 const wrap = (handler) => async (args) => { try { return await handler(args); } catch (error) { return fail(error); } };
 
 const assertionSchema = z.object({
-  type: z.enum(["text_contains", "text_not_contains", "title_contains", "url_contains", "url_matches"]),
-  value: z.string().min(1).max(300),
+  type: z.enum(["text_contains", "text_not_contains", "title_contains", "url_contains", "url_matches", "field_equals", "control_checked", "element_count"]),
+  value: z.union([z.string().max(4000), z.boolean(), z.number().int().nonnegative()]),
+  label: z.string().min(1).max(180).optional().describe("Exact accessible control name; required for field_equals, control_checked and element_count."),
+  context: z.string().min(1).max(300).optional().describe("Row, dialog or fieldset context that distinguishes duplicate names."),
   case_sensitive: z.boolean().optional().default(false),
   flags: z.string().max(8).optional(),
 });
@@ -44,7 +46,7 @@ export function createServer() {
   const server = new McpServer({
     name: "jevsteer",
     title: "JevSteer Browser Runtime",
-    version: "0.3.0",
+    version: "0.4.0",
     description: "Host-planned, verified low-cost browser execution: milestones by the host, Jev inside each milestone, Kapture on the user's Chrome.",
   }, { instructions: SERVER_POLICY });
 
@@ -94,11 +96,12 @@ export function createServer() {
       tab_id: z.string().optional(),
       values: z.record(z.string(), z.string()).optional().describe("Named strings Jev may type/select. Secret-like keys are hidden from Jev."),
       max_actions: z.number().int().min(1).max(40).optional().default(12),
+      max_duration_ms: z.number().int().min(1000).max(900000).optional().default(300000).describe("Cooperative time budget per milestone. No new browser input starts after this budget; an in-flight request keeps its transport timeout."),
       evidence_level: z.enum(["none", "summary", "relevant"]).optional().default("relevant"),
       allow_irreversible: z.boolean().optional().default(false),
       explain: z.boolean().optional().default(false),
     }),
-  }, wrap(async ({ goal, milestones, review_mode, milestone_index, run_id, success_criteria, constraints, guidance, assertions, tab_id, values, max_actions, evidence_level, allow_irreversible, explain }) => text(await runtime.run(goal, {
+  }, wrap(async ({ goal, milestones, review_mode, milestone_index, run_id, success_criteria, constraints, guidance, assertions, tab_id, values, max_actions, max_duration_ms, evidence_level, allow_irreversible, explain }) => text(await runtime.run(goal, {
     milestones: milestones || [],
     reviewMode: review_mode,
     milestoneIndex: milestone_index,
@@ -110,6 +113,7 @@ export function createServer() {
     tabId: tab_id,
     values: values || {},
     maxActions: max_actions,
+    maxDurationMs: max_duration_ms,
     evidenceLevel: evidence_level,
     allowIrreversible: allow_irreversible,
     explain,
@@ -120,6 +124,16 @@ export function createServer() {
     description: "Expand one sanitized network request/response referenced by a milestone Evidence Packet. Use only when the compact packet is insufficient.",
     inputSchema: z.object({ evidence_ref: z.string().min(1).max(300) }),
   }, wrap(async ({ evidence_ref }) => text(runtime.getEvidence(evidence_ref))));
+
+  server.registerTool("browser_resolve_action", {
+    title: "Resolve Unconfirmed Action",
+    description: "RECOVERY ONLY. Resolve a pending action after the host independently inspects its outcome (saved record, request response, or confirmed rejection). A timeout, changed page or desire to retry is not proof. applied prevents treating the old action as unexecuted; not_applied permits a new attempt. Never guess.",
+    inputSchema: z.object({
+      tab_id: z.string(), action_id: z.string().uuid(),
+      resolution: z.enum(["applied", "not_applied"]),
+      evidence: z.string().min(1).max(1000).describe("Observed evidence supporting the resolution."),
+    }),
+  }, wrap(async ({ tab_id, action_id, resolution, evidence }) => text(await runtime.resolveAction({ tabId: tab_id, actionId: action_id, resolution, evidence }))));
 
   server.registerTool("browser_check", {
     title: "Check Browser Page",
