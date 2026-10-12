@@ -166,7 +166,8 @@ test("ordinary field values can be generated without host-provided values", asyn
     const done = state.page.elements.some(e=>e.label==="Email"&&e.value==="London");
     const answers = {};
     for (const [name,q] of Object.entries(questions)) {
-      if (q.type==="noul") answers[name]={noul:name==="done"||name==="done_change" ? Number(done?0.99:0.01) : 0.99};
+      if (q.type==="noul") answers[name]={noul:["done","done_change"].includes(name)
+        ? Number(done?0.99:0.01) : (["on_track","next_step_clear"].includes(name) ? 0.99 : 0.01)};
       else if (name==="tool") answers[name]=choice(q.criteria,done?"none":"type");
       else if (name==="type_target") answers[name]=choice(q.criteria,"1");
       else answers[name]=choice(q.criteria);
