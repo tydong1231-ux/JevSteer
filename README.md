@@ -89,6 +89,31 @@ JevSteer can search, inspect, and verify the observed result. **If it cannot con
 
 **Try it:** follow [Quick start](#quick-start), run `npm test`, connect the MCP server to Claude Code or Codex, and begin with a read-only browser task in a test application. A hosted public demo is not provided here; the repository documents a local setup.
 
+## Ultrafast-inspired execution policy
+
+- **Speculative action-specific heads:** one Jev call decides the operation and
+  independently ranks compatible targets for click, type, select, enter and hover.
+  Only the chosen operation's target can execute.
+- **Native dropdown shortcuts:** small menus choose a specific option in one
+  call; large menus retain a follow-up option choice.
+- **Separate text generation:** the host can pass named `values`, or optionally
+  supply `TEXT_MODEL_API_KEY` / `TEXT_MODEL_BASE_URL` / `TEXT_MODEL` for a
+  low-cost OpenAI-compatible model to fill ordinary fields from the goal. Missing
+  values and secret-like fields always return for guidance.
+- **Stale-target guard:** check visibility, element type and URL immediately
+  before acting. Uncertain mutations stop rather than retry blindly.
+- **Kapture snapshot optimization:** reuse DOM-response tab metadata on newer
+  Kapture, dropping a normal snapshot from 3 requests to 2. Unlike Jev Ultrafast,
+  Kapture does not supply a single atomic CDP node snapshot without enabling
+  JavaScript execution. JevSteer keeps the default JS-execution gate disabled.
+
+Inspired by [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast),
+while retaining host-defined milestones, Evidence Packets and Kapture.
+
+**Privacy:** When the optional text helper is configured, the selected field
+context, task goal and up to 2,800 characters of page text are sent to the
+configured external model provider. Leave it unset to use host values only.
+
 ## Why Kapture
 
 Kapture controls the user's existing Chrome session, preserving cookies, logins, extensions and local state. It also exposes DOM and network/CDP data, which lets JevSteer verify workflows without making screenshots the primary control surface.

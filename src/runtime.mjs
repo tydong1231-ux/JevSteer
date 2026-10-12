@@ -12,6 +12,7 @@ import { normalizeMilestonePlan, milestoneForHost } from "./milestones.mjs";
 import { verifyActionEffect } from "./action-effect.mjs";
 import { buildEvidencePacket, evidenceRef, relevantRequest, sanitizeNetworkBody, summarizeRequest } from "./evidence.mjs";
 import { buildTargetSpace, availableTools, eligibleFor, TARGETED_TOOLS } from "./decision-space.mjs";
+import { generateFieldText } from "./text-helper.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -60,14 +61,15 @@ function navigationLike(action) {
 }
 
 export class JevSteerRuntime {
-  constructor({ kapture = new KaptureClient(), leases = new TabLeaseManager(), decider = jev, snapshotter = defaultSnapshotter } = {}) {
+  constructor({ kapture = new KaptureClient(), leases = new TabLeaseManager(), decider = jev, snapshotter = defaultSnapshotter, textGenerator = generateFieldText } = {}) {
     this.kapture = kapture;
     this.leases = leases;
     this.decider = decider;
     this.snapshotter = snapshotter;
+    this.textGenerator = textGenerator;
     this.activeTabId = null;
     this.shown = null;
-    this.stats = { calls: 0, jev_ms: 0, tokens: 0 };
+    this.stats = { calls: 0, jev_ms: 0, tokens: 0, text_calls: 0 };
     this.evidenceStore = new Map();
   }
 
@@ -611,6 +613,7 @@ export class JevSteerRuntime {
       const started = Date.now();
       const calls0 = this.stats.calls;
       const tokens0 = this.stats.tokens;
+      const textCalls0 = this.stats.text_calls;
       const history = [];
       const rounds = [];
       const seen = new Map();
@@ -819,9 +822,32 @@ export class JevSteerRuntime {
             row.value = key;
           }
         }
+        // Generate ordinary field text only when the host did not provide
+        // values. Secrets still require explicit host-provided entries.
+        if (action.tool === "type" && action.value == null && action.el
+            && Object.keys(values).length === 0
+            && action.el.type !== "password"
+            && !SECRET_KEY.test([action.el.label, action.el.name, action.el.placeholder].join(" "))) {
+          try {
+            await this.assertTargetFresh(tab.tabId, { ...action, observedUrl: page.url });
+            const result = await this.textGenerator({
+              goal: contract.goal, field: action.el, page, history,
+            });
+            if (typeof result?.text === "string") {
+              action.value = result.text;
+              row.text_source = "text_helper";
+              this.stats.text_calls++;
+            }
+          } catch (error) {
+            status = "needs_guidance";
+            info = `Text helper could not determine a safe value: ${actionError(error)}`;
+            pending = { question: "Provide a named value for the selected field.", field: brief(action.el) };
+            break;
+          }
+        }
         if (action.tool === "type" && action.value == null) {
           status = "needs_guidance";
-          info = "Typing needs a matching named task.values entry; supply the value or clarify which field it belongs to.";
+          info = "Typing needs a matching task.values entry or a configured text helper; supply the value or clarify the field.";
           pending = { question: "Which value belongs in the selected field?", field: brief(action.el) };
           break;
         }
@@ -936,6 +962,7 @@ export class JevSteerRuntime {
         auto_recoveries: autoRecoveries,
         jev_calls: this.stats.calls - calls0,
         jev_input_tokens: this.stats.tokens - tokens0,
+        text_helper_calls: this.stats.text_calls - textCalls0,
         ms: Date.now() - started,
       };
       if (verification) output.verification = verification;
