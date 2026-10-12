@@ -24,12 +24,13 @@ class FakeKapture {
     if (this.state === 1) return { html: '<body><h1>Wrong customer</h1></body>' };
     return { html: '<body><h1>ABC Pte Ltd</h1><div>Latest invoice INV-42</div></body>' };
   }
-  async elements() {
+  async elements(_tabId, selector) {
     if (this.state !== 0) return { elements: [] };
-    return { elements: [
-      { visible: true, selector: "#wrong", tagName: "a", href: "/wrong", bounds: {} },
+    const elements = [
+      { visible: true, selector: "#wrong", tagName: this.buttonFirst ? "button" : "a", ...(!this.buttonFirst ? { href: "/wrong" } : {}), bounds: {} },
       { visible: true, selector: "#correct", tagName: "a", href: "/final", bounds: {} },
-    ] };
+    ];
+    return { elements: selector ? elements.filter(e => e.selector === selector) : elements };
   }
   async command(_tabId, command, args = {}) {
     this.log.push({ command, args });
@@ -196,4 +197,20 @@ test("rough constraint risk is only a prefilter; the exact action guard can clea
   });
   assert.equal(result.status, "completed_verified");
   assert.equal(kapture.log.some((x) => x.command === "click" && x.args.selector === "#correct"), true);
+});
+
+test("uncertain click execution stops without a second mutation", async () => {
+  const kapture = new FakeKapture();
+  const original = kapture.command.bind(kapture);
+  kapture.command = async (tabId, command, args) => {
+    const result = await original(tabId, command, args);
+    if (command === "click") throw new Error("click result lost after execution");
+    return result;
+  };
+  const runtime = new JevSteerRuntime({ kapture, leases: new FakeLeases(), decider: makeDecider(), snapshotter: async k => k.snapshot() });
+  runtime.settle = async () => 0;
+  const result = await runtime.run("Open the correct customer", { maxActions: 4 });
+  assert.equal(result.status, "action_failed");
+  assert.equal(kapture.log.filter(x => x.command === "click").length, 1);
+  assert.equal(kapture.log.some(x => x.command === "back"), false);
 });

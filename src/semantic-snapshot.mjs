@@ -144,6 +144,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       value: password ? "[REDACTED]" : (squash(raw.value, 160) || undefined),
       checked: node?.attr("checked") != null ? true : undefined,
       disabled: node?.attr("disabled") != null || node?.attr("aria-disabled") === "true",
+      readonly: node?.attr("readonly") != null || node?.attr("aria-readonly") === "true",
       contenteditable: node?.attr("contenteditable") === "true",
       options,
       near: nearbyText(node) || undefined,
@@ -166,11 +167,13 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
 }
 
 export async function semanticSnapshot(kapture, tabId) {
-  const [tab, raw, dom] = await Promise.all([
-    kapture.tabDetail(tabId),
-    kapture.elements(tabId, INTERACTIVE_SELECTOR),
-    kapture.dom(tabId),
-  ]);
+  // Kapture assigns unique selectors while enumerating elements, which can
+  // mutate the live DOM. Read the HTML only after the selectors exist.
+  const raw = await kapture.elements(tabId, INTERACTIVE_SELECTOR);
+  const dom = await kapture.dom(tabId);
+  // Recent Kapture responses include tab metadata: avoid a third HTTP request.
+  // Older or mocked clients fall back to tab_detail.
+  const tab = (dom?.url && dom?.title) ? dom : await kapture.tabDetail(tabId);
 
   return buildSemanticPage({
     tab,

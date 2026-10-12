@@ -1,9 +1,21 @@
 import { config } from "./config.mjs";
 
-export const FIELDISH = (e) =>
-  !!e && (e.tag === "textarea" || e.tag === "input" || e.role === "textbox" || e.role === "searchbox" || e.contenteditable);
+// HTML input elements are not all text fields. Checkboxes, file inputs and
+// buttons must never be offered as TYPE targets to Jev.
+const NON_TEXT_INPUTS = new Set([
+  "checkbox", "radio", "hidden", "button", "submit", "reset", "image",
+  "file", "color", "range", "date", "datetime-local", "time", "week", "month",
+]);
 
-export const SELECTISH = (e) => !!e && (e.tag === "select" || e.role === "combobox" || e.role === "listbox");
+export const FIELDISH = (e) => !!e && !e.disabled && !e.readonly && (
+  e.tag === "textarea"
+  || (e.tag === "input" && !NON_TEXT_INPUTS.has(String(e.type || "text").toLowerCase()))
+  || e.contenteditable
+  || (["textbox", "searchbox", "spinbutton"].includes(e.role) && e.tag !== "input")
+);
+
+export const SELECTISH = (e) => !!e && !e.disabled
+  && (e.tag === "select" || e.role === "combobox" || e.role === "listbox");
 
 export function squash(value, max = 500) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -49,6 +61,7 @@ export function toModelPage(page) {
       value: e.type === "password" ? "[REDACTED]" : e.value,
       checked: e.checked,
       disabled: e.disabled,
+      readonly: e.readonly,
       contenteditable: e.contenteditable,
       options: e.options?.map((o) => ({ text: o.text, value: o.value, selected: o.selected, disabled: o.disabled })),
       near: e.near,

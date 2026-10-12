@@ -7,10 +7,11 @@ function truncate(value, max = 1200) {
 }
 
 
-function safeUrl(value) {
+export function safeUrl(value) {
   try {
     const url = new URL(String(value));
     for (const key of [...url.searchParams.keys()]) if (SENSITIVE_KEY.test(key)) url.searchParams.set(key, "[REDACTED]");
+    if (url.hash && /(access_token|id_token|secret|session|api_key|authorization)/i.test(url.hash)) url.hash = "#[REDACTED]";
     return url.toString();
   } catch {
     return String(value || "").slice(0, 1000);
@@ -64,7 +65,7 @@ export function summarizeRequest(request, body, ref) {
     method: request.method,
     url: safeUrl(request.url),
     status: request.status,
-    type: request.type,
+    type: request.resourceType || request.type,
     ...(request.hasPostData ? { has_post_data: true } : {}),
     ...(ref ? { evidence_ref: ref } : {}),
     ...(sanitized?.request_body != null ? { request_preview: truncate(sanitized.request_body, 900) } : {}),
