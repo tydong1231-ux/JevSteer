@@ -7,9 +7,10 @@ export const TARGETED_TOOLS = new Set(["click", "type", "press_enter", "select",
 
 export function eligibleFor(e, tool) {
   if (!e?.selector || e.disabled) return false;
-  if (tool === "type") return FIELDISH(e);
+  const identifiableField = !!squash(e.label || e.placeholder || e.name || e.text);
+  if (tool === "type") return FIELDISH(e) && identifiableField && !e.type_completed;
   if (tool === "select") return SELECTISH(e);
-  if (tool === "press_enter") return FIELDISH(e) || e.tag === "button" || e.role === "button";
+  if (tool === "press_enter") return (FIELDISH(e) && identifiableField) || e.tag === "button" || e.role === "button";
   if (tool === "hover") return ["button", "a", "summary"].includes(e.tag)
     || ["button", "link", "menuitem", "tab", "option"].includes(e.role);
   return tool === "click";

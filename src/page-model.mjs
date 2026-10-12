@@ -58,7 +58,7 @@ export function toModelPage(page) {
       name: e.name,
       type: e.type,
       href: e.href,
-      value: e.type === "password" ? "[REDACTED]" : e.value,
+      value: e.type === "password" ? "[REDACTED]" : (e.value != null ? squash(e.value, 160) : undefined),
       checked: e.checked,
       disabled: e.disabled,
       readonly: e.readonly,

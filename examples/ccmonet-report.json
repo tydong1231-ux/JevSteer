@@ -1,0 +1,10 @@
+{
+  "goal": "Inspect the full-year 2026 Profit and Loss report in the ccMonet demo company",
+  "review_mode": "strict",
+  "constraints": ["Demo company only. Read only: navigate, configure report dates and generate the report; do not edit transactions or submit payments."],
+  "values": {"start_date":"2026/1/1","end_date":"2026/12/31"},
+  "milestones": [
+    {"id":"open","goal":"Open the Profit and Loss report configuration","success_criteria":["Profit and Loss configuration is open with Date Range and Generate controls"],"max_actions":20},
+    {"id":"period","goal":"Generate the Profit and Loss report for January 1 through December 31, 2026","success_criteria":["Date range is 2026/1/1 through 2026/12/31","Report is generated for this period and displays Income and Expense totals"],"guidance":["Changing date controls configures the report. Generate calculates it; wait for the new result before accepting the previous report."],"max_actions":24}
+  ]
+}

@@ -34,6 +34,11 @@ export function verifyActionEffect(before, after, action) {
     return { status: before.url !== after.url ? "confirmed" : (changed ? "changed" : "unknown"), check: "navigation" };
   }
 
+  if (action.tool === "click" && ["checkbox", "radio"].includes(action.el?.type)
+      && typeof current?.checked === "boolean" && typeof action.el?.checked === "boolean") {
+    return { status: current.checked !== action.el.checked ? "confirmed" : "failed", check: "checked_state" };
+  }
+
   if (["click", "press_enter", "press_key", "hover", "scroll"].includes(action.tool)) {
     return { status: changed ? "changed" : "unknown", check: "page_change" };
   }

@@ -106,6 +106,8 @@ JevSteer can search, inspect, and verify the observed result. **If it cannot con
   Kapture, dropping a normal snapshot from 3 requests to 2. Unlike Jev Ultrafast,
   Kapture does not supply a single atomic CDP node snapshot without enabling
   JavaScript execution. JevSteer keeps the default JS-execution gate disabled.
+  Pages with native checkboxes/radios add one CSS `:checked` query to observe
+  their actual property state; it does not enable arbitrary JavaScript.
 
 Inspired by [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast),
 while retaining host-defined milestones, Evidence Packets and Kapture.
@@ -158,6 +160,41 @@ env_vars = ["TYPESAFE_API_KEY"]
 ```
 
 ## MCP tools
+
+### OpenRouter and scenario testing
+
+To call the real Jev model through OpenRouter, set `JEV_PROVIDER=openrouter`
+and `OPENROUTER_API_KEY`. Jev uses OpenRouter's
+[System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk),
+with `JEV_MODEL=jev-latest`; a chat model is not substituted. The default
+TypeSafe configuration continues to work.
+
+The ordinary `npm test` suite is offline. Real-browser scenarios are separate
+and opt in to paid API calls:
+
+```bash
+node --env-file=.env scripts/smoke.mjs
+node --env-file=.env scripts/live-scenarios.mjs
+node --env-file=.env scripts/run-contract.mjs examples/ccmonet-readonly.json
+```
+
+`live-scenarios.mjs` creates its own Kapture tab and a local synthetic app.
+It independently checks hotel filters, article search, invoice identity,
+strict draft review, login/CAPTCHA handoffs, and rejection of false completion.
+Its fixtures adapt the search/filter and guard-testing ideas from
+[Jev Ultrafast](https://github.com/browser-use/jev-ultrafast).
+
+`run-contract.mjs` calls this project's actual `browser_run` MCP tool with
+host-defined semantic milestones. Use `browser_tabs` to select the intended
+demo tab and add its `tab_id` to the JSON contract when multiple tabs are
+connected. Review each returned Evidence Packet before resuming at
+`next_milestone_index` with the same `run_id`. A result that requires guidance
+or is uncertain is not an automatic pass. The examples are workflow contracts,
+not selector scripts. Use a unique customer name for creation runs and inspect
+existing records before creating another one.
+
+Traces are stored in ignored `.test-artifacts/`; `.env` and raw customer data
+must stay local. No tests run during normal MCP startup.
 
 - `browser_run` — default executor; supports host-defined milestones.
 - `browser_evidence` — expand one referenced network evidence item.
