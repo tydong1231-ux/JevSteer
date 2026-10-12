@@ -92,3 +92,33 @@ test("evidence URL redacts secret query and fragment values", () => {
   assert.ok(!url.includes("123"));
   assert.ok(url.includes("ok=1"));
 });
+
+test("unused speculative target heads may be absent; the selected one must be valid", async () => {
+  const previousKey = process.env.TYPESAFE_API_KEY;
+  const previousFetch = globalThis.fetch;
+  process.env.TYPESAFE_API_KEY = "test-key";
+  const questions = {
+    tool: { type: "choice", criteria: { click: "Click", type: "Type" }, instructions: "choose" },
+    click_target: { type: "choice", criteria: { "0": "Save" }, instructions: "click target" },
+    type_target: { type: "choice", criteria: { "1": "Email" }, instructions: "type target" },
+  };
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    answers: {
+      tool: { choice: "click", probabilities: { click: 1, type: 0 } },
+      click_target: { choice: "0", probabilities: { "0": 1 } },
+      type_target: { choice: "bad", probabilities: { bad: 1 } },
+    },
+  }), { status: 200 });
+  try {
+    const result = await jev({}, questions, { retries: 0 });
+    assert.equal(result.answers.tool.choice, "click");
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      answers: { tool: { choice: "click", probabilities: { click: 1, type: 0 } }, click_target: { choice: "wrong", probabilities: { wrong: 1 } } },
+    }), { status: 200 });
+    await assert.rejects(jev({}, questions, { retries: 0 }), /invalid choice: click_target/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey == null) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = previousKey;
+  }
+});

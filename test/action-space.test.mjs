@@ -141,3 +141,57 @@ test("page navigation after prediction prevents using the old target", async () 
   }), /navigated/);
   assert.equal(executed, false);
 });
+
+test("ordinary field values can be generated without host-provided values", async () => {
+  const writes = [];
+  const fake = {
+    text: "",
+    async listTabs() { return [{tabId:"t1",url:"https://example.test/form",pageVisibility:{visible:true}}]; },
+    async elements(_tab,selector) {
+      return {url:"https://example.test/form",elements:[{
+        selector, visible:true, tagName:"input", value:this.text,
+      }]};
+    },
+    async command(_tab,name,body) {
+      if (name === "fill") { this.text = body.value; writes.push(body.value); }
+      if (name === "network_requests") return {requests:[],cursor:0};
+      return {success:true};
+    },
+    async close() {},
+  };
+  const decisions = async (state,questions) => {
+    if (questions.goal_complete) {
+      return {answers:Object.fromEntries(Object.keys(questions).map(name=>[name,{noul:0.99}])),ms:1,tokens:10};
+    }
+    const done = state.page.elements.some(e=>e.label==="Email"&&e.value==="London");
+    const answers = {};
+    for (const [name,q] of Object.entries(questions)) {
+      if (q.type==="noul") answers[name]={noul:name==="done"||name==="done_change" ? Number(done?0.99:0.01) : 0.99};
+      else if (name==="tool") answers[name]=choice(q.criteria,done?"none":"type");
+      else if (name==="type_target") answers[name]=choice(q.criteria,"1");
+      else answers[name]=choice(q.criteria);
+    }
+    return {answers,ms:1,tokens:10};
+  };
+  let helperCount=0;
+  const runtime = new JevSteerRuntime({
+    kapture:fake,
+    decider:decisions,
+    snapshotter:async () => {
+      const p=page();p.elements[1].value=fake.text;
+      return p;
+    },
+    leases:{async withLease(_tab,_owner,fn){return fn();}},
+    textGenerator:async args=>{
+      helperCount++;
+      assert.equal(args.field.label,"Email");
+      return {text:"London",status:"ok"};
+    },
+  });
+  runtime.settle=async()=>0;
+  const result=await runtime.run("Enter London into Email", {maxActions:3});
+  assert.equal(result.status,"completed_verified");
+  assert.deepEqual(writes,["London"]);
+  assert.equal(helperCount,1);
+  assert.equal(result.text_helper_calls,1);
+});

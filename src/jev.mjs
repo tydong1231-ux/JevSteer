@@ -6,7 +6,11 @@ function validateAnswers(answers, questions) {
   if (!answers || typeof answers !== "object" || Array.isArray(answers)) {
     throw new Error("Jev returned no valid answers object");
   }
+  const selectedTarget = `${answers.tool?.choice || ""}_target`;
   for (const [name, question] of Object.entries(questions)) {
+    // Speculative operation-specific heads are independent. If the chosen
+    // action is CLICK, an unused TYPE head must not invalidate that action.
+    if (name.endsWith("_target") && name !== selectedTarget) continue;
     const answer = answers[name];
     if (!answer || typeof answer !== "object") {
       throw new Error(`Jev response missing answer: ${name}`);
@@ -19,7 +23,8 @@ function validateAnswers(answers, questions) {
       || !Object.hasOwn(question.criteria || {}, answer.choice)
       || !answer.probabilities
       || typeof answer.probabilities !== "object"
-      || !Number.isFinite(answer.probabilities[answer.choice])
+      || !Object.keys(question.criteria || {}).every(key => Number.isFinite(answer.probabilities[key])
+        && answer.probabilities[key] >= 0 && answer.probabilities[key] <= 1)
     )) {
       throw new Error(`Jev returned an invalid choice: ${name}`);
     }

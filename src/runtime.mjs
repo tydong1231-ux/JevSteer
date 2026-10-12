@@ -35,7 +35,7 @@ const TOOLS = {
 
 const KEYS = ["Escape", "Tab", "Space", "Backspace", "Delete", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End"];
 const TARGETED = TARGETED_TOOLS;
-const GUARDED = new Set(["click", "press_enter", "press_key"]);
+const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"]);
 const SECRET_KEY = /(pass(word)?|secret|token|api[-_]?key|otp|2fa|pin|cvv|cvc|security[-_]?code)/i;
 
 function sanitizedValues(values) {
@@ -517,9 +517,9 @@ export class JevSteerRuntime {
     if (original.name && current.name && original.name !== current.name) {
       throw new Error("STALE_TARGET: target field changed");
     }
-    if (action.tool === "type" && original.value != null && current.value != null
-        && String(original.value) !== String(current.value)) {
-      throw new Error("STALE_TARGET: text field changed after decision");
+    if (["type", "select"].includes(action.tool) && current.value != null
+        && String(original.value ?? "") !== String(current.value)) {
+      throw new Error("STALE_TARGET: field value changed after decision");
     }
   }
 
