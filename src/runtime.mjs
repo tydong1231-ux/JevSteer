@@ -1330,8 +1330,11 @@ export class JevSteerRuntime {
         tool: action,
         target: currentElement?.i,
         el: currentElement,
-        value,
-        key,
+        // Ignore parameters that the browser command itself ignores.
+        // Otherwise an unused value/key could change a journal fingerprint
+        // and bypass protection against replaying the identical mutation.
+        value: ["type", "select"].includes(action) ? value : undefined,
+        key: action === "press_key" ? (key || "Escape") : action === "press_enter" ? "Enter" : undefined,
         observedUrl: current?.url,
       };
       if (GUARDED.has(action)) {
@@ -1375,7 +1378,7 @@ export class JevSteerRuntime {
         let observationError;
         try {
           const observed = await this.observe(tab.tabId, current, {
-            tool: action, el: currentElement, expected_value: value,
+            tool: action, el: currentElement, expected_value: normalized.value,
             role: currentElement?.role, tag: currentElement?.tag, side_effect: 1,
           });
           effect = observed.effect;
