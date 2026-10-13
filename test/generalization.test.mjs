@@ -448,3 +448,29 @@ test("P2: failed durable intent write prevents manual browser input", async () =
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }), /disk is read-only/);
   assert.equal(k.commands.length, 0);
 });
+
+
+test("manual click replay cannot be bypassed with ignored value or key parameters", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const first = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.equal(first.status, "action_unconfirmed");
+  await runtime.resolveAction({
+    tabId: "test", actionId: first.action_id, resolution: "applied",
+    evidence: "Independent source confirms the Save operation was committed",
+  });
+  await assert.rejects(() => runtime.actManual({
+    tabId: "test", action: "click", element: 0, value: "unused", key: "Unrelated",
+  }), /ACTION_ALREADY_APPLIED/);
+  assert.equal(k.commands.filter(c => c.command === "click").length, 1);
+});
+
+test("manual Escape key default and explicit Escape are the same journaled action", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  const result = await runtime.actManual({ tabId: "test", action: "press_key" });
+  assert.equal(result.status, "action_unconfirmed");
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /UNCONFIRMED_ACTION/);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
+});
