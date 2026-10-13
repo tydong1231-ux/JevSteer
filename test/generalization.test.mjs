@@ -313,3 +313,138 @@ test("an unrelated starting route is not mistaken for drift after waiting", asyn
   const result = await memoryRuntime(k, scriptedDecider([{ tool: "wait", on_track: 0.2 }, { on_track: 0.2 }, { tool: "none", done: 0.99 }])).run("Open Customers", { evidenceLevel: "none", assertions: [{ type: "text_contains", value: "Customers ready" }] });
   assert.equal(result.status, "completed_verified"); assert.equal(k.commands.length, 1);
 });
+
+
+test("P1: host-confirmed applied save remains replay-blocked across restarts and new run ids", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jevsteer-applied-"));
+  try {
+    const k = new MemoryKapture(page());
+    const first = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+    first.journal = new ActionJournal({ dir });
+    const initial = await first.run("Save invoice REF-42", { runId: "first", evidenceLevel: "none" });
+    assert.equal(initial.status, "action_failed");
+    assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+    const applied = await first.resolveAction({
+      tabId: "test", actionId: initial.pending_actions[0].action_id,
+      resolution: "applied", evidence: "Independent records API confirms REF-42 already saved",
+    });
+    assert.equal(applied.replay_protected, true);
+    assert.equal((await first.journal.pending("test")).length, 0);
+
+    const second = memoryRuntime(k, scriptedDecider([{ side_effect: 0.01 }]));
+    second.journal = new ActionJournal({ dir });
+    const resumed = await second.run("Save invoice REF-42", { runId: "second", evidenceLevel: "none" });
+    assert.equal(resumed.status, "action_failed");
+    assert.match(resumed.info, /already confirmed applied/);
+    assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+    assert.equal(resumed.pending.resolution, "applied");
+
+    const differentIntent = await second.journal.replayProtected("test",
+      { tool: "click", el: button }, page(), { intent: "Create customer NEW-99" });
+    assert.equal(differentIntent, null, "a new business goal can reuse a common Save button");
+    assert(await second.journal.replayProtected("test",
+      { tool: "click", el: button }, page(), { intent: "Save invoice REF-42" }));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("P1: confirmed not_applied permits retry, while verified remote writes stay protected", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  const first = await runtime.run("Save REF-42", { evidenceLevel: "none" });
+  await runtime.resolveAction({
+    tabId: "test", actionId: first.pending_actions[0].action_id,
+    resolution: "not_applied", evidence: "Independent API confirms rejection and no record exists",
+  });
+  assert.equal(await runtime.journal.replayProtected("test", { tool: "click", el: button }, page(), { intent: "Save REF-42" }), null);
+
+  k.onCommand = (cmd) => { if (cmd === "click") k.page.text = "Saved REF-42"; };
+  runtime.decider = scriptedDecider([{ side_effect: 0.9 }, { tool: "none", done: 0.99 }]);
+  const final = await runtime.run("Save REF-42", {
+    evidenceLevel: "none", assertions: [{ type: "text_contains", value: "Saved REF-42" }],
+  });
+  assert.equal(final.status, "completed_verified");
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 2);
+  assert.equal((await runtime.journal.pending("test")).length, 0);
+  assert(await runtime.journal.replayProtected("test", { tool: "click", el: button }, page(), { intent: "Save REF-42" }));
+});
+
+test("P1: permanent applied replay barriers survive routine journal retention", async () => {
+  const journal = new ActionJournal({ dir: null });
+  const recorded = await journal.begin("test", {
+    runId: "initial", milestoneId: "save", action: { tool: "click", el: button },
+    page: page(), intent: "Create a specific record", remoteRisk: 0.95,
+  });
+  await journal.resolve("test", recorded.id, "applied", "Record exists in API", { protectReplay: true });
+  for (let index = 0; index < 130; index++) {
+    const ordinary = await journal.begin("test", {
+      runId: "other", milestoneId: "nav",
+      action: { tool: "click", el: { ...button, label: `Open panel ${index}` } },
+      page: page(),
+    });
+    await journal.resolve("test", ordinary.id, "applied", "Navigation acknowledged");
+  }
+  assert.equal((await journal.load("test")).length, 101);
+  assert(await journal.replayProtected("test", { tool: "click", el: button },
+    page(), { intent: "Create a specific record" }));
+});
+
+test("P2: manual recovery journals before clicking and stays pending after transport ACK", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const result = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.equal(result.status, "action_unconfirmed");
+  assert(result.action_id);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  assert.equal((await runtime.journal.pending("test"))[0].id, result.action_id);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }), /UNCONFIRMED_ACTION/);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  await runtime.resolveAction({
+    tabId: "test", actionId: result.action_id, resolution: "applied",
+    evidence: "Server-side record REF-42 exists and has expected values",
+  });
+  assert.equal((await runtime.journal.pending("test")).length, 0);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }), /ACTION_ALREADY_APPLIED/);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+});
+
+test("P2: a lost manual click ACK retains a recoverable durable journal record", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jevsteer-manual-"));
+  try {
+    const k = new MemoryKapture(page());
+    k.onCommand = () => { throw new Error("connection reset after remote Save"); };
+    const first = memoryRuntime(k, scriptedDecider([{}])); first.journal = new ActionJournal({ dir });
+    first.shown = { ...k.page, tab_id: "test" };
+    const result = await first.actManual({ tabId: "test", action: "click", element: 0 });
+    assert.equal(result.status, "action_unconfirmed");
+    assert.match(result.error, /connection reset/);
+    const second = memoryRuntime(k, scriptedDecider([{}])); second.journal = new ActionJournal({ dir });
+    second.shown = { ...k.page, tab_id: "test" };
+    assert.equal((await second.journal.pending("test"))[0].id, result.action_id);
+    await assert.rejects(() => second.actManual({ tabId: "test", action: "click", element: 0 }), /UNCONFIRMED_ACTION/);
+    assert.equal(k.commands.filter(c=>c.command==="click").length, 1);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("P2: manually typing into a possibly autosaving field remains unresolved despite correct local value", async () => {
+  const k = new MemoryKapture(page([field]));
+  k.onCommand = (cmd, args) => { if (cmd === "fill") k.page.elements[0].value = args.value; };
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const result = await runtime.actManual({ tabId: "test", action: "type", element: 0, value: "Acme Inc" });
+  assert.equal(result.status, "action_unconfirmed");
+  assert.equal(result.effect?.status, "confirmed");
+  assert.equal((await runtime.journal.pending("test")).length, 1);
+  assert.equal(k.commands.filter(c=>c.command==="fill").length, 1);
+});
+
+test("P2: failed durable intent write prevents manual browser input", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  runtime.journal.begin = async () => { throw new Error("disk is read-only"); };
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }), /disk is read-only/);
+  assert.equal(k.commands.length, 0);
+});
