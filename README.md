@@ -222,13 +222,17 @@ window. It rechecks the risk of the exact selected action when the preliminary
 decision suggests a side effect. Opening a picker and submitting a record are
 separate operations. Safety and verification thresholds remain unchanged.
 
-Before dispatching an interaction, a durable journal records its intent. An
-unconfirmed remote mutation survives a changed `run_id`, milestone resume and
-process restart. Unrelated page changes do not release it. A lost acknowledgement
+Before dispatching an interaction, a durable journal records its intent. This
+also covers guarded `browser_act` recovery, which returns an unresolved action
+ID until the host verifies its outcome. An unconfirmed remote mutation survives
+a changed `run_id`, milestone resume and process restart. Unrelated page changes do not release it. A lost acknowledgement
 can be reconciled by an exact local control effect or independently verified final
 outcome, without replaying input. Otherwise the host inspects evidence and calls
-`browser_resolve_action` with an observed `applied`/`not_applied` outcome. Pending
-actions do not expire silently. Keep `JEVSTEER_STATE_DIR` on persistent local storage
+`browser_resolve_action` with an observed `applied`/`not_applied` outcome. Pending actions do not expire silently. A reviewed `applied` action remains protected against repeating the same
+logical operation, while `not_applied` allows a retry. Routine acknowledged
+low-risk interactions do not acquire permanent replay guards.
+
+Keep `JEVSTEER_STATE_DIR` on persistent local storage
 when running from changing working directories; do not share one state directory
 between unrelated browsers that reuse tab IDs.
 

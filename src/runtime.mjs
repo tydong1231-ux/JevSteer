@@ -286,7 +286,9 @@ export class JevSteerRuntime {
   async resolveAction({ tabId, actionId, resolution, evidence }) {
     const tab = await this.selectTab(tabId);
     return this.leases.withLease(tab.tabId, { runId: `resolve-${randomUUID()}` },
-      () => this.journal.resolve(tab.tabId, actionId, resolution, evidence));
+      () => this.journal.resolve(tab.tabId, actionId, resolution, evidence, {
+        protectReplay: resolution === "applied",
+      }));
   }
 
   async waitForNavigation(tabId, beforeUrl, { max = 8000 } = {}) {
@@ -988,6 +990,15 @@ export class JevSteerRuntime {
           row.irreversible_guard = Number(irreversibleRisk.toFixed(2));
         }
 
+        const appliedBarrier = GUARDED.has(action.tool)
+          ? await this.journal.replayProtected(tab.tabId, action, page, { intent: contract.goal })
+          : null;
+        if (appliedBarrier) {
+          status = "action_failed";
+          info = "This business operation was already confirmed applied; never replay it solely because the milestone resumed. Inspect the existing record or specify a genuinely new business goal.";
+          pending = { action_id: appliedBarrier.id, resolution: "applied", replay_protected: true };
+          break;
+        }
         if (journalRecords.length && GUARDED.has(action.tool)
             && (sideEffect >= 0.25 || journalRecords.some((r) => this.journal.matches(r, action, page)))) {
           status = "action_failed";
@@ -1046,7 +1057,9 @@ export class JevSteerRuntime {
           const actStarted = Date.now();
           action.observedUrl = page.url;
           if (GUARDED.has(action.tool)) action.beforeDispatch = async () => {
-            journalRecord = await this.journal.begin(tab.tabId, { runId, milestoneId, action, page });
+            journalRecord = await this.journal.begin(tab.tabId, {
+              runId, milestoneId, action, page, intent: contract.goal, remoteRisk: sideEffect,
+            });
             journalRecords = await this.journal.pending(tab.tabId);
           };
           await this.act(tab.tabId, action);
@@ -1301,14 +1314,17 @@ export class JevSteerRuntime {
 
   async actManual({ tabId, action, element, value, key }) {
     const tab = await this.selectTab(tabId);
-    return this.leases.withLease(tab.tabId, { runId: `manual-${randomUUID()}` }, async () => {
+    const manualRunId = `manual-${randomUUID()}`;
+    return this.leases.withLease(tab.tabId, { runId: manualRunId }, async () => {
       let oldElement;
       if (element != null) {
         if (!this.shown || this.shown.tab_id !== tab.tabId) throw new Error("No matching browser_snapshot. Take browser_snapshot first.");
         oldElement = this.shown.elements.find((e) => e.i === element);
         if (!oldElement) throw new Error(`Element ${element} is not in the latest browser_snapshot.`);
       }
-      const current = element != null ? await this.readPage(tab.tabId) : null;
+      // Record the actual URL even for focused keyboard input without a
+      // selector; these actions can submit a form just like clicking Save.
+      const current = element != null || GUARDED.has(action) ? await this.readPage(tab.tabId) : null;
       const currentElement = oldElement ? this.findCurrentElement(oldElement, current) : undefined;
       const normalized = {
         tool: action,
@@ -1316,13 +1332,66 @@ export class JevSteerRuntime {
         el: currentElement,
         value,
         key,
+        observedUrl: current?.url,
       };
-      normalized.observedUrl = current?.url;
-      if (GUARDED.has(action) && (await this.journal.pending(tab.tabId)).some((r) => this.journal.matches(r, normalized, current || { url: tab.url }))) throw new Error("UNCONFIRMED_ACTION: inspect the earlier outcome before manually repeating it");
-      await this.act(tab.tabId, normalized);
+      if (GUARDED.has(action)) {
+        const previous = await this.journal.pending(tab.tabId);
+        if (previous.some((r) => this.journal.matches(r, normalized, current))) {
+          throw new Error("UNCONFIRMED_ACTION: inspect the earlier outcome before manually repeating it");
+        }
+        if (await this.journal.replayProtected(tab.tabId, normalized, current)) {
+          throw new Error("ACTION_ALREADY_APPLIED: the confirmed action must not be replayed manually");
+        }
+      }
+
+      // The hook runs AFTER target freshness checks but BEFORE any browser
+      // command, preventing false journal entries for stale targets.
+      let entry;
+      if (GUARDED.has(action)) {
+        normalized.beforeDispatch = async () => {
+          entry = await this.journal.begin(tab.tabId, {
+            runId: manualRunId, milestoneId: "manual-recovery",
+            action: normalized, page: current, remoteRisk: 1,
+          });
+        };
+      }
+      try {
+        await this.act(tab.tabId, normalized);
+      } catch (error) {
+        if (!entry) throw error; // No input dispatched, no pending journal.
+        // The browser may have applied the action before the ACK was lost.
+        return {
+          status: "action_unconfirmed", tab_id: tab.tabId, action_id: entry.id,
+          action, element: brief(currentElement),
+          error: actionError(error),
+          info: "Outcome uncertain; inspect the browser/site before calling browser_resolve_action. Do not replay.",
+        };
+      }
+
+      if (entry) {
+        // A successful transport ACK does not prove remote persistence,
+        // especially for autosaving text inputs and Save buttons.
+        let effect;
+        let observationError;
+        try {
+          const observed = await this.observe(tab.tabId, current, {
+            tool: action, el: currentElement, expected_value: value,
+            role: currentElement?.role, tag: currentElement?.tag, side_effect: 1,
+          });
+          effect = observed.effect;
+        } catch (error) { observationError = actionError(error); }
+        return {
+          status: "action_unconfirmed", tab_id: tab.tabId, action_id: entry.id,
+          action, element: brief(currentElement),
+          ...(effect ? { effect } : {}),
+          ...(observationError ? { observation_error: observationError } : {}),
+          info: "Manual action was dispatched. Its business outcome needs independent verification; resolve applied/not_applied with evidence before resuming.",
+        };
+      }
+
       await this.settle(tab.tabId);
       const detail = await this.kapture.tabDetail(tab.tabId);
-      return { action, element: brief(currentElement), tab_id: tab.tabId, url: detail.url, title: detail.title };
+      return { status: "completed", action, element: brief(currentElement), tab_id: tab.tabId, url: detail.url, title: detail.title };
     });
   }
 }

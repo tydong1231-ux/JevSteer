@@ -127,7 +127,7 @@ export function createServer() {
 
   server.registerTool("browser_resolve_action", {
     title: "Resolve Unconfirmed Action",
-    description: "RECOVERY ONLY. Resolve a pending action after the host independently inspects its outcome (saved record, request response, or confirmed rejection). A timeout, changed page or desire to retry is not proof. applied prevents treating the old action as unexecuted; not_applied permits a new attempt. Never guess.",
+    description: "RECOVERY ONLY. Resolve a pending action after independently inspecting the site outcome. Applied permanently guards this logical operation from replay, even across run IDs/process restarts; not_applied allows a retry. Neither a transport ACK nor changed page text proves server persistence. Never guess.",
     inputSchema: z.object({
       tab_id: z.string(), action_id: z.string().uuid(),
       resolution: z.enum(["applied", "not_applied"]),
@@ -149,7 +149,7 @@ export function createServer() {
 
   server.registerTool("browser_act", {
     title: "Manual Browser Action",
-    description: "RECOVERY ONLY. Perform one surgical DOM action, then return to browser_run.",
+    description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. Never replay an uncertain action.",
     inputSchema: z.object({
       tab_id: z.string().optional(),
       action: z.enum(["click", "type", "press_enter", "press_key", "select", "hover", "scroll", "back", "wait"]),
