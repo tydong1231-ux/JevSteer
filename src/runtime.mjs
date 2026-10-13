@@ -714,6 +714,7 @@ export class JevSteerRuntime {
       let verification;
       let staleDecisions = 0;
       let pendingMutation = null;
+      let transitionObserved = false;
       let journalRecords = await this.journal.pending(tab.tabId);
 
       for (let round = 0; round <= maxActions; round++) {
@@ -730,6 +731,8 @@ export class JevSteerRuntime {
         }
         const lastChange = round && previous ? pageDiff(previous, page) : undefined;
         const lastEffect = round && previous && lastAction ? verifyActionEffect(previous, page, lastAction) : undefined;
+        if (lastAction && ["click", "press_enter", "press_key", "back"].includes(lastAction.tool)
+            && ["confirmed", "changed"].includes(lastEffect?.status)) transitionObserved = true;
         if (lastEffect) {
           const prior = [...history].reverse().find((x) => x.action);
           if (prior && (!prior.effect || prior.effect.status === "unknown")) prior.effect = lastEffect;
@@ -779,7 +782,9 @@ export class JevSteerRuntime {
           lastGoodCheckpoint = { url: page.url, title: page.title };
         }
 
-        if (round > 0 && onTrack <= config.driftStopAt) {
+        // An unrelated starting route is not a drift caused by the executor.
+        // Loading and waits may reveal the app navigation needed to leave it.
+        if (round > 0 && transitionObserved && !page.loading?.busy && onTrack <= config.driftStopAt) {
           const navigated = previous && page.url && previous.url && page.url !== previous.url;
           const safeToBack = onTrack <= config.driftAutoRecoverAt
             && !!lastAction
@@ -1029,6 +1034,8 @@ export class JevSteerRuntime {
         }
 
         const h = { action: action.tool, element: brief(action.el) };
+        if (action.el?.role) h.target_role = action.el.role;
+        h.remote_change_risk = Number(sideEffect.toFixed(2));
         if (action.valueKey && ["type", "select"].includes(action.tool)) h.value = action.valueKey;
         if (action.key) h.key = action.key;
         let actionSucceeded = false;
@@ -1081,6 +1088,7 @@ export class JevSteerRuntime {
               await this.journal.resolve(tab.tabId, journalRecord.id, "applied", `observable ${observed.effect.check} confirmed despite lost acknowledgement`);
               journalRecords = await this.journal.pending(tab.tabId);
               row.recovery = "local_effect_confirmed_after_transport_error";
+              if (observed.effect.check === "navigation") transitionObserved = true;
               lastAction = null;
               previous = page;
               status = "max_actions";

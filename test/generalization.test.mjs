@@ -305,3 +305,11 @@ test("timeout errors do not turn Kapture's hypothetical dialog hint into a confi
   const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }])).run("Save", { evidenceLevel: "none" });
   assert(result.actions[0].error.includes("timed out")); assert(!result.actions[0].error.includes("dialog is blocking"));
 });
+
+test("an unrelated starting route is not mistaken for drift after waiting", async () => {
+  const link = { ...button, tag: "a", role: "link", label: "Customers", href: "/customers" };
+  const k = new MemoryKapture({ ...page([link]), url: "https://generic.test/reports" });
+  k.onCommand = () => { k.page.url = "https://generic.test/customers"; k.page.text = "Customers ready"; };
+  const result = await memoryRuntime(k, scriptedDecider([{ tool: "wait", on_track: 0.2 }, { on_track: 0.2 }, { tool: "none", done: 0.99 }])).run("Open Customers", { evidenceLevel: "none", assertions: [{ type: "text_contains", value: "Customers ready" }] });
+  assert.equal(result.status, "completed_verified"); assert.equal(k.commands.length, 1);
+});
