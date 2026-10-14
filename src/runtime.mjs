@@ -64,19 +64,47 @@ function navigationLike(action) {
   return false;
 }
 
-// An ordinary HTTP(S) link to another route is repeatable navigation, not a
-// durable business mutation. Unknown/linkless controls remain high risk.
+// Normalize native select labels to their exact option values before both
+// replay checks and durable journaling. Never journal one representation and
+// dispatch an equivalent different one; ambiguous equal labels fail closed.
+function canonicalNativeSelectValue(element, supplied) {
+  if (element?.tag !== "select" || supplied == null) return supplied;
+  const input = String(supplied);
+  const options = element.options || [];
+  const exactValue = options.find((o) => String(o.value ?? "") === input);
+  if (exactValue) {
+    if (exactValue.disabled) throw new Error("INVALID_SELECT_OPTION: option is disabled");
+    return String(exactValue.value);
+  }
+  const exactLabels = options.filter((o) => String(o.text ?? "") === input);
+  const labels = exactLabels.length ? exactLabels
+    : options.filter((o) => String(o.text ?? "").toLowerCase() === input.toLowerCase());
+  if (labels.length > 1) {
+    throw new Error("AMBIGUOUS_SELECT_OPTION: equal labels require an explicit option value");
+  }
+  if (labels.length === 1) {
+    if (labels[0].disabled) throw new Error("INVALID_SELECT_OPTION: option is disabled");
+    return String(labels[0].value ?? "");
+  }
+  // Preserve support for native selects where Kapture supplies no option list;
+  // otherwise avoid journaling a value not offered by the observed control.
+  if (options.length) throw new Error("INVALID_SELECT_OPTION: value is not in the observed options");
+  return input;
+}
+
+// Recognizable link navigation, including meaningful same-document fragments,
+// is repeatable. Empty '#' is often a JS click target and stays conservative.
 function manualRemoteRisk(action) {
   if (action.tool === "press_key" && action.key === "Escape") return 0;
-  if (action.tool !== "click" || !["a", "link"].includes(action.el?.tag)
-      && action.el?.role !== "link" || !action.el?.href) return 1;
+  if (action.tool !== "click") return 1;
+  const el = action.el;
+  if (!(el?.tag === "a" || el?.role === "link") || !el?.href) return 1;
   try {
-    const current = new URL(action.observedUrl);
-    const destination = new URL(action.el.href, current);
-    const href = String(action.el.href).trim();
-    return ["http:", "https:"].includes(destination.protocol)
-      && destination.origin === current.origin
-      && !href.startsWith("#") && destination.href !== current.href ? 0 : 1;
+    const source = new URL(action.observedUrl);
+    const href = String(el.href).trim();
+    const destination = new URL(href, source);
+    if (href === "#" || !["http:", "https:"].includes(destination.protocol)) return 1;
+    return destination.origin === source.origin ? 0 : 1;
   } catch { return 1; }
 }
 
@@ -631,7 +659,10 @@ export class JevSteerRuntime {
       if (!SELECTISH(el)) throw new Error("select requires a select or combobox");
       if (el.tag === "select" && action.value == null) throw new Error("native select requires a value");
     }
-    if (!Object.hasOwn(TOOLS, action.tool)) throw new Error(`unsupported action: ${action.tool}`);
+    if (!Object.hasOwn(TOOLS, action.tool) && action.tool !== "back") throw new Error(`unsupported action: ${action.tool}`);
+    if (action.tool === "select" && el?.tag === "select") {
+      action.value = canonicalNativeSelectValue(el, action.value);
+    }
     if (TARGETED.has(action.tool)) await this.assertTargetFresh(tabId, action);
     await action.beforeDispatch?.();
     switch (action.tool) {
@@ -664,11 +695,8 @@ export class JevSteerRuntime {
           await this.kapture.command(tabId, "click", { selector });
           break;
         }
-        let desired = action.value == null ? "" : String(action.value);
-        const option = el.options?.find((o) => o.value === desired || o.text.toLowerCase() === desired.toLowerCase());
-        if (option) desired = option.value;
-        await this.kapture.command(tabId, "select", { selector, value: desired });
-        action.value = desired;
+        // action.value was canonicalized before the journal's beforeDispatch.
+        await this.kapture.command(tabId, "select", { selector, value: String(action.value) });
         break;
       }
       case "hover":
@@ -1015,6 +1043,9 @@ export class JevSteerRuntime {
           row.irreversible_guard = Number(irreversibleRisk.toFixed(2));
         }
 
+        if (action.tool === "select" && action.el?.tag === "select") {
+          action.value = canonicalNativeSelectValue(action.el, action.value);
+        }
         const appliedBarrier = GUARDED.has(action.tool)
           ? await this.journal.replayProtected(tab.tabId, action, page, { intent: contract.goal })
           : null;
@@ -1357,7 +1388,8 @@ export class JevSteerRuntime {
         // Ignore parameters that the browser command itself ignores.
         // Otherwise an unused value/key could change a journal fingerprint
         // and bypass protection against replaying the identical mutation.
-        value: ["type", "select"].includes(action) ? value : undefined,
+        value: action === "select" ? canonicalNativeSelectValue(currentElement, value)
+          : action === "type" ? value : undefined,
         key: action === "press_key" ? (key || "Escape") : action === "press_enter" ? "Enter" : undefined,
         observedUrl: current?.url,
       };
