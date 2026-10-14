@@ -43,11 +43,14 @@ Never use a new `run_id` to bypass uncertainty. Inspect the saved record, exact
 response or explicit rejection. Call `browser_resolve_action` with `tab_id`,
 `action_id`, `resolution` (`applied` or `not_applied`) and a short `evidence` basis.
 This declaration resolves uncertainty; it does not execute or undo an action.
-An `applied` resolution retains a replay-protected marker for the same action
-and semantic business goal even after `pending_actions` becomes empty. A
-`not_applied` resolution permits retry. Replay markers are not evicted by the
-routine 100-record journal cleanup. A genuinely different milestone goal may
-reuse the same UI control, but a new `run_id` cannot bypass the same operation.
+An `applied` resolution of a remote mutation (recorded risk at or above 0.25)
+retains a replay-protected marker for the same action and semantic business goal
+even after `pending_actions` becomes empty. Confirmed low-risk link/navigation
+operations remain repeatable. A `not_applied` resolution permits retry. Replay
+markers are not evicted by routine 100-record journal cleanup. For automated
+runs a genuinely different milestone goal may reuse the same UI control, but
+a new `run_id` cannot bypass the same operation. Manual recovery mutations
+have no semantic goal hash and retain a broader same-action guard.
 Then resume the semantic milestone. Successful independent verification resolves
 pending records belonging to that run and milestone only.
 
