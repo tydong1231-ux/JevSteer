@@ -474,3 +474,53 @@ test("manual Escape key default and explicit Escape are the same journaled actio
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /UNCONFIRMED_ACTION/);
   assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
 });
+
+
+test("P1: confirmed local autosave field remains pending until independently verified", async () => {
+  const k = new MemoryKapture(page([field]));
+  k.onCommand = (cmd, args) => { if (cmd === "fill") k.page.elements[0].value = args.value; };
+  const runtime = memoryRuntime(k, scriptedDecider([
+    { tool: "type", side_effect: 0.9 },
+    { tool: "none", done: 0.01 },
+  ]));
+  const result = await runtime.run("Autosave the customer name", {
+    values: { name: "Acme Inc" }, evidenceLevel: "none", maxActions: 2,
+  });
+  assert.equal(k.commands.filter(c => c.command === "fill").length, 1);
+  assert.equal((await runtime.journal.pending("test")).length, 1);
+  assert.equal(result.status !== "completed_verified", true);
+});
+
+test("P2: applied ordinary manual link navigation can be repeated", async () => {
+  const link = { i: 0, selector: "#customers", tag: "a", role: "link", label: "Customers", href: "/customers" };
+  const k = new MemoryKapture(page([link]));
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const first = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.equal(first.status, "action_unconfirmed");
+  const resolved = await runtime.resolveAction({ tabId: "test", actionId: first.action_id, resolution: "applied", evidence: "Navigation confirmed" });
+  assert.equal(resolved.replay_protected, false);
+  const second = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.equal(second.status, "action_unconfirmed");
+  assert.equal(k.commands.filter(c => c.command === "click").length, 2);
+});
+
+test("P2: malformed manual actions never write phantom journal intents", async () => {
+  const k = new MemoryKapture(page([field]));
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "type", element: 0 }), /type requires a value/);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click" }), /click requires a target selector/);
+  assert.equal((await runtime.journal.pending("test")).length, 0);
+  assert.equal(k.commands.length, 0);
+});
+
+test("P1: applied high-risk manual save is still replay protected", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const first = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  const resolved = await runtime.resolveAction({ tabId: "test", actionId: first.action_id, resolution: "applied", evidence: "Saved record verified" });
+  assert.equal(resolved.replay_protected, true);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }), /ACTION_ALREADY_APPLIED/);
+});
