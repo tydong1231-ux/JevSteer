@@ -34,10 +34,14 @@ function redact(value, depth = 0) {
 
 function parseMaybeJson(value) {
   if (typeof value !== "string") return redact(value);
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) return "[NON_TEXT_BODY_OMITTED]";
   try { return redact(JSON.parse(value)); } catch { return redact(value); }
 }
 
 export function relevantRequest(request) {
+  try {
+    if (/(^|\.)(clarity\.ms|google-analytics\.com|analytics\.google\.com|segment\.io)$/.test(new URL(request?.url).hostname)) return false;
+  } catch {}
   const method = String(request?.method || "GET").toUpperCase();
   const status = Number(request?.status || 0);
   return !["GET", "HEAD", "OPTIONS"].includes(method) || status >= 400;

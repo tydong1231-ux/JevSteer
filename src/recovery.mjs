@@ -4,6 +4,7 @@ const MAP = {
   ambiguous: ["host_dom_choice", "browser_snapshot", true],
   stuck: ["inspect_and_replan", "browser_snapshot", true],
   max_actions: ["inspect_and_replan", "browser_snapshot", true],
+  budget_exhausted: ["inspect_and_replan", "browser_snapshot", true],
   drifted: ["inspect_and_replan", "browser_snapshot", true],
   needs_guidance: ["host_guidance_patch", null, true],
   needs_vision: ["host_visual_step", "browser_screenshot", true],

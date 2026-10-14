@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildTargetSpace, availableTools } from "../src/decision-space.mjs";
 import { FIELDISH } from "../src/page-model.mjs";
-import { JevSteerRuntime } from "../src/runtime.mjs";
+import { OfflineRuntime as JevSteerRuntime } from "./helpers/runtime.mjs";
 import { normalizeTaskContract } from "../src/task-contract.mjs";
 
 function page() {
