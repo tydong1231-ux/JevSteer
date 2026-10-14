@@ -127,7 +127,7 @@ export function createServer() {
 
   server.registerTool("browser_resolve_action", {
     title: "Resolve Unconfirmed Action",
-    description: "RECOVERY ONLY. Resolve a pending action after independently inspecting the site outcome. Applied permanently guards this logical operation from replay, even across run IDs/process restarts; not_applied allows a retry. Neither a transport ACK nor changed page text proves server persistence. Never guess.",
+    description: "RECOVERY ONLY. Resolve a pending action after independently inspecting the site outcome. Applied permanently guards confirmed remote mutations across run IDs/process restarts; ordinary navigation remains repeatable. not_applied allows a retry. Neither a transport ACK nor changed page text proves server persistence. Never guess.",
     inputSchema: z.object({
       tab_id: z.string(), action_id: z.string().uuid(),
       resolution: z.enum(["applied", "not_applied"]),
