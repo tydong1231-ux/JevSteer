@@ -76,7 +76,7 @@ export class ActionJournal {
 
   matches(record, action, page) { return record.fingerprint === hash(actionIdentity(action, page.url)); }
 
-  async resolve(tabId, id, resolution, basis, { protectReplay = false } = {}) {
+  async resolve(tabId, id, resolution, basis, { protectReplay } = {}) {
     if (!["applied", "not_applied"].includes(resolution) || !String(basis || "").trim()) throw new Error("ACTION_RESOLUTION_REQUIRES_OBSERVED_EVIDENCE");
     const records = await this.load(tabId);
     const record = records.find((r) => r.id === id);
@@ -86,7 +86,7 @@ export class ActionJournal {
     record.resolution = resolution;
     // A reviewed APPLIED mutation remains replay-protected even after it
     // disappears from pending(). NOT_APPLIED explicitly authorizes a retry.
-    record.replay_protected = resolution === "applied" && !!protectReplay;
+    record.replay_protected = resolution === "applied" && (protectReplay ?? record.remote_risk >= 0.25);
     // Only an evidence digest is durable; the host may mention private data.
     record.basis_hash = hash(basis);
     record.resolved_at = new Date().toISOString();
