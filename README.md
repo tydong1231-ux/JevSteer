@@ -228,9 +228,10 @@ ID until the host verifies its outcome. An unconfirmed remote mutation survives
 a changed `run_id`, milestone resume and process restart. Unrelated page changes do not release it. A lost acknowledgement
 can be reconciled by an exact local control effect or independently verified final
 outcome, without replaying input. Otherwise the host inspects evidence and calls
-`browser_resolve_action` with an observed `applied`/`not_applied` outcome. Pending actions do not expire silently. A reviewed `applied` action remains protected against repeating the same
-logical operation, while `not_applied` allows a retry. Routine acknowledged
-low-risk interactions do not acquire permanent replay guards.
+`browser_resolve_action` with an observed `applied`/`not_applied` outcome. Pending actions do not expire silently. A reviewed `applied` remote mutation remains protected against repeating the same
+logical operation, while `not_applied` allows a retry. Confirmed low-risk
+navigation, including meaningful same-document anchors, does not acquire a
+permanent replay guard.
 
 Keep `JEVSTEER_STATE_DIR` on persistent local storage
 when running from changing working directories; do not share one state directory
