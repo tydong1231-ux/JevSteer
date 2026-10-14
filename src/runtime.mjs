@@ -64,6 +64,22 @@ function navigationLike(action) {
   return false;
 }
 
+// An ordinary HTTP(S) link to another route is repeatable navigation, not a
+// durable business mutation. Unknown/linkless controls remain high risk.
+function manualRemoteRisk(action) {
+  if (action.tool === "press_key" && action.key === "Escape") return 0;
+  if (action.tool !== "click" || !["a", "link"].includes(action.el?.tag)
+      && action.el?.role !== "link" || !action.el?.href) return 1;
+  try {
+    const current = new URL(action.observedUrl);
+    const destination = new URL(action.el.href, current);
+    const href = String(action.el.href).trim();
+    return ["http:", "https:"].includes(destination.protocol)
+      && destination.origin === current.origin
+      && !href.startsWith("#") && destination.href !== current.href ? 0 : 1;
+  } catch { return 1; }
+}
+
 export class JevSteerRuntime {
   constructor({ kapture = new KaptureClient(), leases = new TabLeaseManager(), decider = jev, snapshotter = defaultSnapshotter, textGenerator = generateFieldText, journal = new ActionJournal(), observation = {} } = {}) {
     this.kapture = kapture;
@@ -286,9 +302,7 @@ export class JevSteerRuntime {
   async resolveAction({ tabId, actionId, resolution, evidence }) {
     const tab = await this.selectTab(tabId);
     return this.leases.withLease(tab.tabId, { runId: `resolve-${randomUUID()}` },
-      () => this.journal.resolve(tab.tabId, actionId, resolution, evidence, {
-        protectReplay: resolution === "applied",
-      }));
+      () => this.journal.resolve(tab.tabId, actionId, resolution, evidence));
   }
 
   async waitForNavigation(tabId, beforeUrl, { max = 8000 } = {}) {
@@ -601,10 +615,25 @@ export class JevSteerRuntime {
   }
 
   async act(tabId, action) {
-    if (TARGETED.has(action.tool)) await this.assertTargetFresh(tabId, action);
-    await action.beforeDispatch?.();
     const el = action.target == null ? null : action.el;
     const selector = el?.selector;
+    // Validate the complete action before journaling its intent. A rejected
+    // command must not leave a phantom pending mutation that blocks recovery.
+    if (action.tool === "click" && !selector) throw new Error("click requires a target selector");
+    if (action.tool === "hover" && !selector) throw new Error("hover requires a target selector");
+    if (action.tool === "type") {
+      if (!selector) throw new Error("type requires a target selector");
+      if (action.value == null) throw new Error("type requires a value");
+      if (!FIELDISH(el)) throw new Error("type requires an editable field");
+    }
+    if (action.tool === "select") {
+      if (!selector) throw new Error("select requires a target selector");
+      if (!SELECTISH(el)) throw new Error("select requires a select or combobox");
+      if (el.tag === "select" && action.value == null) throw new Error("native select requires a value");
+    }
+    if (!Object.hasOwn(TOOLS, action.tool)) throw new Error(`unsupported action: ${action.tool}`);
+    if (TARGETED.has(action.tool)) await this.assertTargetFresh(tabId, action);
+    await action.beforeDispatch?.();
     switch (action.tool) {
       case "click":
         if (!selector) throw new Error("click requires a target selector");
@@ -715,7 +744,6 @@ export class JevSteerRuntime {
       let autoRecoveries = 0;
       let verification;
       let staleDecisions = 0;
-      let pendingMutation = null;
       let transitionObserved = false;
       let journalRecords = await this.journal.pending(tab.tabId);
 
@@ -725,12 +753,9 @@ export class JevSteerRuntime {
         const observed = previous && lastAction ? await this.observe(tab.tabId, previous, lastAction) : { page: await this.readPage(tab.tabId) };
         page = observed.page;
         page.tab_id = tab.tabId;
-        if (pendingMutation && verifyActionEffect(pendingMutation.before, page, pendingMutation.action)?.status === "confirmed"
-            && ["type", "select"].includes(pendingMutation.action.tool)) {
-          await this.journal.resolve(tab.tabId, pendingMutation.id, "applied", "deterministic field effect confirmed");
-          journalRecords = await this.journal.pending(tab.tabId);
-          pendingMutation = null;
-        }
+        // A local field value/selection can be confirmed before an autosave
+        // reaches the server. High-risk intent remains pending until independent
+        // outcome verification or explicit host resolution, not local equality.
         const lastChange = round && previous ? pageDiff(previous, page) : undefined;
         const lastEffect = round && previous && lastAction ? verifyActionEffect(previous, page, lastAction) : undefined;
         if (lastAction && ["click", "press_enter", "press_key", "back"].includes(lastAction.tool)
@@ -1135,7 +1160,6 @@ export class JevSteerRuntime {
           tag: action.el?.tag,
           role: action.el?.role,
         } : null;
-        if (actionSucceeded && journalRecord && sideEffect >= 0.25) pendingMutation = { id: journalRecord.id, before: page, action: lastAction };
         // Never blindly retry an action whose transport response was lost.
         // It may already have changed remote state.
         if (!actionSucceeded) break;
@@ -1354,7 +1378,7 @@ export class JevSteerRuntime {
         normalized.beforeDispatch = async () => {
           entry = await this.journal.begin(tab.tabId, {
             runId: manualRunId, milestoneId: "manual-recovery",
-            action: normalized, page: current, remoteRisk: 1,
+            action: normalized, page: current, remoteRisk: manualRemoteRisk(normalized),
           });
         };
       }
