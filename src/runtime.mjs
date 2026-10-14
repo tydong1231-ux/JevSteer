@@ -74,7 +74,7 @@ function canonicalNativeSelectValue(element, supplied) {
   const exactValue = options.find((o) => String(o.value ?? "") === input);
   if (exactValue) {
     if (exactValue.disabled) throw new Error("INVALID_SELECT_OPTION: option is disabled");
-    return String(exactValue.value);
+    return String(exactValue.value ?? "");
   }
   const exactLabels = options.filter((o) => String(o.text ?? "") === input);
   const labels = exactLabels.length ? exactLabels
