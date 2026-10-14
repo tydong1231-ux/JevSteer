@@ -524,3 +524,110 @@ test("P1: applied high-risk manual save is still replay protected", async () => 
   assert.equal(resolved.replay_protected, true);
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }), /ACTION_ALREADY_APPLIED/);
 });
+
+
+test("P1: native select text and exact value are the same durable manual action", async () => {
+  const region = {
+    i: 0, selector: "#region", tag: "select", role: "combobox", label: "Region",
+    value: "", options: [
+      { text: "British Columbia", value: "CA-BC", disabled: false },
+      { text: "Ontario", value: "CA-ON", disabled: false },
+    ],
+  };
+  const k = new MemoryKapture(page([region]));
+  k.onCommand = (cmd, args) => {
+    if (cmd === "select") k.page.elements[0].value = args.value;
+  };
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const first = await runtime.actManual({
+    tabId: "test", action: "select", element: 0, value: "British Columbia",
+  });
+  assert.equal(first.status, "action_unconfirmed");
+  assert.equal(k.commands[0].args.value, "CA-BC");
+  const records = await runtime.journal.pending("test");
+  assert.equal(records.length, 1);
+  const accepted = await runtime.resolveAction({
+    tabId: "test", actionId: first.action_id, resolution: "applied",
+    evidence: "Independent server state confirms region was saved",
+  });
+  assert.equal(accepted.replay_protected, true);
+  await assert.rejects(() => runtime.actManual({
+    tabId: "test", action: "select", element: 0, value: "CA-BC",
+  }), /ACTION_ALREADY_APPLIED/);
+  assert.equal(k.commands.filter(c => c.command === "select").length, 1);
+});
+
+test("P1: ambiguous native select labels fail before any journal write", async () => {
+  const region = {
+    i: 0, selector: "#region", tag: "select", role: "combobox", label: "Region",
+    options: [
+      { text: "Central", value: "first" },
+      { text: "Central", value: "second" },
+    ],
+  };
+  const k = new MemoryKapture(page([region]));
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  await assert.rejects(() => runtime.actManual({
+    tabId: "test", action: "select", element: 0, value: "Central",
+  }), /AMBIGUOUS_SELECT_OPTION/);
+  assert.equal((await runtime.journal.pending("test")).length, 0);
+  assert.equal(k.commands.length, 0);
+});
+
+test("P2: browser_act back recovery executes and does not create a journal entry", async () => {
+  const k = new MemoryKapture({ ...page(), url: "https://generic.test/second" });
+  k.tabDetail = async () => ({ url: k.page.url, title: "Editor" });
+  k.onCommand = (command) => {
+    if (command === "back") k.page.url = "https://generic.test/first";
+  };
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  const result = await runtime.actManual({ tabId: "test", action: "back" });
+  assert.equal(result.status, "completed");
+  assert.equal(result.url, "https://generic.test/first");
+  assert.deepEqual(k.commands.map(c => c.command), ["back"]);
+  assert.equal((await runtime.journal.pending("test")).length, 0);
+});
+
+test("P2: meaningful same-document anchors can be revisited after applied resolution", async () => {
+  const section = {
+    i: 0, selector: "#details-link", tag: "a", role: "link",
+    label: "Details", href: "#details",
+  };
+  const k = new MemoryKapture(page([section]));
+  k.onCommand = (command) => {
+    if (command === "click") k.page.url = "https://generic.test/editor#details";
+  };
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const first = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.equal(first.status, "action_unconfirmed");
+  const resolved = await runtime.resolveAction({
+    tabId: "test", actionId: first.action_id, resolution: "applied",
+    evidence: "The details section is visible",
+  });
+  assert.equal(resolved.replay_protected, false);
+  const second = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.equal(second.status, "action_unconfirmed");
+  assert.equal(k.commands.filter(c => c.command === "click").length, 2);
+});
+
+test("ambiguous placeholder anchor remains replay-protected conservatively", async () => {
+  const placeholder = {
+    i: 0, selector: "#action", tag: "a", role: "link",
+    label: "Perform action", href: "#",
+  };
+  const k = new MemoryKapture(page([placeholder]));
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const first = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  const result = await runtime.resolveAction({
+    tabId: "test", actionId: first.action_id, resolution: "applied",
+    evidence: "Independent source confirms mutation committed",
+  });
+  assert.equal(result.replay_protected, true);
+  await assert.rejects(() => runtime.actManual({
+    tabId: "test", action: "click", element: 0,
+  }), /ACTION_ALREADY_APPLIED/);
+});
