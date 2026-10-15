@@ -81,7 +81,10 @@ implemented separately; [its controlled fixture comparison](BATCH-FORM.md)
 does not establish general or ccMonet savings. P5 still needs explicit cross-driver migration,
 cross-process browser crash/cancellation matrices and retention tests. P6 has
 the real-browser MCP harness but ccMonet C1–C3 must run with an authorized DEMO
-profile and independent business oracles. C4 mutations remain isolated fixtures.
+profile and independent business oracles. The initial authorized existing-Chrome
+run is documented in [ccMonet evidence and failed gates](CCMONET-PLAYWRIGHT.md):
+native connection/list/configuration checkpoints succeeded, but C1–C3 full
+business acceptance did not. C4 mutations remain isolated fixtures.
 P7 requires identical-model/account A/B evidence and live business acceptance
 before changing the compatibility default or retiring Kapture/Cheerio.
 

@@ -8,6 +8,49 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { startFixtureServer } from '../test/helpers/fixture-server.mjs';
 
+test('tab discovery does not capture events from unrelated user pages', async ({ page }) => {
+  await page.setContent('<h1>Selected page</h1>');
+  const other = await page.context().newPage();
+  await other.setContent('<h1>Private unrelated page</h1>');
+  const driver = new PlaywrightDriver({ context: page.context() });
+  try {
+    await driver.pages();
+    expect([...driver.records.values()].every((r) => r.events === null)).toBe(true);
+    const selected = [...driver.records.values()].find((r) => r.page === page);
+    const unrelated = [...driver.records.values()].find((r) => r.page === other);
+    await driver.observe(selected.pageId);
+    expect(selected.events).not.toBeNull();
+    expect(unrelated.events).toBeNull();
+    await other.evaluate(() => console.log('private event'));
+    expect(unrelated.events).toBeNull();
+  } finally { await driver.close(); await other.close(); }
+});
+
+test('cursor-marked cards are discoverable but aria-disabled ancestry is never bypassed', async ({ page }) => {
+  await page.setContent('<div class="cursor-pointer">Profit and Loss</div><table><tr role="button" aria-disabled="true"><td class="cursor-pointer">Disabled supplier</td></tr></table>');
+  const { driver, id } = await driverFor(page);
+  try {
+    const snapshot = await driver.observe(id);
+    expect(snapshot.elements.find((e) => e.text === 'Profit and Loss')?.disabled).toBe(false);
+    expect(snapshot.elements.find((e) => e.tag === 'td')?.disabled).toBe(true);
+    const card = await choose(driver, id, 'click', (e) => e.text === 'Profit and Loss');
+    expect((await send(driver, id, card)).state).toBe('dispatched_ack');
+    const disabled = await choose(driver, id, 'click', (e) => e.tag === 'td');
+    await expect(driver.assertTargetFresh(id, disabled)).rejects.toThrow(/STALE_TARGET/);
+  } finally { await driver.close(); }
+});
+
+test('named descendant icons distinguish view and delete in the same record', async ({ page }) => {
+  await page.setContent('<table><tr data-row-key="statement-1"><td>Demo statement</td><td><button onclick="window.viewed=true"><span role="img" aria-label="View statement"><svg></svg></span></button><button onclick="window.deleted=true"><span role="img" aria-label="Delete statement"><svg></svg></span></button></td></tr></table>');
+  const { driver, id } = await driverFor(page);
+  try {
+    const action = await choose(driver, id, 'click', (e) => e.label === 'View statement');
+    expect(action.el.record_key).toBe('statement-1');
+    expect((await send(driver, id, action)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => ({ viewed: !!window.viewed, deleted: !!window.deleted }))).toEqual({ viewed: true, deleted: false });
+  } finally { await driver.close(); }
+});
+
 test('realistic input emits trusted keyboard/pointer events and never mutates DOM during observation', async ({ page }) => {
   await page.setContent(`<label>Company<input id="company"></label><label>Region<select><option value="a">North</option><option value="b">South</option></select></label><script>
     window.events=[];for(const t of ['keydown','keyup','input','click','change'])document.addEventListener(t,e=>events.push({type:t,trusted:e.isTrusted}));

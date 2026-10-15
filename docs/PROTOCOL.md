@@ -33,6 +33,12 @@ disposed immediately after the action, never persisted as business identities.
 driver. Independent observation/verification/Host Review owns that transition.
 Input mode and dispatch state appear in action evidence.
 
+In explore mode, every state-changing input with explicit task constraints gets
+an exact selected-action constraint check, including locally reversible clicks.
+Low remote/irreversible risk does not authorize a forbidden row selection. The
+restricted form frontier instead checks **any** offered control/value against
+constraints before binding, then permits only those validated TYPE/SELECT inputs.
+
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session. The
 host can resolve the original `tab_id` and action ID after independent readback,
@@ -44,6 +50,14 @@ Visual-only controls still return to the host. Network events contain sanitized
 metadata; response body capture is disabled by default. Only test setup and
 independent read-only oracles may use fixture/application APIs; target operations
 remain browser inputs.
+
+`browser_inspect(tab_id)` is a Playwright-only fixed Host reader. It returns
+bounded visible main-frame business table cells, control values and disabled
+ancestry without Jev inference or browser input. Secret-like controls are
+redacted; financial evidence remains private. Limits/truncation are explicit.
+Visible virtual rows are not evidence of the entire dataset, and this reader
+does not assert server persistence or create an acceptance receipt. Tab discovery
+does not install event collectors on unrelated pages.
 
 ## Milestone contract
 

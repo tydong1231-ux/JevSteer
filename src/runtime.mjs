@@ -406,6 +406,12 @@ export class JevSteerRuntime {
     return formatPage(page);
   }
 
+  async inspect(tabId) {
+    if (typeof this.driver.inspect !== 'function') throw new Error('UNSUPPORTED_CAPABILITY: independent table inspection requires Playwright');
+    const tab = await this.selectTab(tabId);
+    return this.leases.withLease(tab.tabId, { runId: `inspect-${randomUUID()}` }, () => this.driver.inspect(tab.tabId));
+  }
+
   async call(state, questions) {
     const result = await this.decider(state, questions);
     this.stats.calls++;
@@ -518,6 +524,7 @@ export class JevSteerRuntime {
           scope: action.el?.scope,
           context: action.el?.context,
           field_name: action.el?.name,
+          ...(action.el?.checked != null ? { checked: action.el.checked } : {}),
           ...(action.el?.href ? { href: action.el.href } : {}),
           ...(action.valueKey ? { value_key: action.valueKey } : {}),
           ...(action.key ? { key: action.key } : {}),
@@ -1153,9 +1160,12 @@ export class JevSteerRuntime {
           break;
         }
 
-        if (contract.constraints.length
-          && !["scroll", "hover", "wait", "none"].includes(action.tool)
-          && (constraintRisk >= 0.2 || sideEffect >= 0.25 || irreversibleRisk >= 0.25)) {
+        // A locally reversible action can still violate an explicit constraint
+        // (for example, bulk-selecting rows during read-only inspection). Low
+        // remote/irreversible risk is not permission to skip the exact guard.
+        // The restricted form plan already checked ANY offered control/value
+        // against constraints at its binding frontier and admits no other tool.
+        if (!formPlan && contract.constraints.length && !["scroll", "hover", "wait", "none"].includes(action.tool)) {
           const exactConstraintRisk = await this.checkConstraintForAction(page, contract, action, history);
           row.constraint_guard = Number(exactConstraintRisk.toFixed(2));
           if (exactConstraintRisk >= config.constraintRiskAt) {

@@ -51,3 +51,24 @@ Kapture/Playwright A/B result. The controlled report remains under ignored
 Regressions cover six-field input, binding collision, host-assertion conflict,
 different form owners, uncertain effect safety and a dependency resetting an
 earlier field. The baseline 162 offline tests remain in the suite.
+
+## Follow-up after live constraint investigation
+
+The ccMonet investigation exposed that even low-remote-risk explore actions can
+violate a local-selection constraint. Explore now always checks the exact
+state-changing action when explicit constraints exist. Batch retains its
+existing conservative **any offered field/value** safety frontier and can only
+execute its validated bindings; this is not a relaxed constraint threshold.
+The complete updated suite passed 23 cases three times (69 passes, including
+the six provider-backed cases). Updated six-field measurements on the same
+model, fixture, contract and oracle:
+
+| Run | Explore calls / input tokens | Batch calls / input tokens | Explore / batch wall time | Logical-call reduction |
+| --- | --- | --- | --- | --- |
+| 1 | 17 / 40,763 | 1 / 5,000 | 8.906s / 1.056s | 94.1% |
+| 2 | 14 / 34,625 | 1 / 5,000 | 7.248s / 1.027s | 92.9% |
+| 3 | 15 / 36,610 | 1 / 5,000 | 9.722s / 1.055s | 93.3% |
+
+The earlier table remains historical pre-patch evidence. These are still
+synthetic same-contract measurements, not ccMonet or cross-driver A/B savings.
+Raw updated output is private under `.test-artifacts/playwright/report.json`.

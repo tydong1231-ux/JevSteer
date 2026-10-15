@@ -9,6 +9,51 @@ import { ActionJournal } from '../src/action-journal.mjs';
 import { PlaywrightDriver } from '../src/browser/playwright-driver.mjs';
 
 const lookup = (state, name) => state.page.elements.find((e) => e.label === name)?.i;
+
+test('MCP host oracle reads visible business cells independently without input or secret values', async ({ page }, testInfo) => {
+  await page.setContent(`<table aria-label="Statement"><tr><th>Date</th><th>Amount</th></tr><tr><td>2026/5/3</td><td>12.65</td></tr><tr hidden><td>Hidden</td></tr></table><label>API Key<input value="fixture-secret"></label><label>Password<input type="password" value="fixture-password"></label><table hidden><tr><td>Hidden table</td></tr></table><script>window.changes=[];new MutationObserver(m=>changes.push(...m)).observe(document,{subtree:true,attributes:true,childList:true,characterData:true});window.inputs=0;document.addEventListener('input',()=>inputs++);</script>`);
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]));
+  try {
+    const oracle = await mcp.call('browser_inspect', { tab_id: mcp.id });
+    expect(oracle.tables).toHaveLength(1);
+    expect(oracle.tables[0].rows).toEqual([['Date', 'Amount'], ['2026/5/3', '12.65']]);
+    expect(oracle.controls.map((e) => e.value)).toEqual(['[REDACTED]', '[REDACTED]']);
+    expect(await page.evaluate(() => ({ changes: changes.length, inputs }))).toEqual({ changes: 0, inputs: 0 });
+    expect(mcp.runtime.stats.calls).toBe(0);
+  } finally { await mcp.close(); }
+});
+
+test('exact constraint guard rejects low-risk row selection before any real input', async ({ page }, testInfo) => {
+  await page.setContent('<label>Select all<input type="checkbox"></label>');
+  let exact = 0;
+  const decider = async (state, questions) => {
+    if (questions.violates) { exact++; expect(state.proposed_action.checked).toBe(false); return { answers: { violates: { noul: 0.99 } }, ms: 1, tokens: 1 }; }
+    return { answers: decision({ tool: 'click', target: 0, side_effect: 0.01, irreversible: 0.01, constraint_risk: 0.01 }), ms: 1, tokens: 1 };
+  };
+  const mcp = await mcpFixture(page, testInfo, decider);
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Inspect existing bills', constraints: ['Do not select bulk rows'], verification_mode: 'host', max_actions: 1, evidence_level: 'none' });
+    expect(result.status).toBe('constraint_blocked');
+    expect(exact).toBe(1);
+    await expect(page.locator('input')).not.toBeChecked();
+    expect(result.actions).toHaveLength(0);
+  } finally { await mcp.close(); }
+});
+
+test('accepting a later read-only checkpoint does not clear an earlier unknown action', async ({ page }, testInfo) => {
+  await page.setContent('<button>Generate</button>');
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]));
+  try {
+    const before = await mcp.driver.observe(mcp.id);
+    const unknown = await mcp.runtime.journal.begin(mcp.id, { runId: 'earlier-report', milestoneId: 'generate', page: before, action: { tool: 'click', el: before.elements[0] }, remoteRisk: 0.7 });
+    await page.setContent('<h1>Bank statement list loaded</h1>');
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, run_id: 'later-read-only', goal: 'Inspect the bank statement list', assertions: [{ type: 'text_contains', value: 'Bank statement list loaded' }], verification_mode: 'host', evidence_level: 'none' });
+    expect(result.status).toBe('host_review_required');
+    const accepted = await mcp.call('browser_review', { tab_id: mcp.id, review_id: result.host_review.review_id, decision: 'accept', goal_evidence: 'Independent DOM confirms the list heading', criteria_evidence: [] });
+    expect(accepted.status).toBe('completed_host_verified');
+    expect((await mcp.runtime.journal.pending(mcp.id)).map((r) => r.id)).toEqual([unknown.id]);
+  } finally { await mcp.close(); }
+});
 const draftDecider = scriptedDecider([(state) => {
   const field = (label) => state.page.elements.find((e) => e.label === label);
   if (field('Record name')?.value !== 'Jev synthetic') return decision({ tool: 'type', target: lookup(state, 'Record name'), value: 'name' });
