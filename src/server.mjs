@@ -88,6 +88,7 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
       milestones: z.array(milestoneSchema).max(12).optional().describe("Host-defined semantic checkpoints for long workflows."),
       review_mode: z.enum(["fast", "strict"]).optional().default("fast"),
       verification_mode: z.enum(["hybrid", "host", "jev"]).optional().default("hybrid").describe("Use host for complex results. hybrid hands uncertain semantic verification to the host; jev retains the legacy automatic semantic gate. Host acceptance never overrides failed assertions or safety stops."),
+      execution_mode: z.enum(["explore", "form"]).optional().default("explore").describe("form: one batch binding for independent unsaved fields, then guarded sequential input/readback. Requires Playwright and verification_mode=host. Never submits or saves; use a separate explore milestone for commit."),
       milestone_index: z.number().int().min(0).max(11).optional().default(0).describe("Which milestone to execute/resume. In strict mode use next_milestone_index after host acceptance."),
       run_id: z.string().max(120).optional().describe("Reuse the returned run_id across milestone reviews/retries so evidence references remain grouped."),
       success_criteria: z.array(z.string().min(1).max(500)).max(8).optional().describe("Single-goal mode only."),
@@ -102,10 +103,11 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
       allow_irreversible: z.boolean().optional().default(false),
       explain: z.boolean().optional().default(false),
     }),
-  }, wrap(async ({ goal, milestones, review_mode, verification_mode, milestone_index, run_id, success_criteria, constraints, guidance, assertions, tab_id, values, max_actions, max_duration_ms, evidence_level, allow_irreversible, explain }) => text(await runtime.run(goal, {
+  }, wrap(async ({ goal, milestones, review_mode, verification_mode, execution_mode, milestone_index, run_id, success_criteria, constraints, guidance, assertions, tab_id, values, max_actions, max_duration_ms, evidence_level, allow_irreversible, explain }) => text(await runtime.run(goal, {
     milestones: milestones || [],
     reviewMode: review_mode,
     verificationMode: verification_mode,
+    executionMode: execution_mode,
     milestoneIndex: milestone_index,
     runId: run_id,
     successCriteria: success_criteria || [],

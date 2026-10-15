@@ -19,6 +19,7 @@ import { ActionJournal } from "./action-journal.mjs";
 import { observeUntilReady, observationSignature, transientNavigationError } from "./observation.mjs";
 import { HostReviewStore, reviewDigest, reviewReceipt } from "./host-review.mjs";
 import { sensitiveName, sensitiveField } from "./sensitive.mjs";
+import { bindForm, nextFormDecision } from "./form-binding.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -778,7 +779,9 @@ export class JevSteerRuntime {
     maxDurationMs = 300000,
     leaseHeld = false,
     verificationMode = "jev",
+    executionMode = "explore",
   } = {}) {
+    if (!["explore", "form"].includes(executionMode)) throw new Error("INVALID_EXECUTION_MODE");
     if (!Number.isFinite(maxDurationMs) || maxDurationMs < 1) throw new Error("Invalid maxDurationMs");
     const contract = normalizeTaskContract({ goal, successCriteria, constraints, guidance, assertions });
     let tab;
@@ -818,6 +821,7 @@ export class JevSteerRuntime {
       let staleDecisions = 0;
       let transitionObserved = false;
       let journalRecords = await this.journal.pending(tab.tabId);
+      let formPlan;
 
       for (let round = 0; round <= maxActions; round++) {
         if (Date.now() - started >= maxDurationMs) { status = "budget_exhausted"; info = "Milestone time budget exhausted; inspect progress before resuming."; break; }
@@ -844,8 +848,19 @@ export class JevSteerRuntime {
           info = "The last action did not produce its required deterministic effect.";
           break;
         }
-        const answer = await this.decide(page, contract, values, history.slice(-12), lastChange, lastEffect, confirmedTypes);
+        let answer;
+        if (executionMode === "form") {
+          try {
+            if (this.driver.kind !== "playwright" || verificationMode !== "host" || journalRecords.length) throw new Error("FORM_BINDING_REJECTED: form mode requires native Playwright, host verification and no unresolved actions");
+            if (!formPlan) formPlan = await bindForm(page, contract, values, (state, questions) => this.call(state, questions));
+            answer = nextFormDecision(formPlan, page);
+          } catch (error) { status = "needs_guidance"; info = actionError(error); break; }
+        } else answer = await this.decide(page, contract, values, history.slice(-12), lastChange, lastEffect, confirmedTypes);
         const action = this.resolve(page, answer, values);
+        if (answer.batch_value_key != null) {
+          action.valueKey = answer.batch_value_key;
+          action.value = values[answer.batch_value_key];
+        }
         const done = Math.max(answer.done.noul, answer.done_change?.noul ?? 0);
         const onTrack = Number(answer.on_track?.noul ?? 1);
         let sideEffect = Number(answer.side_effect?.noul ?? 1);
