@@ -14,7 +14,7 @@ await mkdir(output, { recursive: true });
 const transport = new StdioClientTransport({ command: process.execPath, args: ['bin/jevsteer.mjs'], cwd: process.cwd(), env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)), stderr: 'pipe' });
 const client = new Client({ name: 'jevsteer-live-host', version: '1.0.0' });
 await client.connect(transport);
-const allowed = new Set(['browser_doctor', 'browser_tabs', 'browser_snapshot', 'browser_inspect', 'browser_run', 'browser_review', 'browser_evidence', 'browser_resolve_action', 'browser_act']);
+const allowed = new Set(['browser_doctor', 'browser_tabs', 'browser_snapshot', 'browser_inspect', 'browser_screenshot', 'browser_run', 'browser_review', 'browser_evidence', 'browser_resolve_action', 'browser_act']);
 // Prefix each session so restarts cannot overwrite previous financial evidence.
 const session = randomUUID();
 let sequence = 0;
@@ -33,7 +33,7 @@ const server = createServer(async (req, res) => {
     const id = ++sequence;
     const started = Date.now();
     const response = await client.callTool({ name: request.name, arguments: request.arguments || {} }, undefined, { timeout: 600000 });
-    const value = response.structuredContent || response.content?.find((c) => c.type === 'text')?.text;
+    const value = response.structuredContent || response.content?.find((c) => c.type === 'text')?.text || response.content?.find((c) => c.type === 'image');
     const result = { session_id: session, id, started_at: new Date(started).toISOString(), tool: request.name, isError: !!response.isError, result: value, wall_ms: Date.now() - started };
     // The bridge never stores its bearer nonce or the provider environment.
     await writeFile(join(output, `${session}-${String(id).padStart(3, '0')}-${request.name}.json`), JSON.stringify({ request, ...result }, null, 2), { mode: 0o600, flag: 'wx' });

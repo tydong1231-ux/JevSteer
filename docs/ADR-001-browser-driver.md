@@ -83,8 +83,13 @@ cross-process browser crash/cancellation matrices and retention tests. P6 has
 the real-browser MCP harness but ccMonet C1–C3 must run with an authorized DEMO
 profile and independent business oracles. The initial authorized existing-Chrome
 run is documented in [ccMonet evidence and failed gates](CCMONET-PLAYWRIGHT.md):
-native connection/list/configuration checkpoints succeeded, but C1–C3 full
-business acceptance did not. C4 mutations remain isolated fixtures.
+native connection/list/configuration checkpoints succeeded. The 10/16 follow-up
+passed C3 with Host correction and independent six-row arithmetic; C1/C2 remain
+unaccepted. Two unintended favorite-preference writes stopped the live run and
+drove stricter effect checks. See that record before any further live input.
+C4 mutations remain isolated fixtures. Contract-digest binding now prevents a
+changed goal/criteria under reused run/milestone IDs from certifying older
+unknown actions; legacy entries remain pending for explicit reconciliation.
 P7 requires identical-model/account A/B evidence and live business acceptance
 before changing the compatibility default or retiring Kapture/Cheerio.
 

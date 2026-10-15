@@ -179,6 +179,17 @@ request/result in ignored files with a fresh session prefix. It requires the
 Playwright driver and process-local provider credentials. See
 [ccMonet live evidence and open gates](docs/CCMONET-PLAYWRIGHT.md).
 
+Before a live account test, obtain explicit consent for the necessary current
+page content to be sent to the configured model provider. Keep unrelated tabs,
+credentials and cookies out of model input. Read-only also excludes remote
+preference writes such as favorites. The native snapshot gives visible card
+text precedence over nested icon names; otherwise unnamed static image controls
+may expose an explicit `icon:` filename hint. Duplicate hints remain ambiguous.
+
+For independent test invocations set distinct `JEVSTEER_E2E_OUTPUT` directories
+below `.test-artifacts` (for example `.test-artifacts/check-a`). Playwright clears
+each run's `results` subdirectory; do not overlap runners on one output path.
+
 For an independent unsaved form, set `execution_mode=form` and
 `verification_mode=host`. Jev binds up to twelve supplied current-stage values
 in one request; the existing guarded loop fills controls sequentially, reads

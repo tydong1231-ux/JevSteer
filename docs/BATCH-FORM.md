@@ -72,3 +72,20 @@ model, fixture, contract and oracle:
 The earlier table remains historical pre-patch evidence. These are still
 synthetic same-contract measurements, not ccMonet or cross-driver A/B savings.
 Raw updated output is private under `.test-artifacts/playwright/report.json`.
+
+## 2026-10-16 exact effect guard follow-up
+
+After the unintended live favorite-preference writes, explore now checks exact
+remote/irreversible effects for **every** guarded input, not only high rough
+scores. Read-only includes preference writes. Form mode still validates the
+same conservative all-offered-field frontier and never executes a favorite,
+Save or navigation control. No threshold was relaxed to regain a pass.
+
+The final 26-case suite passed three repetitions (78 passes). On the same
+six-field fixture and oracle, all three runs used 19 explore calls / 44,466
+provider-reported input tokens versus 1 form call / 5,000 tokens. Explore/form
+wall times were 10.250s/1.104s, 10.593s/1.651s and 12.078s/1.074s. The logical
+call reduction is 94.7% **only for this controlled synthetic contract**. These
+are not ccMonet, separate-Host-model or cross-driver A/B measurements. Earlier
+tables remain historical pre-fix evidence. The final private report is
+`.test-artifacts/validation-20261016-readonly-guards/report.json`.

@@ -33,11 +33,25 @@ export function readDOM(elements) {
   const iconName = (e) => [...e.querySelectorAll('[role=img][aria-label],svg title,img[alt]')]
     .filter((icon) => !ancestors(icon).some((p) => p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true'))
     .map((icon) => clean(icon.getAttribute('aria-label') || icon.getAttribute('alt') || icon.textContent, 180)).filter(Boolean).join(' ');
+  // Asset names are explicitly hints, never fabricated accessible names. Strip
+  // query/fragment data; opaque or duplicate icons still fail unique identity.
+  const iconHint = (e) => {
+    const img = e.matches('img[src]') ? e : e.querySelector('img[src]');
+    if (!img) return '';
+    try {
+      const url = new URL(img.getAttribute('src'), location.href);
+      if (!['http:', 'https:'].includes(url.protocol)) return '';
+      const filename = decodeURIComponent(url.pathname.split('/').at(-1));
+      if (!/\.(svg|png|webp|gif|jpe?g)$/i.test(filename)) return '';
+      const hint = filename.split('.')[0].replace(/[_-]+/g, ' ');
+      return /^[a-z][a-z0-9 ]{0,79}$/i.test(hint) ? `icon: ${hint}` : '';
+    } catch { return ''; }
+  };
   const name = (e) => clean(e.getAttribute('aria-label') || idText(e, e.getAttribute('aria-labelledby'))
     || [...(e.labels || [])].map((l) => text(l, 180)).join(' ') || text(closest(e, 'label'), 180)
-    || e.getAttribute('alt') || e.getAttribute('title') || (e.matches('button,a,[role=button],[role=option]') ? text(e, 180) : '')
+    || e.getAttribute('alt') || e.getAttribute('title') || (e.matches('button,a,[role=button],[role=option],.cursor-pointer') ? text(e, 180) : '')
     || (['submit', 'button', 'reset'].includes(e.type) ? e.value : '')
-    || (e.matches('button,[role=button],.cursor-pointer') ? iconName(e) : '') || e.getAttribute('placeholder') || e.getAttribute('name'));
+    || (e.matches('button,[role=button],.cursor-pointer') ? iconName(e) || iconHint(e) : '') || e.getAttribute('placeholder') || e.getAttribute('name'));
   const role = (e) => e.getAttribute('role') || ({ A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', SUMMARY: 'button' })[e.tagName]
     || (e.tagName === 'INPUT' ? ({ checkbox: 'checkbox', radio: 'radio', search: 'searchbox', submit: 'button', reset: 'button', button: 'button', number: 'spinbutton' })[e.type] || 'textbox' : e.isContentEditable ? 'textbox' : undefined);
   const all = [...elements];

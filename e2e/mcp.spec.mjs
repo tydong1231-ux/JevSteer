@@ -40,6 +40,24 @@ test('exact constraint guard rejects low-risk row selection before any real inpu
   } finally { await mcp.close(); }
 });
 
+test('read-only input checks exact remote preferences even when rough risk is low', async ({ page }, testInfo) => {
+  await page.setContent('<button aria-label="Toggle favorite" onclick="window.favorites=(window.favorites||0)+1">☆</button>');
+  let effects = 0;
+  const decider = async (_state, questions) => {
+    if (questions.action_side_effect) { effects++; return { answers: { action_side_effect: { noul: 0.99 }, action_irreversible: { noul: 0.01 } }, ms: 1, tokens: 1 }; }
+    if (questions.violates) return { answers: { violates: { noul: 0.99 } }, ms: 1, tokens: 1 };
+    return { answers: decision({ tool: 'click', target: 0, side_effect: 0.01, irreversible: 0.01, constraint_risk: 0.01 }), ms: 1, tokens: 1 };
+  };
+  const mcp = await mcpFixture(page, testInfo, decider);
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Open the existing report', constraints: ['Read only; do not change remote preferences'], verification_mode: 'host', max_actions: 1, evidence_level: 'none' });
+    expect(result.status).toBe('constraint_blocked');
+    expect(effects).toBe(1);
+    expect(result.actions).toHaveLength(0);
+    expect(await page.evaluate(() => window.favorites || 0)).toBe(0);
+  } finally { await mcp.close(); }
+});
+
 test('accepting a later read-only checkpoint does not clear an earlier unknown action', async ({ page }, testInfo) => {
   await page.setContent('<button>Generate</button>');
   const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]));

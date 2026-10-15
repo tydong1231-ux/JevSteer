@@ -74,7 +74,7 @@ export class ActionJournal {
       && (!record.intent_hash || !intent || record.intent_hash === hash(intent));
   }
 
-  async begin(tabId, { runId, milestoneId, action, page, intent, remoteRisk = 0 }) {
+  async begin(tabId, { runId, milestoneId, action, page, intent, contractDigest, remoteRisk = 0 }) {
     const records = await this.load(tabId);
     if (records.some((r) => this.protects(r, action, page, intent))) {
       throw new Error("ACTION_ALREADY_APPLIED: this confirmed operation must not be replayed");
@@ -86,6 +86,7 @@ export class ActionJournal {
       // Values, business goal and URLs are not stored in cleartext.
       value_hash: hash(action.value ?? ""),
       ...(intent ? { intent_hash: hash(intent) } : {}),
+      ...(contractDigest ? { contract_digest: contractDigest } : {}),
       remote_risk: Number(remoteRisk) || 0,
       created_at: new Date().toISOString(),
     };
@@ -118,9 +119,12 @@ export class ActionJournal {
     return { action_id: id, resolution, replay_protected: record.replay_protected };
   }
 
-  async verified(tabId, runId, milestoneId) {
+  async verified(tabId, runId, milestoneId, contractDigest) {
+    if (!contractDigest) throw new Error("ACTION_VERIFICATION_REQUIRES_CONTRACT_DIGEST");
     for (const record of await this.pending(tabId)) {
-      if (record.run_id === runId && record.milestone_id === milestoneId) {
+      // Reusing IDs or weakening a contract cannot certify an earlier write.
+      // Legacy intents without a digest remain available for explicit recovery.
+      if (record.run_id === runId && record.milestone_id === milestoneId && record.contract_digest === contractDigest) {
         // A verified remote mutation should not be submitted again just
         // because a fresh run_id or MCP process was created.
         await this.resolve(tabId, record.id, "applied", "independent task contract verification passed", {

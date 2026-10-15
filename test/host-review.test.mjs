@@ -129,10 +129,47 @@ test("rejecting a review never clears unresolved remote mutations",async()=>{
 test("host acceptance resolves only originating milestone actions and retains remote replay guards",async()=>{
  const {r,k}=fixture();const result=await r.run("Inspect REF-42",options);
  const mutation={tool:"click",el:{tag:"button",label:"Save"}};
- await r.journal.begin("test",{runId:result.run_id,milestoneId:"main",action:mutation,page:k.page,remoteRisk:1});
+ const ticket=await r.reviews.pending("test");
+ await r.journal.begin("test",{runId:result.run_id,milestoneId:"main",action:mutation,page:k.page,remoteRisk:1,contractDigest:ticket.contract_digest});
  await r.journal.begin("test",{runId:"other-run",milestoneId:"other",action:{tool:"click",el:{tag:"button",label:"Other save"}},page:k.page,remoteRisk:1});
  await r.reviewResult(proof(result));
  assert.equal((await r.journal.pending("test")).length,1);assert(await r.journal.replayProtected("test",mutation,k.page));
+});
+
+test("reusing run and milestone IDs for a different contract cannot clear an unknown action",async()=>{
+ const {r,k}=fixture();
+ const unknown=await r.journal.begin("test",{runId:"shared-run",milestoneId:"main",action:{tool:"click",el:{tag:"button",label:"Save"}},page:k.page,remoteRisk:1,intent:"Save the original bill",contractDigest:"original-contract"});
+ const inspected=await r.run("Inspect REF-42",{...options,runId:"shared-run"});
+ assert.equal(inspected.status,"host_review_required");
+ await r.reviewResult(proof(inspected));
+ assert.deepEqual((await r.journal.pending("test")).map(x=>x.id),[unknown.id]);
+});
+
+test("an old journal without a contract digest requires explicit outcome resolution",async()=>{
+ const {r,k}=fixture();const result=await r.run("Inspect REF-42",options);
+ const unknown=await r.journal.begin("test",{runId:result.run_id,milestoneId:"main",action:{tool:"click",el:{tag:"button",label:"Save"}},page:k.page,remoteRisk:1});
+ await r.reviewResult(proof(result));
+ assert.deepEqual((await r.journal.pending("test")).map(x=>x.id),[unknown.id]);
+});
+
+test("weaker criteria under the same goal and IDs cannot certify an earlier contract",async()=>{
+ const {r,k}=fixture();const initial=await r.run("Inspect REF-42",{...options,runId:"same-goal"});
+ const ticket=await r.reviews.pending("test");
+ await r.reviewResult(proof(initial,"reject"));
+ const unknown=await r.journal.begin("test",{runId:initial.run_id,milestoneId:"main",action:{tool:"click",el:{tag:"button",label:"Save"}},page:k.page,remoteRisk:1,contractDigest:ticket.contract_digest});
+ const weakened=await r.run("Inspect REF-42",{...options,runId:initial.run_id,assertions:[{type:"text_contains",value:"REF"}]});
+ const receipt=await r.reviewResult(proof(weakened));
+ assert.deepEqual(receipt.pending_actions.map(x=>x.action_id),[unknown.id]);
+ assert.deepEqual((await r.journal.pending("test")).map(x=>x.id),[unknown.id]);
+});
+
+test("automatic verification also preserves unknown actions from a different contract",async()=>{
+ const {r,k}=fixture();
+ const unknown=await r.journal.begin("test",{runId:"shared-auto",milestoneId:"main",action:{tool:"click",el:{tag:"button",label:"Save"}},page:k.page,remoteRisk:1,contractDigest:"original-contract"});
+ const result=await r.run("Inspect REF-42",{...options,runId:"shared-auto",verificationMode:"jev"});
+ assert.equal(result.status,"completed_verified");
+ assert.deepEqual(result.pending_actions.map(x=>x.action_id),[unknown.id]);
+ assert.deepEqual((await r.journal.pending("test")).map(x=>x.id),[unknown.id]);
 });
 
 test("host-required milestones cannot advance until accepted",async()=>{
