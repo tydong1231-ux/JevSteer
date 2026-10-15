@@ -7,7 +7,8 @@ const href = (value, base) => { try { return new URL(value, base).href; } catch 
 // routinely reuse them when sorting, filtering or virtualizing a table.
 export function sameIdentity(before, after, base) {
   if (!before || !after || before.tag !== after.tag || before.role !== after.role) return false;
-  for (const key of ["type", "name", "label", "placeholder", "context", "scope", "form_action"]) {
+  for (const key of ['frame_id', 'document_id']) if (before[key] && after[key] && before[key] !== after[key]) return false;
+  for (const key of ["type", "name", "label", "placeholder", "context", "scope", "form_action", "form_key", "record_key"]) {
     if (clean(before[key]) !== clean(after[key])) return false;
   }
   if (href(before.href, base) !== href(after.href, base)) return false;

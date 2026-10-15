@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, open } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, open } from "node:fs/promises";
 import { join } from "node:path";
 import { actionIdentity } from "./element-identity.mjs";
 
@@ -39,6 +39,25 @@ export class ActionJournal {
 
   async pending(tabId) { return (await this.load(tabId)).filter((r) => r.state === "pending"); }
 
+  async pendingSession(sessionId) {
+    if (!sessionId) return [];
+    let groups;
+    if (!this.dir) groups = [...this.memory.values()];
+    else {
+      let files;
+      try { files = await readdir(this.dir); }
+      catch (e) { if (e.code === "ENOENT") return []; throw new Error("ACTION_JOURNAL_UNAVAILABLE: cannot inspect session actions"); }
+      try {
+        groups = await Promise.all(files.filter((name) => name.endsWith('.json')).map(async (name) => {
+          const records = JSON.parse(await readFile(join(this.dir, name), 'utf8'));
+          if (!Array.isArray(records) || records.some((r) => !r.id || !r.fingerprint || !["pending", "resolved"].includes(r.state))) throw new Error('Invalid journal');
+          return records;
+        }));
+      } catch { throw new Error("ACTION_JOURNAL_UNAVAILABLE: cannot safely read session actions"); }
+    }
+    return groups.flat().filter((r) => r.session_id === sessionId && r.state === 'pending');
+  }
+
   // Only a confirmed, replay-protected APPLIED resolution is a durable barrier.
   // Ordinary acknowledged navigation and field updates must remain repeatable.
   async replayProtected(tabId, action, page, { intent } = {}) {
@@ -63,6 +82,7 @@ export class ActionJournal {
     const record = {
       id: randomUUID(), state: "pending", run_id: runId, milestone_id: milestoneId,
       tool: action.tool, fingerprint: hash(actionIdentity(action, page.url)),
+      ...(page.session_id ? { session_id: page.session_id, page_id: page.page_id } : {}),
       // Values, business goal and URLs are not stored in cleartext.
       value_hash: hash(action.value ?? ""),
       ...(intent ? { intent_hash: hash(intent) } : {}),

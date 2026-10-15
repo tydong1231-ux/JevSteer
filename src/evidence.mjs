@@ -86,6 +86,8 @@ export function buildEvidencePacket({ runId, milestone, result, network }) {
     result: result.status,
     actions: (result.actions || []).map((x) => ({
       ...(x.action ? { action: x.action } : {}),
+      ...(x.dispatch_state ? { dispatch_state: x.dispatch_state } : {}),
+      ...(x.input_mode ? { input_mode: x.input_mode } : {}),
       ...(x.element ? { element: x.element } : {}),
       ...(x.value ? { value_key: x.value } : {}),
       ...(x.key ? { key: x.key } : {}),

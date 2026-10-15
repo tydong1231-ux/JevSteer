@@ -21,6 +21,7 @@ export function observationSignature(page) {
   // Generated selectors, timestamps and geometry do not define progress.
   const state = [page.url, page.title, page.text, page.loading, page.elements.map((e) =>
     [e.tag, e.role, e.label, e.context, e.scope, e.value, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.options?.filter((o) => o.selected).map((o) => o.value)])];
+  if (page.page_id) state.push(page.page_id, page.frames, page.elements.map((e) => [e.form_key, e.record_key]));
   return createHash("sha256").update(JSON.stringify(state)).digest("hex");
 }
 
