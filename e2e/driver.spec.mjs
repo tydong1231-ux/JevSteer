@@ -8,6 +8,77 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { startFixtureServer } from '../test/helpers/fixture-server.mjs';
 
+test('tab discovery does not capture events from unrelated user pages', async ({ page }) => {
+  await page.setContent('<h1>Selected page</h1>');
+  const other = await page.context().newPage();
+  await other.setContent('<h1>Private unrelated page</h1>');
+  const driver = new PlaywrightDriver({ context: page.context() });
+  try {
+    await driver.pages();
+    expect([...driver.records.values()].every((r) => r.events === null)).toBe(true);
+    const selected = [...driver.records.values()].find((r) => r.page === page);
+    const unrelated = [...driver.records.values()].find((r) => r.page === other);
+    await driver.observe(selected.pageId);
+    expect(selected.events).not.toBeNull();
+    expect(unrelated.events).toBeNull();
+    await other.evaluate(() => console.log('private event'));
+    expect(unrelated.events).toBeNull();
+  } finally { await driver.close(); await other.close(); }
+});
+
+test('cursor-marked cards are discoverable but aria-disabled ancestry is never bypassed', async ({ page }) => {
+  await page.setContent('<div class="cursor-pointer">Profit and Loss</div><table><tr role="button" aria-disabled="true"><td class="cursor-pointer">Disabled supplier</td></tr></table>');
+  const { driver, id } = await driverFor(page);
+  try {
+    const snapshot = await driver.observe(id);
+    expect(snapshot.elements.find((e) => e.text === 'Profit and Loss')?.disabled).toBe(false);
+    expect(snapshot.elements.find((e) => e.tag === 'td')?.disabled).toBe(true);
+    const card = await choose(driver, id, 'click', (e) => e.text === 'Profit and Loss');
+    expect((await send(driver, id, card)).state).toBe('dispatched_ack');
+    const disabled = await choose(driver, id, 'click', (e) => e.tag === 'td');
+    await expect(driver.assertTargetFresh(id, disabled)).rejects.toThrow(/STALE_TARGET/);
+  } finally { await driver.close(); }
+});
+
+test('named descendant icons distinguish view and delete in the same record', async ({ page }) => {
+  await page.setContent('<table><tr data-row-key="statement-1"><td>Demo statement</td><td><button onclick="window.viewed=true"><span role="img" aria-label="View statement"><svg></svg></span></button><button onclick="window.deleted=true"><span role="img" aria-label="Delete statement"><svg></svg></span></button></td></tr></table>');
+  const { driver, id } = await driverFor(page);
+  try {
+    const action = await choose(driver, id, 'click', (e) => e.label === 'View statement');
+    expect(action.el.record_key).toBe('statement-1');
+    expect((await send(driver, id, action)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => ({ viewed: !!window.viewed, deleted: !!window.deleted }))).toEqual({ viewed: true, deleted: false });
+  } finally { await driver.close(); }
+});
+
+test('static image hints distinguish sibling icons without leaking URL secrets or bypassing duplicate identity', async ({ page }) => {
+  await page.route('https://fixture.invalid/**', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"></svg>' }));
+  await page.setContent('<table><tr data-row-key="statement-1"><td>Demo statement</td><td><button onclick="window.viewed=true"><img width="16" height="16" src="https://fixture.invalid/assets/detail.a1b2.svg?token=never-log-me"></button><button onclick="window.deleted=true"><img width="16" height="16" src="https://fixture.invalid/assets/delete.c3d4.svg"></button></td></tr></table>');
+  const { driver, id } = await driverFor(page);
+  try {
+    const snapshot = await driver.observe(id);
+    expect(JSON.stringify(snapshot)).not.toContain('never-log-me');
+    const action = await choose(driver, id, 'click', (e) => e.label === 'icon: detail');
+    expect((await send(driver, id, action)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => ({ viewed: !!window.viewed, deleted: !!window.deleted }))).toEqual({ viewed: true, deleted: false });
+    // Fixture fault injection only; production observation/input never writes DOM.
+    await page.locator('img').last().evaluate((e) => e.setAttribute('src', 'https://fixture.invalid/assets/detail.a1b2.svg'));
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow(/STALE_TARGET/);
+  } finally { await driver.close(); }
+});
+
+test('card text takes precedence over a nested favorite icon name', async ({ page }) => {
+  await page.setContent('<div class="cursor-pointer" style="width:400px;height:160px" onclick="window.opened=true"><h2>Profit and Loss</h2><p>Revenue and expense report</p><button aria-label="Toggle favorite" onclick="event.stopPropagation();window.favorites=(window.favorites||0)+1"><span role="img" aria-label="star"></span></button></div>');
+  const { driver, id } = await driverFor(page);
+  try {
+    const card = await choose(driver, id, 'click', (e) => e.tag === 'div');
+    expect(card.el.label).toContain('Profit and Loss');
+    expect(card.el.label).not.toBe('star');
+    expect((await send(driver, id, card)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => ({ opened: !!window.opened, favorites: window.favorites || 0 }))).toEqual({ opened: true, favorites: 0 });
+  } finally { await driver.close(); }
+});
+
 test('realistic input emits trusted keyboard/pointer events and never mutates DOM during observation', async ({ page }) => {
   await page.setContent(`<label>Company<input id="company"></label><label>Region<select><option value="a">North</option><option value="b">South</option></select></label><script>
     window.events=[];for(const t of ['keydown','keyup','input','click','change'])document.addEventListener(t,e=>events.push({type:t,trusted:e.isTrusted}));

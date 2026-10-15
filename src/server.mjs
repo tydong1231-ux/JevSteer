@@ -165,6 +165,12 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
     inputSchema: z.object({ tab_id: z.string().optional() }),
   }, wrap(async ({ tab_id }) => text(await runtime.snapshotText(tab_id))));
 
+  server.registerTool("browser_inspect", {
+    title: "Inspect Business Tables",
+    description: "HOST read-only oracle, independent of Jev target/completion decisions. Returns bounded visible main-frame table cells, control values and disabled ancestry from a fixed reader; secrets are redacted. Requires Playwright. No arbitrary JavaScript, browser input or acceptance is performed. Truncated/virtualized rows are not proof of a whole dataset.",
+    inputSchema: z.object({ tab_id: z.string() }),
+  }, wrap(async ({ tab_id }) => text(await runtime.inspect(tab_id))));
+
   server.registerTool("browser_act", {
     title: "Manual Browser Action",
     description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. Never replay an uncertain action.",

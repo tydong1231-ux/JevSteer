@@ -8,6 +8,7 @@ import { captureSnapshot, readDOM } from './snapshot.mjs';
 import { PageEvents } from './events.mjs';
 import { sessionIdentity, physicalPageId } from './sessions.mjs';
 import { dispatchInput } from './driver.mjs';
+import { inspectBusinessDOM } from './inspect.mjs';
 
 export class PlaywrightDriver {
   constructor(options = {}) {
@@ -70,7 +71,7 @@ export class PlaywrightDriver {
       // The same Page attached through two CDP URLs must share one lease and
       // journal, even if the logical session namespaces differ.
       const pageId = `pw:${targetId}`;
-      const record = { page, pageId, refs: new Map(), events: new PageEvents(page, { retainBodies: this.options.retainNetworkBodies }) };
+      const record = { page, pageId, refs: new Map(), events: null };
       record.onNavigate = (frame) => { this.frameInfo(frame).revision++; };
       page.on('framenavigated', record.onNavigate);
       record.onClose = () => { record.refs.clear(); this.records.delete(pageId); };
@@ -87,6 +88,9 @@ export class PlaywrightDriver {
     const id = typeof ref === 'string' ? ref : ref?.pageId;
     const record = this.records.get(id);
     if (!record || record.page.isClosed()) throw new Error(`TAB_NOT_FOUND: ${id}`);
+    // Discovering other tabs must not collect their network/console data.
+    // Event capture starts only on a page explicitly used by the runtime.
+    record.events ||= new PageEvents(record.page, { retainBodies: this.options.retainNetworkBodies });
     return record;
   }
 
@@ -215,6 +219,11 @@ export class PlaywrightDriver {
     const data = await record.page.screenshot({ type: format, timeout: this.options.timeoutMs });
     return { data: data.toString('base64'), mimeType: `image/${format}` };
   }
+  async inspect(ref) {
+    const record = await this.record(ref);
+    if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
+    return { page_id: record.pageId, session_id: this.sessionId, ...(await record.page.evaluate(inspectBusinessDOM)) };
+  }
   async startEvents(ref) { await this.record(ref); return { monitoring: true }; }
   async stopEvents() {}
   async events(ref, cursor = 0) { return (await this.record(ref)).events.read(cursor); }
@@ -224,7 +233,7 @@ export class PlaywrightDriver {
     this.closed = true;
     this.context?.off('page', this.onPage);
     for (const record of this.records.values()) {
-      record.events.close();
+      record.events?.close();
       record.page.off('framenavigated', record.onNavigate);
       record.page.off('close', record.onClose);
       record.refs.clear();

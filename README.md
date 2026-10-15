@@ -142,6 +142,16 @@ with exactly one browser context. It never falls back to launching an unsigned-i
 browser. Multiple pages require an explicit `tab_id`, or a page already selected
 in this runtime. Ordinary Chrome without remote debugging is not attachable.
 
+For Chrome 144+ and this pinned Playwright version, `JEVSTEER_CDP_ENDPOINT=chrome`
+can attach to the existing default Chrome session without restarting it with a
+port. The user must personally enable the switch at
+`chrome://inspect/#remote-debugging` and approve Chrome's connection prompt.
+This was exercised on Windows/Chrome 155. Do not automate security permission
+prompts, copy a live profile or attempt a CAPTCHA/security bypass. An attachment
+failure stops the task; it does not silently launch another browser. Tab listing
+does not start network/console capture on unrelated pages. See the official
+[existing-browser connection guide](https://playwright.dev/mcp/configuration/browser-extension).
+
 `JEVSTEER_BROWSER_DRIVER=kapture` remains the compatibility default until real
 Jev/ccMonet comparison gates pass. Kapture continues to control the existing
 extension-connected Chrome session. Resolve old pending actions/reviews in that
@@ -159,6 +169,26 @@ Failure screenshots/traces, test profiles and journals remain local in ignored
 directories. Screenshots and traces may contain private data: inspect/redact
 before sharing, and remove obsolete local artifacts according to your retention
 policy. Network bodies are off by default in the Playwright driver.
+
+`browser_inspect` is a fixed read-only Host oracle for visible main-frame table
+cells, control values and disabled ancestry. It makes no Jev call and accepts no
+executable JavaScript. Virtualized/truncated tables are not proof of all rows.
+Its output is private evidence, not a public report. The local
+`scripts/live-host.mjs` bridge drives the real stdio MCP server and archives each
+request/result in ignored files with a fresh session prefix. It requires the
+Playwright driver and process-local provider credentials. See
+[ccMonet live evidence and open gates](docs/CCMONET-PLAYWRIGHT.md).
+
+Before a live account test, obtain explicit consent for the necessary current
+page content to be sent to the configured model provider. Keep unrelated tabs,
+credentials and cookies out of model input. Read-only also excludes remote
+preference writes such as favorites. The native snapshot gives visible card
+text precedence over nested icon names; otherwise unnamed static image controls
+may expose an explicit `icon:` filename hint. Duplicate hints remain ambiguous.
+
+For independent test invocations set distinct `JEVSTEER_E2E_OUTPUT` directories
+below `.test-artifacts` (for example `.test-artifacts/check-a`). Playwright clears
+each run's `results` subdirectory; do not overlap runners on one output path.
 
 For an independent unsaved form, set `execution_mode=form` and
 `verification_mode=host`. Jev binds up to twelve supplied current-stage values

@@ -81,7 +81,14 @@ implemented separately; [its controlled fixture comparison](BATCH-FORM.md)
 does not establish general or ccMonet savings. P5 still needs explicit cross-driver migration,
 cross-process browser crash/cancellation matrices and retention tests. P6 has
 the real-browser MCP harness but ccMonet C1–C3 must run with an authorized DEMO
-profile and independent business oracles. C4 mutations remain isolated fixtures.
+profile and independent business oracles. The initial authorized existing-Chrome
+run is documented in [ccMonet evidence and failed gates](CCMONET-PLAYWRIGHT.md):
+full live acceptance is not established by fixture tests. Account-specific live
+observations stay in ignored private artifacts. Follow-up safety work strengthens
+remote preference checks, card/icon naming and contract-bound verification.
+C4 mutations remain isolated fixtures. Contract-digest binding now prevents a
+changed goal/criteria under reused run/milestone IDs from certifying older
+unknown actions; legacy entries remain pending for explicit reconciliation.
 P7 requires identical-model/account A/B evidence and live business acceptance
 before changing the compatibility default or retiring Kapture/Cheerio.
 
