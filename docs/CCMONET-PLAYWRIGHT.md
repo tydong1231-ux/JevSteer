@@ -92,7 +92,8 @@ no-favorites constraint stopped another attempted click **before** input.
 Live input was then stopped and the controller disconnected. No baseline
 favorite state was captured, so two clicks or the current outlined-star display
 cannot prove restoration. **Do not claim the preference state was restored.**
-The Host needs the user's expected favorite state before any corrective change.
+The user subsequently explicitly said restoration was unnecessary. Favorite
+state was left as observed; no corrective preference change was attempted.
 No financial records were saved, paid, approved, matched or reconciled.
 
 The code fix separates parent card text from child icons and always performs the
@@ -122,8 +123,9 @@ with EPERM. A development test used an unsupported fixture helper and was fixed;
 another overlapping runner removed shared trace files. Those attempts are not
 counted as acceptance passes. Final reruns use isolated output directories.
 
-Confirm/restore report favorite state with the user before further live input.
-C1 needs a legitimate enabled detail path and reconciliation of the broad local
+The user declined preference restoration and requested the improvements directly
+in the PR. Live input remains stopped; this is a code/test handoff, not a new live
+pass for the final guard build. C1 needs a legitimate enabled detail path and reconciliation of the broad local
 manual replay barrier, not journal deletion or disabled-state bypass. C2 needs
 independent reconciliation of its original pending Generate action before retry.
 Then rerun C1–C3 from clean starting states, recording first-try, recovered and
