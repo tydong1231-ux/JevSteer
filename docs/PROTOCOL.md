@@ -47,6 +47,23 @@ remain browser inputs.
 
 ## Milestone contract
 
+`execution_mode=explore` preserves normal one-step Jev decisions.
+`execution_mode=form` is an opt-in strategy for native Playwright with
+`verification_mode=host`, no unresolved actions, and 1–12 non-secret
+current-stage values. It issues one independent binding head per value plus
+shared remote-effect, irreversible, constraint, login and unsupported-state
+checks. It uses the existing side-effect safety threshold; final assertions and
+Host acceptance are unchanged. Uncertain bindings never fall through to input.
+
+Before any field input, validate duplicate targets, confidence, exact host field
+assertion conflicts, native option values and common form/record/Frame/document
+ownership. Each resulting TYPE/native SELECT passes the ordinary target,
+Journal and action-effect guards. Every prior field is checked again before the
+next input; a dependency reset stops for guidance before further changes. The
+host may resume the current stage with narrowed values or use explore for an
+unsupported widget. Batch mode never executes Save, Enter, navigation or custom
+combobox expansion. Commit remains a separate independently reviewable stage.
+
 A milestone contains `goal`, `success_criteria`, optional `constraints`, `guidance`, and deterministic `assertions`.
 
 Guidance must be just-in-time workflow knowledge, not selectors or click sequences.
