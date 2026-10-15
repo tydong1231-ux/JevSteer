@@ -46,7 +46,11 @@ export function verifyActionEffect(before, after, action) {
     }
   }
 
-  if (action.tool === "click" && (action.tag === "a" || action.role === "link")) {
+  if (action.tool === "click" && (action.tag === "a" || action.role === "link" || action.el?.form_action)) {
+    return { status: before.url !== after.url ? "confirmed" : (changed ? "changed" : "unknown"), check: "navigation" };
+  }
+
+  if (action.tool === "press_enter" && (action.el?.type === "search" || action.el?.role === "searchbox")) {
     return { status: before.url !== after.url ? "confirmed" : (changed ? "changed" : "unknown"), check: "navigation" };
   }
 

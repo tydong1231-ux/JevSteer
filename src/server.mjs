@@ -10,6 +10,7 @@ const SERVER_POLICY = [
   "In strict review_mode, browser_run returns milestone_ready_for_review after each verified milestone. Review its Evidence Packet; continue with next_milestone_index only if accepted. If rejected, rerun the same milestone with corrected guidance/criteria.",
   "Evidence Packets contain action-effect checks, final verification and filtered network evidence. Use browser_evidence only when a referenced request/response needs deeper inspection.",
   "Only completed_verified is automatic final success. milestone_ready_for_review means the executor passed its checks but the host still owns acceptance.",
+  "Use verification_mode=host for complex outcomes: Jev executes, the runtime checks assertions, and the HOST independently judges the result. The default hybrid mode also hands uncertain Jev verification to the host. host_review_required is not success. Call browser_review with evidence for every criterion and constraints; the receipt is bound to the observed page and originating milestone. Never accept solely from Jev's completion claim or a transport ACK.",
   "Put secrets only in values. Never bypass CAPTCHA, 2FA, security prompts, destructive confirmations or payment/legal submission confirmation.",
 ].join(" ");
 
@@ -64,7 +65,7 @@ export function createServer() {
 
   server.registerTool("browser_open", {
     title: "Open URL",
-    description: "Open an absolute URL in the user's real Chrome session.",
+    description: "Open an absolute URL in the user's real Chrome session. Lost navigation acknowledgements are reconciled by observing the exact requested destination without replay. navigation_unconfirmed returns the tab_id for inspection; do not blindly retry.",
     inputSchema: z.object({
       url: z.string().url(),
       tab_id: z.string().optional(),
@@ -87,6 +88,7 @@ export function createServer() {
       goal: z.string().min(1).max(1000).describe("Overall outcome."),
       milestones: z.array(milestoneSchema).max(12).optional().describe("Host-defined semantic checkpoints for long workflows."),
       review_mode: z.enum(["fast", "strict"]).optional().default("fast"),
+      verification_mode: z.enum(["hybrid", "host", "jev"]).optional().default("hybrid").describe("Use host for complex results. hybrid hands uncertain semantic verification to the host; jev retains the legacy automatic semantic gate. Host acceptance never overrides failed assertions or safety stops."),
       milestone_index: z.number().int().min(0).max(11).optional().default(0).describe("Which milestone to execute/resume. In strict mode use next_milestone_index after host acceptance."),
       run_id: z.string().max(120).optional().describe("Reuse the returned run_id across milestone reviews/retries so evidence references remain grouped."),
       success_criteria: z.array(z.string().min(1).max(500)).max(8).optional().describe("Single-goal mode only."),
@@ -101,9 +103,10 @@ export function createServer() {
       allow_irreversible: z.boolean().optional().default(false),
       explain: z.boolean().optional().default(false),
     }),
-  }, wrap(async ({ goal, milestones, review_mode, milestone_index, run_id, success_criteria, constraints, guidance, assertions, tab_id, values, max_actions, max_duration_ms, evidence_level, allow_irreversible, explain }) => text(await runtime.run(goal, {
+  }, wrap(async ({ goal, milestones, review_mode, verification_mode, milestone_index, run_id, success_criteria, constraints, guidance, assertions, tab_id, values, max_actions, max_duration_ms, evidence_level, allow_irreversible, explain }) => text(await runtime.run(goal, {
     milestones: milestones || [],
     reviewMode: review_mode,
+    verificationMode: verification_mode,
     milestoneIndex: milestone_index,
     runId: run_id,
     successCriteria: success_criteria || [],
@@ -117,6 +120,20 @@ export function createServer() {
     evidenceLevel: evidence_level,
     allowIrreversible: allow_irreversible,
     explain,
+  }))));
+
+  server.registerTool("browser_review", {
+    title: "Review Browser Outcome",
+    description: "HOST ONLY. Independently inspect the result, then accept/reject its durable review ticket. Acceptance requires evidence for the goal, each criterion and all constraints, and an unchanged observed page. It never executes browser input or bypasses failed assertions. Host-verified success is distinct from Jev automatic verification. Reject stale/incorrect results before resuming the same milestone.",
+    inputSchema: z.object({
+      tab_id: z.string(), review_id: z.string().uuid(), decision: z.enum(["accept", "reject"]),
+      goal_evidence: z.string().trim().min(1).max(2000),
+      criteria_evidence: z.array(z.string().trim().min(1).max(1000)).max(8).optional().default([]),
+      constraints_evidence: z.string().trim().min(1).max(2000).optional(),
+    }),
+  }, wrap(async ({ tab_id, review_id, decision, goal_evidence, criteria_evidence, constraints_evidence }) => text(await runtime.reviewResult({
+    tabId: tab_id, reviewId: review_id, decision, goalEvidence: goal_evidence,
+    criteriaEvidence: criteria_evidence, constraintsEvidence: constraints_evidence,
   }))));
 
   server.registerTool("browser_evidence", {

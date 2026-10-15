@@ -16,7 +16,7 @@ export const FIELDISH = (e) => !!e && !e.disabled && !e.readonly && (
 );
 
 export const SELECTISH = (e) => !!e && !e.disabled
-  && (e.tag === "select" || e.role === "combobox" || e.role === "listbox");
+  && (e.tag === "select" || e.role === "combobox");
 
 export function squash(value, max = 500) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);

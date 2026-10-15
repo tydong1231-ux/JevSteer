@@ -94,6 +94,7 @@ export function buildEvidencePacket({ runId, milestone, result, network }) {
       ...(x.recovery ? { recovery: x.recovery } : {}),
     })),
     verification: result.verification,
+    ...(result.host_review ? { host_review: result.host_review } : {}),
     final_page: { url: result.url, title: result.title },
     network,
   };
