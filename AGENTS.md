@@ -6,6 +6,10 @@ When `jevsteer` MCP is available:
 - For long workflows, YOU are the planner: define semantic milestones before execution.
 - Each milestone needs one goal, measurable success criteria, constraints, and only the workflow facts Jev needs as `guidance`.
 - Guidance is not a click script. Prefer facts such as "Save keeps the record in draft; Continue advances to review."
+- For complex outcomes, set `verification_mode=host`: Jev executes and YOU independently judge the result. The default `hybrid` hands uncertain semantic verification to you; `jev` retains the automatic semantic gate.
+- On `host_review_required`, inspect fresh page/evidence against the ORIGINAL ticket's contract, then call `browser_review` with goal, each criterion and constraint evidence. It is not success until accepted; never accept solely from Jev's claim or a transport ACK. Reject stale tickets and re-observe the same milestone without replaying input.
+- A pending ticket blocks new runs, milestone advancement and input on that tab, including after process restart. `completed_host_verified` is host acceptance, distinct from `completed_verified`.
+- Split multiple potentially remote writes into separately reviewable outcomes. Resolve any uncertain earlier write from observed evidence before another mutation; never weaken replay protection to finish a workflow.
 - Use `review_mode=strict` when milestone boundaries need host acceptance; use `fast` for low-risk repetitive work.
 - On `milestone_ready_for_review`, inspect the Evidence Packet. Continue at `next_milestone_index` only if accepted.
 - On `needs_guidance`, patch only the CURRENT milestone guidance/criteria and rerun the same `milestone_index`/`run_id`. Do not take over the whole browser.

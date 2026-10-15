@@ -23,9 +23,51 @@ If workflow knowledge is missing, return `needs_guidance` instead of guessing. T
 
 ## Host review
 
+`verification_mode` controls who judges completion, independently of `review_mode`:
+
+- `host`: deterministic assertions must pass, then return `host_review_required` with an observation and durable review ticket; Jev does not make the final semantic judgment.
+- `hybrid` (default): use the automatic semantic gate, but hand uncertain results to the host. A failed assertion or hard semantic failure remains a failure.
+- `jev`: retain the legacy automatic semantic gate and uncertainty status.
+
+The host independently inspects the observation and any expanded evidence against
+the originating ticket's contract, not just Jev's done score or an HTTP ACK. Call
+`browser_review` with `tab_id`, `review_id`, `decision` (`accept`/`reject`),
+`goal_evidence`, one `criteria_evidence` string per success criterion, and
+`constraints_evidence` when constraints exist. Acceptance executes no browser input.
+It returns `milestone_accepted` with the next index, or `completed_host_verified`
+at the final milestone. This is distinct from automatic `completed_verified`.
+In host mode, passing a nonempty assertion set is an immediate review checkpoint,
+even if Jev's done score is low, preventing unnecessary extra actions. Assertions
+must distinguish the requested result from the starting page. They are not a
+substitute for the host checking all semantic criteria and rejecting weak matches.
+
+A pending ticket blocks browser input, navigation and new runs on that tab across
+MCP restarts. Acceptance requires the same observed page state and a non-busy page.
+`host_review_stale` requires rejection and re-observation of the same milestone,
+not replaying the earlier action. Rejection does not clear uncertain mutations;
+acceptance resolves only the originating run/milestone's pending actions, retaining
+remote replay guards. Review storage contains hashes and protocol metadata only,
+not raw page, task values or evidence prose. CAPTCHA/login, irreversible actions,
+failed assertions and safety stops cannot be overridden by host verification.
+Ticket creation and acceptance use the same read-only inspection environment.
+When network capture is enabled, a short inspection capture reproduces Chrome's
+debugger-notice viewport so attach/detach does not create a false stale result.
+Assertions are checked again on the stable ticket observation after evidence
+cleanup. Inspection capture is always released and performs no browser input.
+
+If Jev returns no next action while an originating remote request is still pending,
+host mode can passively wait up to the remaining action-settling/time budget for a
+nonempty assertion set to pass on a stable, non-busy page. This only observes; it
+never replays the request, resolves the journal or accepts the result automatically.
+Missing/busy outcomes time out and remain unconfirmed.
+
+Multiple remote writes need separately reviewable outcomes. If an earlier write is
+unconfirmed, independently inspect and resolve it before the next mutation; do not
+treat any generic page change as proof that a transaction persisted.
+
 `strict`: return `milestone_ready_for_review` after each verified milestone. Host acceptance is expressed by starting `next_milestone_index`; rejection reruns the same milestone with corrected guidance/criteria.
 
-`fast`: continue automatically across internally verified milestones.
+`fast`: continue automatically across internally verified milestones. Neither setting bypasses a `host_review_required` ticket; the explicit `browser_review` receipt is required first.
 
 ## Evidence
 
@@ -77,6 +119,14 @@ Unsupported/malformed assertions are rejected rather than dropped. Duplicate
 labels require context; native dropdown option choices use distinct indices,
 even when display labels are identical.
 
+When several named values are supplied, a unique `field_equals` assertion for the
+selected field binds its exact expected value to the one matching `task.values`
+entry without another model choice. Duplicate labels need unique context; conflicting
+assertions, missing values or duplicate matching entries stop for guidance rather
+than guessing. With no applicable assertion the model uses the selected field's
+explicit label/name first. Range pickers can still reorder coupled date endpoints;
+keep intermediate ranges valid and verify both controls plus the generated heading.
+
 ## Runtime limits
 
 `max_actions` bounds decision rounds; `max_duration_ms` bounds starting more
@@ -84,3 +134,11 @@ browser input per milestone. Timeouts never cancel or roll back a submitted site
 transaction. State journals persist locally; configure `JEVSTEER_STATE_DIR` to a
 stable directory for short-lived MCP processes. Host acceptance, login, CAPTCHA,
 irreversible confirmation and visual fallback remain explicit protocol outcomes.
+
+Transient content-script teardown is retried a bounded number of times during
+observation. Link navigation, explicit GET search forms and search Enter wait for route progress
+within `JEVSTEER_NAVIGATION_SETTLE_MS`; no browser input is replayed by this wait.
+`browser_open` can return `navigation_unconfirmed` with a `tab_id` when its
+acknowledgement is lost and fresh DOM metadata cannot confirm the exact requested
+URL. Inspect that tab before another navigation. Redirects to a different URL
+are not automatically treated as confirmation of the requested destination.

@@ -2,7 +2,10 @@ import { load } from "cheerio";
 import { squash } from "./page-model.mjs";
 import { sensitiveField } from "./sensitive.mjs";
 
+const MODAL_SELECTOR = 'dialog[open],[role="dialog"][aria-modal="true"]';
+
 export const INTERACTIVE_SELECTOR = [
+  MODAL_SELECTOR,
   "a[href]",
   "button",
   "input:not([type=hidden])",
@@ -167,12 +170,29 @@ function semanticScope($, node) {
   return parts.join(" > ");
 }
 
-function recordContext(node) {
-  const record = node.closest('tr,[role="row"],article,li');
-  if (!record?.length) return "";
-  const clone = record.clone();
-  clone.find('button,input,textarea,select,[role="button"],script,style,[hidden],[aria-hidden="true"]').remove();
-  return squash(clone.text(), 500);
+function recordContext($, node) {
+  const textWithoutActions = (record) => {
+    const clone = record.clone();
+    clone.find('button,input,textarea,select,[role="button"]:not(a[href]),script,style,[hidden],[aria-hidden="true"]').remove();
+    return squash(clone.text(), 501);
+  };
+  const record = node.closest('tr,[role="row"],[role="listitem"],article,li');
+  if (record?.length) return squash(textWithoutActions(record), 500);
+  if (!node.is('button,a,[role="button"],[role="link"]')) return "";
+  // Repeated cards are often plain DIVs rather than semantic list items.
+  // Use the nearest compact repeated sibling container with independent text;
+  // do not identify a record from button text, DOM position or vendor classes.
+  const shape = (el) => `${el.prop("tagName")}|${(el.attr("class") || "").split(/\s+/).filter(Boolean).sort().join(" ")}`;
+  for (const parent of node.parents().slice(0, 6).toArray()) {
+    const candidate = $(parent);
+    if (candidate.is("body,html,form,nav,header,footer")) break;
+    const text = textWithoutActions(candidate);
+    if (!text || text.length > 500) continue;
+    const controls = candidate.find('button,input,textarea,select,[role="button"]:not(a[href])').length;
+    if (controls && candidate.siblings().filter((_, el) => shape($(el)) === shape(candidate)
+        && $(el).find('button,input,textarea,select,[role="button"]:not(a[href])').length === controls).length) return text;
+  }
+  return "";
 }
 
 export function buildSemanticPage({ tab, domHtml, rawElements }) {
@@ -182,8 +202,24 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
   const hiddenNode = (node) => !!node?.parents().addBack().toArray().some((el) =>
     $(el).attr("hidden") != null || $(el).attr("aria-hidden") === "true"
     || $(el).attr("inert") != null || /(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test($(el).attr("style") || ""));
-  const modalSelector = 'dialog[open],[role="dialog"][aria-modal="true"]';
-  const activeDialog = $(modalSelector).filter((_, el) => !hiddenNode($(el))).last();
+  const modalSelector = MODAL_SELECTOR;
+  // Ask Kapture for the containers themselves: class-based CSS hiding cannot
+  // be inferred from HTML attributes, and a visible dialog may contain only text.
+  const measured = (rawElements || []).map((raw) => ({ raw, node: safeQuery($, raw.selector)?.[0] }));
+  const visibleDialog = (el) => {
+    const node = $(el);
+    if (hiddenNode(node)) return false;
+    const container = measured.find((item) => item.node === el);
+    if (typeof container?.raw.visible === "boolean") return container.raw.visible;
+    // Compatibility with older snapshots that enumerated interactive children
+    // only. Native open dialogs remain foreground even without any controls.
+    return node.is("dialog[open]") || measured.some((item) => item.raw.visible
+      && item.node && $(item.node).parents().toArray().includes(el));
+  };
+  const dialogs = $(modalSelector);
+  const activeDialog = dialogs.filter((_, el) => visibleDialog(el)).last();
+  // Hidden modal templates must not leak their labels/options into page text.
+  dialogs.filter((_, el) => !visibleDialog(el)).remove();
 
   // A blocking modal is the current interaction surface. Its background can
   // contain thousands of virtual table rows and otherwise bury the detail
@@ -221,6 +257,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
     if (activeDialog.length && !node?.closest(modalSelector).filter((_, el) => el === activeDialog[0]).length
         && !node?.closest('[role="listbox"],[role="menu"],[role="option"],[role="menuitem"]').length) continue;
     const tag = String(raw.tagName || node?.prop("tagName") || "element").toLowerCase();
+    if (node.is(modalSelector)) continue; // Visibility evidence, not an action target.
     const type = squash(node?.attr("type") || "", 40).toLowerCase() || undefined;
     const role = inferRole(tag, type, squash(node?.attr("role"), 60) || undefined);
     const password = type === "password";
@@ -232,6 +269,18 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       selected: !!o.selected,
       disabled: !!o.disabled,
     })) : undefined;
+    const form = node.attr("form") ? findById($, node.attr("form")) : node.closest("form");
+    const submits = tag === "button" && !["button", "reset"].includes(type)
+      || tag === "input" && ["submit", "image"].includes(type);
+    let formAction;
+    const declaredAction = node.attr("formaction") || form?.attr("action");
+    if (submits && form?.length && declaredAction
+        && String(node.attr("formmethod") || form.attr("method") || "get").toLowerCase() === "get") {
+      try {
+        const destination = new URL(declaredAction, tab?.url);
+        if (["http:", "https:"].includes(destination.protocol)) formAction = destination.href;
+      } catch {}
+    }
 
     elements.push({
       i: elements.length,
@@ -244,6 +293,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       name: squash(node?.attr("name") || raw.name, 100) || undefined,
       type,
       href: squash(node?.attr("href") || raw.href, 220) || undefined,
+      ...(formAction ? { form_action: formAction } : {}),
       value: password ? "[REDACTED]" : (raw.value != null ? String(raw.value) : undefined),
       checked: raw.checked != null ? !!raw.checked : (["true", "false"].includes(node?.attr("aria-checked")) ? node.attr("aria-checked") === "true" : (node?.attr("checked") != null ? true : undefined)),
       disabled: node?.attr("disabled") != null || node?.attr("aria-disabled") === "true",
@@ -251,7 +301,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       contenteditable: node?.attr("contenteditable") === "true",
       options,
       near: nearbyText(node) || undefined,
-      context: recordContext(node) || undefined,
+      context: recordContext($, node) || undefined,
       scope: semanticScope($, node) || undefined,
       identity_version: 1,
       invalid: node?.attr("aria-invalid") === "true",

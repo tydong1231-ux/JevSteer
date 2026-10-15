@@ -74,7 +74,8 @@ test("uncertain independent verification returns to the host", async () => {
   const k = new MemoryKapture();
   const runtime = memoryRuntime(k, scriptedDecider([{ tool: "none", done: 0.99 }], { verifyScore: 0.6 }));
   const result = await runtime.run("Inspect record", { evidenceLevel: "none" });
-  assert.equal(result.status, "verification_uncertain");
+  assert.equal(result.status, "host_review_required");
+  assert.equal(result.verification.jev_verification.status, "verification_uncertain");
 });
 
 test("independent verification receives expected values and redacts secrets", async () => {

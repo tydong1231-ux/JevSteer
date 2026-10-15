@@ -1,0 +1,12 @@
+{
+  "goal": "Find Attention Is All You Need using arXiv advanced title, classification and original-submission-date filters, then verify its abstract record",
+  "verification_mode": "host",
+  "review_mode": "strict",
+  "constraints": ["Public read-only search. Do not log in, upload, submit papers, donate, download files or follow external social links."],
+  "values": {"title":"Attention Is All You Need","from_date":"2017-01-01","to_date":"2017-12-31"},
+  "milestones": [
+    {"id":"filters","goal":"On arXiv advanced search, configure title Attention Is All You Need, Title field, Computer Science, and original submission date 2017-01-01 through 2017-12-31. Stop before search.","success_criteria":["Title and field match exactly.","Computer Science and original-submission date range are selected."],"assertions":[{"type":"field_equals","label":"Search term","value":"Attention Is All You Need"},{"type":"field_equals","label":"Field to search","value":"title"},{"type":"control_checked","label":"Computer Science (cs)","value":true},{"type":"field_equals","label":"From","value":"2017-01-01"},{"type":"field_equals","label":"to","value":"2017-12-31"},{"type":"control_checked","label":"Submission date (original)","value":true}],"max_actions":18},
+    {"id":"results","goal":"Submit the configured search and inspect its matching result without changing filters.","success_criteria":["Matching paper and Ashish Vaswani appear.","The URL retains Title, Computer Science, date range and original-submission date type."],"assertions":[{"type":"text_contains","value":"Vaswani"},{"type":"url_contains","value":"terms-0-field=title"},{"type":"url_contains","value":"classification-computer_science=y"},{"type":"url_contains","value":"date-from_date=2017-01-01"},{"type":"url_contains","value":"date-to_date=2017-12-31"},{"type":"url_contains","value":"date-date_type=submitted_date_first"}],"max_actions":8},
+    {"id":"abstract","goal":"Open arXiv 1706.03762 abstract and inspect title, authors, original submission and abstract text. Do not download files.","success_criteria":["The abstract record is 1706.03762, Attention Is All You Need.","Ashish Vaswani, abstract text and original 2017 submission are visible, distinguished from later revisions."],"assertions":[{"type":"url_contains","value":"/abs/1706.03762"},{"type":"text_contains","value":"Ashish Vaswani"},{"type":"text_contains","value":"2017"}],"max_actions":8}
+  ]
+}

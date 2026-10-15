@@ -195,10 +195,18 @@ or is uncertain is not an automatic pass. The examples are workflow contracts,
 not selector scripts. Use a unique customer name for creation runs and inspect
 existing records before creating another one.
 
+Complex public-site contracts are in `examples/arxiv-advanced-readonly.json`
+and `examples/selenium-public-form.json`. Open the corresponding arXiv advanced
+search or Selenium public web form in a dedicated tab, supply its `tab_id`, and
+review each ticket independently. Never auto-accept a ticket in a test runner.
+The ccMonet read-only/report examples also use explicit host verification; reuse
+the user's intended authenticated tab and organization, without editing records.
+
 Traces are stored in ignored `.test-artifacts/`; `.env` and raw customer data
 must stay local. No tests run during normal MCP startup.
 
 - `browser_run` — default executor; supports host-defined milestones.
+- `browser_review` — independently accept/reject a complex outcome's durable review ticket; executes no browser input.
 - `browser_evidence` — expand one referenced network evidence item.
 - `browser_resolve_action` — resolve an unconfirmed action after inspecting its outcome.
 - `browser_snapshot` / `browser_act` — recovery only.
@@ -209,12 +217,27 @@ MIT licensed. See `THIRD_PARTY_NOTICES.md`.
 
 ## General browser reliability
 
+For complex outcomes use `verification_mode: "host"`. Jev executes, deterministic
+assertions remain mandatory, and the host independently judges the returned
+`host_review_required` observation against the original milestone criteria and
+constraints. Call `browser_review` with evidence for the goal, every criterion,
+and constraints before continuing. Accepted results are `milestone_accepted` or
+`completed_host_verified`, never mislabeled as Jev automatic success. The default
+`hybrid` also hands uncertain semantic verification to the host; `jev` preserves
+the legacy automatic semantic gate. Pending reviews survive MCP restarts and block
+input/new runs on the tab; stale observations require rejection and re-observation.
+Host acceptance cannot override failed assertions, CAPTCHA/login or safety stops.
+See [protocol](docs/PROTOCOL.md#host-review) for the full receipt contract.
+
 Controls are identified by their label, field name, record context and form/dialog
 scope. A reused selector cannot silently change the target record. A surgical
 manual recovery may relocate a uniquely matching control after a DOM reorder;
 ambiguous matches require another observation. Native and ARIA dialogs focus the
 action surface. Background context remains available to the model but cannot
 satisfy a foreground text assertion.
+Repeated plain-DIV cards also supply bounded record context, preserving product
+name links even when those links have button roles. Identical Add/Remove controls
+on different cards do not become the same business operation.
 
 After an action, the runtime observes field values, selected options, checked and
 expanded state, and `aria-busy`/progress indicators within a bounded settling
@@ -254,7 +277,25 @@ exact, including whitespace and empty strings. For example:
 `max_duration_ms` defaults to 300000 per milestone. The budget is cooperative: no
 new input begins after exhaustion, while an already dispatched command retains
 its transport timeout. `JEVSTEER_ACTION_SETTLE_MS` defaults to 8000 and
-`JEVSTEER_OBSERVATION_QUIET_MS` to 250. DOM snapshots are still non-atomic; opaque
+`JEVSTEER_OBSERVATION_QUIET_MS` to 250. Link navigation, explicit GET search-form
+submissions and search Enter can wait
+up to `JEVSTEER_NAVIGATION_SETTLE_MS` (default 15000) for an observed route change;
+transient content-script teardown is retried through reads only. A lost
+`browser_open` acknowledgement is accepted only after fresh DOM metadata confirms
+the exact requested destination. Otherwise `navigation_unconfirmed` retains the
+`tab_id` for inspection without retransmitting navigation.
+
+Temporary Kapture selectors may be rebound to a uniquely matching semantic
+control and rechecked for live visibility and unchanged field value before
+journaling and dispatch. Record identity, duplicate-target and replay guards
+remain in force. Modal containers are measured through Kapture visibility,
+including text-only dialogs; CSS-hidden templates cannot become the foreground.
+ARIA listbox containers are excluded from click/select targets: the executor
+must choose a specific option. Verification also retains bounded button-state
+summaries such as passenger counts without treating button presence as proof
+that an action was performed. Semantic uncertainty still requires host review.
+
+DOM snapshots are still non-atomic; opaque
 iframes, closed shadow roots, canvas controls, uploads and native security dialogs
 can require host intervention. This is an outcome-verified runtime, not an
 exactly-once transaction protocol or a claim of universal site compatibility.
