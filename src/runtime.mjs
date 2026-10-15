@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { KaptureClient } from "./kapture-client.mjs";
+import { createBrowserDriver, KaptureDriver } from "./browser/index.mjs";
+import { DriverActionError } from "./browser/driver.mjs";
 import { TabLeaseManager } from "./lease.mjs";
 import { jev } from "./jev.mjs";
 import { config } from "./config.mjs";
@@ -110,11 +111,13 @@ function manualRemoteRisk(action) {
 }
 
 export class JevSteerRuntime {
-  constructor({ kapture = new KaptureClient(), leases = new TabLeaseManager(), decider = jev, snapshotter = defaultSnapshotter, textGenerator = generateFieldText, journal = new ActionJournal(), reviews, observation = {} } = {}) {
-    this.kapture = kapture;
+  constructor({ driver, kapture, leases = new TabLeaseManager(), decider = jev, snapshotter, textGenerator = generateFieldText, journal = new ActionJournal(), reviews, observation = {} } = {}) {
+    this.driver = driver || (kapture ? new KaptureDriver({ client: kapture }) : createBrowserDriver());
+    // Compatibility for embedded callers; orchestration never dispatches here.
+    this.kapture = this.driver.client;
     this.leases = leases;
     this.decider = decider;
-    this.snapshotter = snapshotter;
+    this.snapshotter = snapshotter || (this.driver.kind === "kapture" ? defaultSnapshotter : null);
     this.textGenerator = textGenerator;
     this.journal = journal;
     this.reviews = reviews || new HostReviewStore(journal.dir === null ? { dir: null } : {});
@@ -140,9 +143,9 @@ export class JevSteerRuntime {
     if (level === "none") return { available: false, disabled: true };
     const clientId = `jevsteer-${runId}-${milestoneId}`;
     try {
-      const monitor = await this.kapture.command(tabId, "network_monitor", { enabled: true, clientId });
-      if (monitor?.success === false || monitor?.monitoring === false) throw new Error("Kapture network monitor was not enabled");
-      const baseline = await this.kapture.command(tabId, "network_requests", { since: 0, limit: 1000 }).catch(() => ({}));
+      const monitor = await this.driver.startEvents(tabId, clientId);
+      if (monitor?.success === false || monitor?.monitoring === false) throw new Error("Browser event monitor was not enabled");
+      const baseline = await this.driver.events(tabId, 0).catch(() => ({}));
       return { available: true, clientId, cursor: Number(baseline?.cursor || 0) };
     } catch (error) {
       return { available: false, error: actionError(error) };
@@ -152,7 +155,7 @@ export class JevSteerRuntime {
   async finishNetworkCapture(tabId, capture, runId, milestoneId, level) {
     if (!capture?.available) return capture || { available: false };
     try {
-      const listed = await this.kapture.command(tabId, "network_requests", { since: capture.cursor || 0, limit: 1000 });
+      const listed = await this.driver.events(tabId, capture.cursor || 0);
       const requests = Array.isArray(listed?.requests) ? listed.requests : [];
       const relevant = requests.filter(relevantRequest).slice(-20);
       const summaries = [];
@@ -161,7 +164,7 @@ export class JevSteerRuntime {
         let ref;
         if (level === "relevant" && request?.requestId) {
           try {
-            body = await this.kapture.command(tabId, "network_body", { requestId: request.requestId, maxBytes: 16384 });
+            body = await this.driver.eventBody(tabId, request.requestId, 16384);
             ref = evidenceRef(runId, milestoneId, request.requestId);
             this.storeEvidence(ref, {
               request: { method: request.method, url: safeUrl(request.url), status: request.status, type: request.type },
@@ -176,27 +179,31 @@ export class JevSteerRuntime {
         total_requests: requests.length,
         relevant_requests: relevant.length,
         requests: summaries,
+        ...(listed.events ? { browser_events: listed.events } : {}),
       };
     } catch (error) {
       return { available: false, error: actionError(error) };
     } finally {
-      await this.kapture.command(tabId, "network_monitor", { enabled: false, clientId: capture.clientId }).catch(() => {});
+      await this.driver.stopEvents(tabId, capture.clientId).catch(() => {});
     }
   }
 
   async close() {
-    await this.kapture.close();
+    await this.driver.close();
   }
 
   async ensureReady() {
-    return this.kapture.ensureServer();
+    return this.driver.ready();
   }
 
   async tabs() {
     await this.ensureReady();
-    const tabs = await this.kapture.listTabs();
+    const tabs = await this.driver.pages();
     return Promise.all(tabs.map(async (tab) => ({
       tab_id: tab.tabId,
+      page_id: tab.pageId,
+      session_id: tab.sessionId,
+      driver: this.driver.kind,
       title: tab.title,
       url: tab.url,
       browser: tab.browser,
@@ -216,7 +223,9 @@ export class JevSteerRuntime {
         typesafe_key: !!process.env.TYPESAFE_API_KEY,
         openrouter_key: !!process.env.OPENROUTER_API_KEY,
         jev_provider: config.jevProvider,
-        kapture_server: false,
+        browser_driver: this.driver.kind,
+        browser_ready: false,
+        ...(this.driver.kind === "kapture" ? { kapture_server: false } : {}),
         error: String(error?.message ?? error),
       };
     }
@@ -227,21 +236,22 @@ export class JevSteerRuntime {
       openrouter_key: !!process.env.OPENROUTER_API_KEY,
       jev_provider: config.jevProvider,
       jev_model: config.jevModel,
-      kapture_server: true,
-      kapture_mode: server.mode,
-      kapture_port: server.port,
+      browser_driver: this.driver.kind,
+      browser_ready: true,
+      browser_mode: server.mode,
+      ...(this.driver.kind === "kapture" ? { kapture_server: true, kapture_mode: server.mode, kapture_port: server.port } : { session_id: server.session_id }),
       connected_tabs: tabs.length,
       tabs,
       next_step: !keyAvailable
         ? `Set ${config.jevProvider === "openrouter" ? "OPENROUTER_API_KEY" : "TYPESAFE_API_KEY"} for this MCP server.`
         : tabs.length === 0
-          ? "Install/enable the Kapture browser extension and click its toolbar icon in the tab you want the agent to control."
+          ? (this.driver.kind === "kapture" ? "Install/enable the Kapture browser extension and click its toolbar icon in the tab you want the agent to control." : "Call browser_open to create a managed page; select tab_id explicitly when multiple pages exist.")
           : "Ready for browser_run.",
     };
   }
 
   async selectTab(tabId) {
-    const tabs = await this.kapture.listTabs();
+    const tabs = await this.driver.pages();
     if (tabId) {
       const exact = tabs.find((t) => t.tabId === tabId);
       if (!exact) throw new Error(`TAB_NOT_FOUND: ${tabId}`);
@@ -252,13 +262,13 @@ export class JevSteerRuntime {
       const active = tabs.find((t) => t.tabId === this.activeTabId);
       if (active) return active;
     }
-    if (!tabs.length) throw new Error("NO_CONNECTED_TAB: click the Kapture extension icon in the Chrome tab you want to control.");
+    if (!tabs.length) throw new Error(this.driver.kind === "kapture" ? "NO_CONNECTED_TAB: click the Kapture extension icon in the Chrome tab you want to control." : "NO_CONNECTED_TAB: use browser_open to create a managed browser page.");
     if (tabs.length === 1) {
       this.activeTabId = tabs[0].tabId;
       return tabs[0];
     }
     const visible = tabs.filter((t) => t.pageVisibility?.visible);
-    if (visible.length === 1) {
+    if (this.driver.kind === "kapture" && visible.length === 1) {
       this.activeTabId = visible[0].tabId;
       return visible[0];
     }
@@ -268,23 +278,31 @@ export class JevSteerRuntime {
     throw error;
   }
 
+  async assertSessionClear(tabId) {
+    const sessionId = this.driver.sessionId;
+    if (!sessionId) return;
+    const foreign = (await this.journal.pendingSession(sessionId)).filter((r) => r.page_id !== tabId);
+    if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: inspect and resolve prior page outcomes before input on a replacement page: ${foreign.map((r) => `${r.page_id}/${r.id}`).join(', ')}`);
+  }
+
   async open(url, { tabId, newTab = true } = {}) {
     await this.ensureReady();
     let tab;
     if (newTab) {
-      const created = await this.kapture.newTab();
-      if (!created?.tabId) throw new Error(`Kapture did not return a tabId: ${JSON.stringify(created).slice(0, 300)}`);
+      const created = await this.driver.createPage();
+      if (!created?.tabId) throw new Error("Browser driver did not return a page ID");
       tab = { tabId: created.tabId };
     } else {
       tab = await this.selectTab(tabId);
     }
     this.activeTabId = tab.tabId;
     return this.leases.withLease(tab.tabId, { runId: `open-${randomUUID()}` }, async () => {
+      await this.assertSessionClear(tab.tabId);
       const pending = await this.reviews.pending(tab.tabId);
       if (pending) return { status: "host_review_required", tab_id: tab.tabId, host_review: reviewReceipt(pending), info: "Accept or reject this tab's pending outcome before navigating elsewhere." };
       const started = Date.now();
       let recovered;
-      try { await this.kapture.navigate(tab.tabId, url); }
+      try { await this.driver.open(url, { pageRef: tab.tabId }); }
       catch (error) {
         if (!transientNavigationError(error)) throw error;
         // Explicit navigation was dispatched once. Require fresh content-script
@@ -298,7 +316,7 @@ export class JevSteerRuntime {
         };
       }
       await this.settle(tab.tabId);
-      const detail = recovered || await this.kapture.dom(tab.tabId, { selector: "title" });
+      const detail = recovered || await this.driver.metadata(tab.tabId);
       return { tab_id: tab.tabId, url: detail.url, title: detail.title, ms: Date.now() - started,
         ...(recovered ? { recovery: "destination_confirmed_after_transport_error" } : {}) };
     });
@@ -310,7 +328,7 @@ export class JevSteerRuntime {
     let stableSince = Date.now();
     while (Date.now() - started < max) {
       let detail;
-      try { detail = await this.kapture.tabDetail(tabId); } catch { await sleep(120); continue; }
+      try { detail = await this.driver.detail(tabId); } catch { await sleep(120); continue; }
       const signature = JSON.stringify([detail.url, detail.domSize, detail.scrollPosition, detail.title]);
       if (signature === previous) {
         if (Date.now() - stableSince >= quiet) return Date.now() - started;
@@ -333,7 +351,7 @@ export class JevSteerRuntime {
 
   async readPage(tabId) {
     for (let attempt = 0; attempt < 3; attempt++) {
-      try { return await this.snapshotter(this.kapture, tabId); }
+      try { return await (this.snapshotter ? this.snapshotter(this.kapture, tabId) : this.driver.observe(tabId)); }
       catch (error) {
         if (!transientNavigationError(error) || attempt === 2) throw error;
         await sleep(100);
@@ -346,16 +364,22 @@ export class JevSteerRuntime {
   }
 
   async resolveAction({ tabId, actionId, resolution, evidence }) {
+    // A managed Page may have been closed since an unknown submission. The
+    // host can still resolve its durable record using independent site evidence.
+    if (this.driver.sessionId && tabId?.startsWith('pw:')
+        && (await this.journal.pending(tabId)).some((r) => r.id === actionId && r.session_id === this.driver.sessionId)) {
+      return this.leases.withLease(tabId, { runId: `resolve-${randomUUID()}` }, () => this.journal.resolve(tabId, actionId, resolution, evidence));
+    }
     const tab = await this.selectTab(tabId);
     return this.leases.withLease(tab.tabId, { runId: `resolve-${randomUUID()}` },
       () => this.journal.resolve(tab.tabId, actionId, resolution, evidence));
   }
 
   async waitForNavigation(tabId, beforeUrl, { max = 8000 } = {}) {
-    if (typeof this.kapture.dom !== "function") return 0;
+    if (typeof this.driver.metadata !== "function") return 0;
     const started = Date.now();
     while (Date.now() - started < max) {
-      const current = await this.kapture.dom(tabId, { selector: "title" }).catch(() => null);
+      const current = await this.driver.metadata(tabId).catch(() => null);
       if (!current?.url || current.url !== beforeUrl) break;
       await sleep(200);
     }
@@ -367,7 +391,7 @@ export class JevSteerRuntime {
     const expected = new URL(url).href;
     do {
       try {
-        const current = await this.kapture.dom(tabId, { selector: "title" });
+        const current = await this.driver.metadata(tabId);
         if (current?.url && new URL(current.url).href === expected) return current;
       } catch (error) { if (!transientNavigationError(error)) throw error; }
       if (Date.now() - started >= max) return null;
@@ -701,54 +725,7 @@ export class JevSteerRuntime {
   }
 
   async assertTargetFresh(tabId, action) {
-    const original = action.el;
-    if (!original?.selector) throw new Error("STALE_TARGET: no observed selector");
-    let target = original;
-    if (original.identity_version) {
-      const page = await this.readPage(tabId);
-      if (action.observedUrl && page.url !== action.observedUrl) throw new Error("STALE_TARGET: page navigated during identity check");
-      const fresh = locateSameElement(original, page);
-      const generated = (selector) => /^(?:#|\.)kapture-\d+$/.test(selector || "");
-      if (!fresh || fresh.disabled || fresh.readonly && action.tool === "type"
-          || fresh.selector !== original.selector && !(generated(original.selector) && generated(fresh.selector))) {
-        throw new Error("STALE_TARGET: target identity, record context or interaction scope changed");
-      }
-      if (["type", "select"].includes(action.tool) && String(fresh.value ?? "") !== String(original.value ?? "")) throw new Error("STALE_TARGET: live field value changed");
-      target = fresh;
-    }
-    // Kapture's element query rechecks visibility/occlusion in the live tab.
-    // This is a light guard, not full CDP node identity or atomic snapshotting.
-    const response = await this.kapture.elements(tabId, target.selector, { visible: "true" });
-    const matches = response?.elements || [];
-    if (response?.url && action.observedUrl && response.url !== action.observedUrl) {
-      throw new Error("STALE_TARGET: page navigated after decision");
-    }
-    if (matches.length !== 1 || matches[0]?.visible !== true) {
-      throw new Error("STALE_TARGET: target was replaced, hidden or became ambiguous");
-    }
-    const current = matches[0];
-    if (current.tagName && String(current.tagName).toLowerCase() !== original.tag) {
-      throw new Error("STALE_TARGET: target element type changed");
-    }
-    if (original.href && current.href) {
-      const base = action.observedUrl || response.url;
-      const normalizeHref = (href) => { try { return new URL(href, base).href; } catch { return href; } };
-      if (normalizeHref(original.href) !== normalizeHref(current.href)) throw new Error("STALE_TARGET: target navigation changed");
-    }
-    if (original.name && current.name && original.name !== current.name) {
-      throw new Error("STALE_TARGET: target field changed");
-    }
-    if (["type", "select"].includes(action.tool) && current.value != null
-        && String(original.value ?? "") !== String(current.value)) {
-      throw new Error("STALE_TARGET: field value changed after decision");
-    }
-    if (original.identity_version) {
-      // Enumerating even this one element may replace Kapture's temporary
-      // locator again. Bind dispatch and journaling to the returned locator.
-      const selector = /^(?:#|\.)kapture-\d+$/.test(target.selector)
-        && /^(?:#|\.)kapture-\d+$/.test(current.selector || "") ? current.selector : target.selector;
-      action.el = { ...target, selector };
-    }
+    return this.driver.assertTargetFresh(tabId, action, { readPage: (id) => this.readPage(id) });
   }
 
   async act(tabId, action) {
@@ -777,59 +754,11 @@ export class JevSteerRuntime {
     el = action.target == null ? null : action.el;
     selector = el?.selector;
     if (action.tool === "select" && el?.tag === "select") action.value = canonicalNativeSelectValue(el, action.value);
-    await action.beforeDispatch?.();
-    switch (action.tool) {
-      case "click":
-        if (!selector) throw new Error("click requires a target selector");
-        await this.kapture.command(tabId, "click", { selector });
-        break;
-      case "type": {
-        if (!selector) throw new Error("type requires a target selector");
-        if (action.value == null) throw new Error("type requires a value");
-        const value = String(action.value);
-        if (el.tag === "input" || el.tag === "textarea") {
-          await this.kapture.command(tabId, "fill", { selector, value });
-        } else {
-          // If clear fails, appending text is unsafe. Do not hide the failure.
-          await this.kapture.command(tabId, "clear", { selector });
-          await this.kapture.command(tabId, "type", { selector, text: value, delay: value.length <= 120 ? 5 : 0 }, 120000);
-        }
-        break;
-      }
-      case "press_enter":
-        await this.kapture.command(tabId, "keypress", { ...(selector ? { selector } : {}), key: "Enter" });
-        break;
-      case "press_key":
-        await this.kapture.command(tabId, "keypress", { ...(selector ? { selector } : {}), key: action.key || "Escape" });
-        break;
-      case "select": {
-        if (!selector) throw new Error("select requires a target selector");
-        if (el.tag !== "select") {
-          await this.kapture.command(tabId, "click", { selector });
-          break;
-        }
-        // action.value was canonicalized before the journal's beforeDispatch.
-        await this.kapture.command(tabId, "select", { selector, value: String(action.value) });
-        break;
-      }
-      case "hover":
-        if (!selector) throw new Error("hover requires a target selector");
-        await this.kapture.command(tabId, "hover", { selector });
-        break;
-      case "scroll":
-        await this.kapture.command(tabId, "keypress", { key: "PageDown" });
-        break;
-      case "wait":
-        await sleep(900);
-        break;
-      case "back":
-        await this.kapture.command(tabId, "back", {});
-        break;
-      case "none":
-        break;
-      default:
-        throw new Error(`unsupported action: ${action.tool}`);
-    }
+    const result = await this.driver.perform(tabId, action, action.el, { beforeDispatch: action.beforeDispatch });
+    if (["predispatch_rejected", "dispatched_unknown"].includes(result.state)) throw new DriverActionError(result);
+    action.dispatchState = result.state;
+    action.inputMode = result.input_mode;
+    return result;
   }
 
   async runContract(goal, {
@@ -866,6 +795,7 @@ export class JevSteerRuntime {
     }
     const withLease = (fn) => leaseHeld ? fn() : this.leases.withLease(tab.tabId, { runId }, fn);
     return withLease(async () => {
+      await this.assertSessionClear(tab.tabId);
       const started = Date.now();
       const calls0 = this.stats.calls;
       const tokens0 = this.stats.tokens;
@@ -965,7 +895,7 @@ export class JevSteerRuntime {
 
           if (safeToBack) {
             try {
-              await this.kapture.command(tab.tabId, "back", {});
+              await this.act(tab.tabId, { tool: "back" });
               await this.settle(tab.tabId);
               autoRecoveries++;
               row.auto_recovery = "back";
@@ -1267,11 +1197,19 @@ export class JevSteerRuntime {
           await this.act(tab.tabId, action);
           row.act_ms = Date.now() - actStarted;
           actionSucceeded = true;
+          h.dispatch_state = action.dispatchState;
+          h.input_mode = action.inputMode;
           if (journalRecord && sideEffect < 0.25) {
             await this.journal.resolve(tab.tabId, journalRecord.id, "applied", "acknowledged interaction classified as no remote mutation");
             journalRecords = await this.journal.pending(tab.tabId);
           }
         } catch (error) {
+          h.dispatch_state = error.dispatchState;
+          if (journalRecord && error.dispatchState === "predispatch_rejected") {
+            await this.journal.resolve(tab.tabId, journalRecord.id, "not_applied", "Browser driver rejected before the first possible input event");
+            journalRecords = await this.journal.pending(tab.tabId);
+            journalRecord = null;
+          }
           h.error = actionError(error);
           row.action_error = h.error;
           staleDecision = String(error?.message || "").startsWith("STALE_TARGET:");
@@ -1566,6 +1504,7 @@ export class JevSteerRuntime {
     const tab = await this.selectTab(tabId);
     const manualRunId = `manual-${randomUUID()}`;
     return this.leases.withLease(tab.tabId, { runId: manualRunId }, async () => {
+      await this.assertSessionClear(tab.tabId);
       if (await this.reviews.pending(tab.tabId)) throw new Error("HOST_REVIEW_PENDING: accept or reject the current outcome before browser input");
       let oldElement;
       if (element != null) {
@@ -1614,6 +1553,10 @@ export class JevSteerRuntime {
         await this.act(tab.tabId, normalized);
       } catch (error) {
         if (!entry) throw error; // No input dispatched, no pending journal.
+        if (error.dispatchState === "predispatch_rejected") {
+          await this.journal.resolve(tab.tabId, entry.id, "not_applied", "Browser driver rejected before the first possible input event");
+          throw error;
+        }
         // The browser may have applied the action before the ACK was lost.
         return {
           status: "action_unconfirmed", tab_id: tab.tabId, action_id: entry.id,
@@ -1645,7 +1588,7 @@ export class JevSteerRuntime {
       }
 
       await this.settle(tab.tabId);
-      const detail = await this.kapture.tabDetail(tab.tabId);
+      const detail = await this.driver.detail(tab.tabId);
       return { status: "completed", action, element: brief(currentElement), tab_id: tab.tabId, url: detail.url, title: detail.title };
     });
   }

@@ -9,9 +9,9 @@ Host agent: plan + milestones + review
       Jev: decide inside a milestone
       Runtime: act + verify + evidence
                 ↓
-             Kapture
+           BrowserDriver
                 ↓
-        your existing Chrome
+     Playwright / legacy Kapture
 ```
 
 JevSteer keeps expensive agents out of repetitive browser loops without asking Jev to understand an entire product.
@@ -116,11 +116,49 @@ while retaining host-defined milestones, Evidence Packets and Kapture.
 context, task goal and up to 2,800 characters of page text are sent to the
 configured external model provider. Leave it unset to use host values only.
 
-## Why Kapture
+## Browser driver migration
 
-Kapture controls the user's existing Chrome session, preserving cookies, logins, extensions and local state. It also exposes DOM and network/CDP data, which lets JevSteer verify workflows without making screenshots the primary control surface.
+The [Playwright-first refactor](https://github.com/tydong1231-ux/JevSteer/issues/3)
+now has an opt-in native Playwright driver. Host milestones, verification modes,
+MCP tools, the durable action journal and host receipts remain the orchestrator's
+responsibility. The driver never runs a second autonomous agent.
 
-Playwright is better for isolated deterministic tests. Kapture is a better default for interactive work in the user's real browser.
+Install Chromium with `npm run browser:install`, then set
+`JEVSTEER_BROWSER_DRIVER=playwright`. The default mode launches a headed browser
+with a dedicated persistent test profile; use `JEVSTEER_BROWSER_PROFILE` for a
+short absolute profile path (for example `C:/jevsteer-profiles/demo` on Windows).
+Sign into the dedicated test profile once. Set `JEVSTEER_BROWSER_CHANNEL=chrome`
+to use installed Chrome, or `JEVSTEER_HEADLESS=1` for isolated CI fixtures.
+
+`JEVSTEER_INPUT_MODE=realistic` uses focus, select-all, Backspace and browser
+keyboard typing. `fast` (default) uses Playwright fill. Native selects use
+`selectOption`; custom ARIA pickers use pointer/keyboard actions. Action evidence
+records the input mode and dispatch state. Observation uses read-only DOM access;
+no injected DOM click, direct value assignment or application write API executes
+a target operation.
+
+Optional `JEVSTEER_CDP_ENDPOINT` attaches to an already debug-enabled Chromium
+with exactly one browser context. It never falls back to launching an unsigned-in
+browser. Multiple pages require an explicit `tab_id`, or a page already selected
+in this runtime. Ordinary Chrome without remote debugging is not attachable.
+
+`JEVSTEER_BROWSER_DRIVER=kapture` remains the compatibility default until real
+Jev/ccMonet comparison gates pass. Kapture continues to control the existing
+extension-connected Chrome session. Resolve old pending actions/reviews in that
+driver before migrating a workflow; journals are not silently re-keyed to guessed
+Playwright pages. See [driver ADR and acceptance gaps](docs/ADR-001-browser-driver.md).
+
+`npm run test:e2e` runs real Chromium conformance and MCP fixture tests with
+independent DOM/HTTP readback. Fixture decisions are deterministic test doubles;
+the separately named live Jev test is skipped without a provider key. This suite
+does not establish ccMonet C1–C3 success or a performance improvement. Run
+`npm run test:e2e -- --repeat-each=3` for repeatability, or set
+`JEVSTEER_E2E_HEADED=1` for visible browser coverage. Runner retries are disabled.
+
+Failure screenshots/traces, test profiles and journals remain local in ignored
+directories. Screenshots and traces may contain private data: inspect/redact
+before sharing, and remove obsolete local artifacts according to your retention
+policy. Network bodies are off by default in the Playwright driver.
 
 ## Safety and tradeoffs
 
@@ -132,7 +170,8 @@ Playwright is better for isolated deterministic tests. Kapture is a better defau
 
 ## Quick start
 
-Requirements: Node.js 20+, TypeSafe Jev API access, Chrome/Chromium and the Kapture extension.
+Requirements: Node.js 20+, TypeSafe Jev API access, and either Playwright's
+Chromium/installed Chrome or Chrome with the legacy Kapture extension.
 
 ```bash
 git clone https://github.com/tydong1231-ux/JevSteer.git

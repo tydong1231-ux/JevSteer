@@ -49,11 +49,11 @@ const scenarios = [
 
 try {
   await runtime.ensureReady();
-  if (!tabId) tabId = (await runtime.kapture.newTab()).tabId;
+  if (!tabId) tabId = (await runtime.driver.createPage()).tabId;
   console.log(`Test tab: ${tabId}; provider: OpenRouter Jev; fixture: ${fixture.base}`);
   for (const scenario of scenarios.filter((s) => !process.env.JEVSTEER_SCENARIO || process.env.JEVSTEER_SCENARIO.split(",").includes(s.id))) {
     console.log(`START ${scenario.id}`);
-    await runtime.kapture.navigate(tabId, fixture.base + scenario.path);
+    await runtime.driver.open(fixture.base + scenario.path, { pageRef: tabId });
     let result;
     let initial;
     try {
@@ -91,7 +91,7 @@ try {
 } finally {
   await runtime.close();
   // Keep the tab usable after this fixture server exits.
-  if (tabId) await runtime.kapture.navigate(tabId, "http://127.0.0.1:61823/").catch(() => {});
+  if (tabId) await runtime.driver.open("http://127.0.0.1:61823/", { pageRef: tabId }).catch(() => {});
   await fixture.close();
 }
 if (results.some((r) => !r.passed)) process.exitCode = 1;

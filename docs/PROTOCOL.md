@@ -5,7 +5,45 @@
 - **Host:** understand user intent/system logic, define milestones, review milestone evidence, patch guidance.
 - **Jev:** choose the next action inside one milestone.
 - **Runtime:** DOM observation, action execution, deterministic effect checks, drift/safety gates, network evidence.
-- **Kapture:** real Chrome control + DOM/network transport.
+- **BrowserDriver:** live Page/Frame ownership, observation, real browser inputs
+  and events. Playwright is opt-in during migration; Kapture remains available.
+
+## BrowserDriver boundary
+
+`src/browser/driver.mjs` defines the JavaScript contract. Runtime policy, leases,
+journals and verification do not depend on Kapture transport commands. Drivers
+provide page discovery/opening, observation, target validation, physical input,
+bounded read-only waits, screenshots and event cursors. Public `tab_id` remains
+compatible; Playwright exposes physical Chromium target IDs as `pw:<targetId>`
+plus a separate logical `session_id`. Two CDP connection aliases to the same
+physical Page therefore share the journal and lease key.
+
+Playwright observations include immutable snapshot IDs and per-target page,
+frame, document, form and record context. DOM positions only locate candidates.
+Before input, the driver requires unique semantic identity and the same document,
+then pins that node for a single dispatch. It checks the pinned node again after
+the durable journal hook. Detachment or recycled record identity fails closed;
+Playwright cannot retry that action against a different virtual row. Handles are
+disposed immediately after the action, never persisted as business identities.
+
+`ActionResult.state` distinguishes `predispatch_rejected`, `dispatched_ack` and
+`dispatched_unknown`. A known predispatch rejection may resolve its intent as
+`not_applied`; any exception after the first possible input is conservative
+`dispatched_unknown`. No browser ACK is promoted to business verification by the
+driver. Independent observation/verification/Host Review owns that transition.
+Input mode and dispatch state appear in action evidence.
+
+A profile/endpoint has a stable logical session namespace. An unresolved action
+on a closed/replaced Page blocks new input on other Pages in that session. The
+host can resolve the original `tab_id` and action ID after independent readback,
+even when the physical Page no longer exists. Changing profile/driver is not an
+automatic journal migration: finish/reconcile old workflows before switching.
+
+Browser dialogs are held for host intervention; the driver never accepts them.
+Visual-only controls still return to the host. Network events contain sanitized
+metadata; response body capture is disabled by default. Only test setup and
+independent read-only oracles may use fixture/application APIs; target operations
+remain browser inputs.
 
 ## Milestone contract
 

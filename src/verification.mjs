@@ -4,7 +4,7 @@ import { sensitiveField } from "./sensitive.mjs";
 export function matchingControls(page, assertion) {
   const fold = (v) => assertion.case_sensitive ? String(v || "") : String(v || "").toLowerCase();
   return page.elements.filter((e) => fold(e.label || e.placeholder || e.name || e.text) === fold(assertion.label)
-    && (!assertion.context || fold([e.context, e.scope].filter(Boolean).join(" ") || e.near).includes(fold(assertion.context))));
+    && (!assertion.context || fold([e.context, e.scope, e.form_key, e.record_key, e.frame_id].filter(Boolean).join(" ") || e.near).includes(fold(assertion.context))));
 }
 
 export function toVerificationPage(page, assertions = []) {
