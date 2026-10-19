@@ -183,6 +183,57 @@ test("Enter chosen for a typed box known only by its hint goes to that box", asy
   assert.equal(brief(action.el), 'textbox "Search contacts, vendor bills..."');
 });
 
+test("on a page too large for one decision, the groups Jev picks from show a typed box by its hint", async () => {
+  const box = { i: 0, selector: "#search", tag: "input", type: "text", role: "textbox", hint: "Search contacts, vendor bills...", value: "" };
+  const bills = Array.from({ length: 300 }, (_, n) => ({ i: n + 1, selector: `#bill-${n}`, tag: "a", role: "link", label: `Bill ${n}`, href: `https://erp.test/bills/${n}` }));
+  const before = { url: "https://erp.test/bills", title: "Bills", text: "Vendor Bills", metrics: {}, elements: [box, ...bills] };
+  const typed = [{ field: rememberField(box, before), url: before.url, value: "CP-MEIJI" }];
+  const typedBox = { ...box, value: "CP-MEIJI" };
+  delete typedBox.hint;
+  const page = { ...before, elements: [typedBox, ...bills] };
+  const calls = [];
+  const runtime = new JevSteerRuntime({ decider: async (_state, questions) => {
+    calls.push(questions);
+    const answers = questions.group
+      ? { tool: { choice: "press_enter", probabilities: { press_enter: 0.9 } }, group: { choice: "0", probabilities: { 0: 0.99 } } }
+      : { press_enter_target: choice(questions.press_enter_target.criteria, "0") };
+    return { answers, ms: 1, tokens: 1 };
+  } });
+  const values = { vendor: "CP-MEIJI" };
+  const answer = await runtime.decide(page, normalizeTaskContract({ goal: "Search for vendor CP-MEIJI" }), values, [], null, null, typed);
+  assert.equal(answer.stages, 2);
+  assert.match(calls[0].group.criteria["0"], /^\[0\] textbox "Search contacts, vendor bills\.\.\." \| \[1\] link "Bill 0" \| /);
+  const action = runtime.resolve(page, answer, values);
+  assert.deepEqual([action.tool, action.el?.selector], ["press_enter", "#search"]);
+});
+
+test("a combobox that shows an option counts as typed only when the option holds the typed text as whole words", async () => {
+  const country = { i: 0, selector: "#country", tag: "input", role: "combobox", label: "Country", value: "" };
+  const reference = { i: 1, selector: "#ref", tag: "input", type: "text", role: "textbox", label: "Reference", value: "" };
+  // What was typed, what the combobox shows once an option was picked, and
+  // whether it is offered for TYPE again.
+  for (const [typedText, shows, typable] of [
+    ["US", "Australia", true],
+    ["1", "10", true],
+    ["Acme", "Acme Ltd", false],
+    ["US", "United States (US)", false],
+    ["Acme, Inc.", "Acme, Inc.", false],
+    ["Beta", "Alpha, Beta", false],
+    ["北京", "北京市", false],
+  ]) {
+    const before = { url: "https://erp.test/customer", title: "New customer", text: "New customer", metrics: {}, elements: [{ ...country, value: typedText }, reference] };
+    const typed = [{ field: rememberField(before.elements[0], before), url: before.url, value: typedText }];
+    const page = { ...before, elements: [{ ...country, display: shows }, reference] };
+    let offered;
+    const runtime = new JevSteerRuntime({ decider: async (_state, questions) => {
+      offered = questions;
+      return { answers: { tool: { choice: "none", probabilities: { none: 1 } } }, ms: 1, tokens: 1 };
+    } });
+    await runtime.decide(page, normalizeTaskContract({ goal: "Fill in the new customer" }), {}, [], null, null, typed);
+    assert.equal(Object.keys(offered.type_target.criteria).includes("0"), typable, `typed ${typedText}, shows ${shows}`);
+  }
+});
+
 test("DONE is judged by the success criteria when the host gives them", async () => {
   const asked = [];
   const runtime = new JevSteerRuntime({ decider: async (state, questions) => {

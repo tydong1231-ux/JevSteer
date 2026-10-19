@@ -195,6 +195,31 @@ for (const [variant, html] of [['', drawerSelect], [' (no listbox link)', unlink
   });
 }
 
+// A country select that searches inside names, as many do: "US" lists only
+// Australia, which holds it inside a word. Once Australia is picked, the
+// field stays open to typing, so the right country can be searched for.
+const countrySelect = drawerSelect.replaceAll('Acme Ltd', 'Australia').replaceAll('Beta LLC', 'United States')
+  .replace('<div>Customer</div>', '<div>Country</div>').replace('Select a customer', 'Select a country');
+
+test('an option that holds the typed text only inside a word leaves the field open to typing', async ({ page }, testInfo) => {
+  await page.setContent(countrySelect);
+  const seen = {};
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'type', target: pick((e) => e.label === 'Country')(state) }),
+    (state) => decision({ tool: 'click', target: pick((e) => e.role === 'option' && e.label === 'Australia')(state) }),
+    (state, questions) => {
+      seen.picked = { country: state.page.elements.find((e) => e.label === 'Country'), typable: Object.values(questions.type_target?.criteria || {}).map((c) => c.control) };
+      return decision({ tool: 'none', done: 0.99 });
+    },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Set the invoice country to US', values: { country: 'US' }, verification_mode: 'host', max_actions: 4, evidence_level: 'none' });
+    expect(result.actions.map((a) => [a.action, a.element, a.effect?.status])).toEqual([['type', 'combobox "Country"', 'confirmed'], ['click', 'option "Australia"', 'changed']]);
+    expect(seen.picked.country).toMatchObject({ value: '', display: 'Australia' });
+    expect(seen.picked.typable).toEqual(['[0] combobox "Country"', '[1] textbox "Reference"']);
+  } finally { await mcp.close(); }
+});
+
 // A multi-select, as antd draws one: a click on an option toggles it, so a
 // click on one already chosen takes it out again. Tags is open and Labels is
 // closed; each lists the same options.

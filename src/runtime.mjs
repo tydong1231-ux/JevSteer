@@ -112,11 +112,32 @@ function emptiedAfterTyping({ typed, current }) {
 }
 
 // A select-like combobox clears its search text once an option is picked,
-// and shows that option instead. Typing there again would start over.
+// and shows that option instead. Typing there again would start over. The
+// option counts only when it holds what was typed as whole words ("Acme" in
+// "Acme Ltd"). An option that holds it only as part of a word ("US" in
+// "Australia", "1" in "10") is another option: the field can be typed in
+// again to find the right one.
 function showsTyped({ typed, current }) {
   const value = squash(typed.value).toLowerCase();
   return !!value && current.value === "" && !!current.display && !sensitiveField(current)
-    && current.display.split(", ").some((item) => squash(item).toLowerCase().includes(value));
+    && wholeWordsIn(squash(current.display).toLowerCase(), value);
+}
+
+// Letters, digits and marks run together into a word, except in scripts
+// written without spaces between words (Chinese, Japanese, Thai and the
+// like): there no boundary can be read, so each character stands alone.
+const WORD_CHAR = /[\p{L}\p{N}\p{M}]/u;
+const UNSPACED = /[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}\p{scx=Thai}\p{scx=Laoo}\p{scx=Khmr}\p{scx=Mymr}]/u;
+const joined = (a, b) => !!a && !!b && WORD_CHAR.test(a) && WORD_CHAR.test(b) && !UNSPACED.test(a) && !UNSPACED.test(b);
+
+// Whether `words` is in `text` with no word running on past either end of it.
+function wholeWordsIn(text, words) {
+  const t = [...String(text ?? "")], w = [...String(words ?? "")];
+  if (!w.length) return false;
+  for (let at = 0; at + w.length <= t.length; at++) {
+    if (w.every((c, k) => t[at + k] === c) && !joined(t[at - 1], w[0]) && !joined(w.at(-1), t[at + w.length])) return true;
+  }
+  return false;
 }
 
 // What the decision saw of its target, for the check before input: what
@@ -785,9 +806,11 @@ export class JevSteerRuntime {
 
     // Large pages: select a semantic group first, then ask only for the
     // selected tool's compatible targets (not the entire unfiltered DOM).
+    // The groups show the targets as Jev is offered them: a typed field by
+    // the hint it showed then.
     const groups = [];
-    for (let start = 0; start < page.elements.length; start += config.elementGroupSize) {
-      const els = page.elements.slice(start, start + config.elementGroupSize);
+    for (let start = 0; start < targetElements.length; start += config.elementGroupSize) {
+      const els = targetElements.slice(start, start + config.elementGroupSize);
       groups.push({
         g: groups.length,
         summary: els.map(e => `[${e.i}] ${brief(e)}`).join(" | ").slice(0, 850),

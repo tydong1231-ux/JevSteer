@@ -114,6 +114,44 @@ test('Enter that Jev chose for the box it typed in goes to that box, though its 
   } finally { await mcp.close(); }
 });
 
+// The same page with 300 more bills: more controls than Jev decides on at
+// once. Jev first picks a group of controls from a summary of each, then a
+// target in that group.
+const manyBills = bills.replace('</tbody>', `${Array.from({ length: 300 }, (_, n) => `<tr><td><a href="#bill-${n}">Bill ${n}</a></td><td>฿ ${n}.00</td></tr>`).join('')}</tbody>`);
+
+test('on a page too large for one decision, the group summary shows the box Jev typed in by its hint, and Enter goes to it', async ({ page }, testInfo) => {
+  await page.setContent(manyBills);
+  await page.evaluate(() => document.querySelector('.group input').addEventListener('keydown', (e) => { if (e.key === 'Enter') window.entered = e.target.value; }));
+  const seen = {};
+  const groupWith = (questions, words) => Object.entries(questions.group.criteria).find(([, summary]) => summary.includes(words))?.[0];
+  const inGroup = (tool, g) => ({ ...decision({ tool, target: null }), group: { choice: g, probabilities: { [g]: 0.99 } } });
+  const head = (key, i) => ({ [key]: { choice: String(i), probabilities: { [String(i)]: 0.99 } } });
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state, questions) => inGroup('type', groupWith(questions, 'Search contacts')),
+    (state) => head('type_target', state.page.elements.find((e) => e.hint?.startsWith('Search contacts')).i),
+    (state, questions) => {
+      seen.group = groupWith(questions, 'Search contacts');
+      return inGroup('press_enter', seen.group ?? '0');
+    },
+    (state, questions) => {
+      const box = state.page.elements.find((e) => e.value === 'CP-MEIJI');
+      seen.offered = questions.press_enter_target?.criteria?.[String(box.i)]?.control;
+      return head('press_enter_target', box.i);
+    },
+    () => decision({ tool: 'none', done: 0.99 }),
+  ]));
+  try {
+    const result = await mcp.call('browser_run', {
+      tab_id: mcp.id, goal: 'Search for vendor CP-MEIJI with the global search', success_criteria: ['Search results list CP-MEIJI CO.,LTD.'],
+      values: { vendor: 'CP-MEIJI' }, verification_mode: 'host', max_actions: 4, evidence_level: 'none',
+    });
+    expect(seen.group).toBe('0');
+    expect(seen.offered).toBe('[1] textbox "Search contacts, vendor bills, sales invoices, payrolls..."');
+    expect(await page.evaluate(() => window.entered)).toBe('CP-MEIJI');
+    expect(result.status).toBe('host_review_required');
+  } finally { await mcp.close(); }
+});
+
 // A password box whose strength popup echoes what was typed, after more page
 // text than Jev reads.
 const secretEcho = `<p>${'Terms of service. '.repeat(560)}</p>

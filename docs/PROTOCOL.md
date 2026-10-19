@@ -154,8 +154,12 @@ but it is never the field's name, because it goes away once the field holds a
 value. A field in a table cell also reports its column header as `column`; such
 a field belongs to its row's item, such as an invoice line, and the value
 chooser is told so. A select-like combobox whose input holds only search text
-(antd, react-select) reports the value it shows as `display`, and a field this
-run typed that now shows the typed value there is not offered for TYPE again.
+(antd, react-select) reports the value it shows as `display`. A field this run
+typed that now shows an option holding the typed text as whole words ("Acme" in
+"Acme Ltd") is not offered for TYPE again. An option that holds it only inside
+a word ("US" in "Australia", "1" in "10") is another option, so the field can
+be typed in again. In scripts written without spaces between words (Chinese,
+Japanese, Thai) each character stands alone.
 
 antd draws a select's options in a portal at the end of `<body>`, as divs with
 `aria-selected` and no role, and keeps `role=option` copies in a 0×0 listbox
@@ -206,8 +210,9 @@ decision on a large page. A secret field's popup is left out, because it can
 echo what was typed there. The floating parts of the next line item (an antd
 select's search box, a remove button at the row's end), a fixed bar above the
 field and a footer far below it are not popups. A field this run typed keeps
-the `hint` it showed then, so the search box still reads as "Search contacts,
-..." after its hint layer goes, and an Enter Jev chooses for it goes to it.
+the `hint` it showed then, also in the group summaries of a two-stage decision,
+so the search box still reads as "Search contacts, ..." after its hint layer
+goes, and an Enter Jev chooses for it goes to it.
 When the contract has success criteria, Jev's
 done question tells it to check each of them against the page as it is now,
 `page.popup` included.
