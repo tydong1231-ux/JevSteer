@@ -76,8 +76,9 @@ disposable profile. CDP attachment/disconnection and storage reuse passed.
 
 P0 still needs the same-account live benchmark freeze. P1 has no live SDK-A vs B
 comparison. P2/P3 include the native foundation, not all virtual-list, cross-origin
-Frame, Canvas or custom-widget cases. P4 batch Jev field binding and call-count
-reduction are separate work. P5 still needs explicit cross-driver migration,
+Frame, Canvas or custom-widget cases. P4's restricted batch field strategy is
+implemented separately; [its controlled fixture comparison](BATCH-FORM.md)
+does not establish general or ccMonet savings. P5 still needs explicit cross-driver migration,
 cross-process browser crash/cancellation matrices and retention tests. P6 has
 the real-browser MCP harness but ccMonet C1–C3 must run with an authorized DEMO
 profile and independent business oracles. C4 mutations remain isolated fixtures.

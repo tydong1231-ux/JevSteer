@@ -160,6 +160,14 @@ directories. Screenshots and traces may contain private data: inspect/redact
 before sharing, and remove obsolete local artifacts according to your retention
 policy. Network bodies are off by default in the Playwright driver.
 
+For an independent unsaved form, set `execution_mode=form` and
+`verification_mode=host`. Jev binds up to twelve supplied current-stage values
+in one request; the existing guarded loop fills controls sequentially, reads
+them back, and stops on collisions, changed ownership or field dependencies.
+The form path never saves/submits. Use a separate `explore` stage for commit.
+The [six-field live comparison](docs/BATCH-FORM.md) records scope, measurements
+and limits; it is not a ccMonet or Kapture-to-Playwright performance claim.
+
 ## Safety and tradeoffs
 
 - DOM-first execution cannot fully understand canvas/image-only interfaces; those are returned to host vision.
