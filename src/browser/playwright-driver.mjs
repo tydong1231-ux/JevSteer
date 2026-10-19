@@ -146,6 +146,7 @@ export class PlaywrightDriver {
     if (!pick) throw new Error(`STALE_TARGET: ambiguous: ${matches.length} identical controls`);
     if (pick.disabled || action.tool === 'type' && pick.readonly) throw new Error('STALE_TARGET: disabled or read-only');
     if (['type', 'select'].includes(action.tool) && String(original.value ?? '') !== String(pick.value ?? '')) throw new Error('STALE_TARGET: live field value changed');
+    if (action.chosen_as === 'select') assertStillListed(action, pick, fresh);
     action.el = pick;
   }
 
@@ -174,6 +175,7 @@ export class PlaywrightDriver {
         const doc = `${this.frameInfo(entry.frame).id}:${this.frameInfo(entry.frame).revision}:${state.documentKey}`;
         if (!current || doc !== target.document_id || !sameIdentity(target, current, state.url) || current.disabled) throw new Error('STALE_TARGET: live target identity changed');
         if (['type', 'select'].includes(action.tool) && !sensitiveFieldValueEqual(target, current)) throw new Error('STALE_TARGET: live field value changed');
+        if (action.chosen_as === 'select' && current.selected === true) throw new Error(OPTION_CHOSEN);
         if (action.tool === 'type' && (!FIELDISH(current) || action.value == null)) throw new Error('INVALID_INPUT: value required and field must be editable');
         if (action.tool === 'select' && !SELECTISH(current)) throw new Error('INVALID_INPUT: select requires a combobox');
         if (action.tool === 'select' && current.tag === 'select') {
@@ -200,6 +202,7 @@ export class PlaywrightDriver {
         if (!current || !sameIdentity(action.el, current, state.url) || current.disabled
             || doc !== action.el.document_id
             || ['type', 'select'].includes(action.tool) && !sensitiveFieldValueEqual(action.el, current)) throw new Error('STALE_TARGET: target changed while persisting intent');
+        if (action.chosen_as === 'select' && current.selected === true) throw new Error(OPTION_CHOSEN);
         force = forced(action, current);
         if (force) await handle.hover({ trial: true, timeout });
       }
@@ -299,6 +302,19 @@ export class PlaywrightDriver {
 // stable and not covered.
 function forced(action, current) {
   return current.drag_disabled === true && ['click', 'type', 'select'].includes(action.tool);
+}
+
+// An option chosen from an open combobox's list is clicked (see
+// listedOptions). Before input it must still be listed under that combobox,
+// which is still open, and must not be chosen already: on a multi-select a
+// click on a chosen option takes it out again.
+const OPTION_CHOSEN = 'STALE_TARGET: the option is already chosen';
+function assertStillListed(action, option, page) {
+  if (option.selected === true) throw new Error(OPTION_CHOSEN);
+  const box = option.popup_of != null ? page.elements.find((e) => e.i === option.popup_of) : undefined;
+  if (!box || box.expanded !== true || action.listed_in && !sameIdentity(action.listed_in, box, page.url)) {
+    throw new Error('STALE_TARGET: the option is no longer listed under the combobox it was chosen from');
+  }
 }
 
 // Resolves after the page has drawn two more frames. A hidden tab draws none,

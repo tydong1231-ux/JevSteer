@@ -843,11 +843,12 @@ export class JevSteerRuntime {
       ? Object.entries(targetAnswer.probabilities).sort((a, b) => b[1] - a[1])
       : [];
     const onlyValueKey = tool === "type" && Object.keys(values).length === 1 ? Object.keys(values)[0] : undefined;
-    // An option an open combobox lists is chosen by clicking it.
+    // An option an open combobox lists is chosen by clicking it. Before the
+    // click, the driver checks that this combobox still lists it, unchosen.
     const listed = picked?.listed;
     return {
       tool: listed ? "click" : tool,
-      ...(listed ? { chosen_as: "select" } : {}),
+      ...(listed ? { chosen_as: "select", listed_in: picked.element } : {}),
       ...(TARGETED.has(tool) && targetAnswer?.choice === NO_TARGET ? { declined: true } : {}),
       p_tool: answer.tool.probabilities?.[answer.tool.choice] ?? 0,
       target: (listed || picked?.element)?.i ?? null,

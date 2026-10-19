@@ -2,7 +2,7 @@
 // below follows bootstrap-datepicker 1.9 (Selenium's web form): it parses the
 // field on keyup and, on blur, writes its own parsed value back.
 import { test, expect } from '@playwright/test';
-import { mcpFixture } from './helpers.mjs';
+import { driverFor, mcpFixture } from './helpers.mjs';
 import { scriptedDecider, decision } from '../test/helpers/runtime.mjs';
 
 const pick = (match) => (state) => state.page.elements.find(match)?.i;
@@ -194,6 +194,107 @@ for (const [variant, html] of [['', drawerSelect], [' (no listbox link)', unlink
     } finally { await mcp.close(); }
   });
 }
+
+// A multi-select, as antd draws one: a click on an option toggles it, so a
+// click on one already chosen takes it out again. Tags is open and Labels is
+// closed; each lists the same options.
+const multiSelect = `<style>
+    .ant-select { position: relative; width: 240px; height: 28px; border: 1px solid #ccc; margin-bottom: 12px; }
+    .ant-select input { width: 100%; height: 26px; border: 0; }
+    .ant-select-dropdown { position: absolute; top: 120px; left: 300px; width: 200px; background: #fff; border: 1px solid #ccc; z-index: 1050; }
+    .ant-select-dropdown-hidden { display: none; }
+    .ant-select-item-option { padding: 5px 12px; cursor: pointer; }
+  </style>
+  <h1>Edit contact</h1>
+  <div class="ant-col"><div>Tags</div><div class="ant-select ant-select-multiple"><input id="tags" role="combobox" type="search" aria-expanded="true" aria-controls="tags_list" value=""></div></div>
+  <div class="ant-col"><div>Labels</div><div class="ant-select ant-select-multiple"><input id="labels" role="combobox" type="search" aria-expanded="false" aria-controls="labels_list" value=""></div></div>
+  ${['tags', 'labels'].map((id) => `<div class="ant-select-dropdown${id === 'labels' ? ' ant-select-dropdown-hidden' : ''}" id="${id}_dropdown"><div role="listbox" id="${id}_list" style="height:0;width:0;overflow:hidden"></div>
+    ${['Acme', 'Beta', 'Gamma'].map((name) => `<div aria-selected="${id === 'tags' && name === 'Acme'}" class="ant-select-item ant-select-item-option" title="${name}">${name}</div>`).join('')}</div>`).join('')}
+  <script>
+    window.clicks = [];
+    for (const o of document.querySelectorAll('.ant-select-item-option')) o.addEventListener('click', () => {
+      window.clicks.push(o.parentElement.id + ':' + o.title);
+      o.setAttribute('aria-selected', String(o.getAttribute('aria-selected') !== 'true'));
+    });
+  </script>`;
+const markChosen = (page, name, chosen) => page.evaluate(([n, c]) => document.querySelector(`#tags_dropdown [title="${n}"]`).setAttribute('aria-selected', String(c)), [name, chosen]);
+
+test('an option the page chooses on its own after Jev looked is not clicked, so the multi-select keeps it', async ({ page }, testInfo) => {
+  await page.setContent(multiSelect);
+  const seen = {};
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    async (state, questions) => {
+      seen.offered = Object.values(questions.select_target?.criteria || {}).map((c) => c.choose_option).filter(Boolean);
+      const answer = decision({ tool: 'select', target: `${pick((e) => e.label === 'Tags')(state)}>${pick((e) => e.role === 'option' && e.label === 'Beta')(state)}` });
+      // A late update chooses Beta after Jev looked, before the click.
+      await markChosen(page, 'Beta', true);
+      return answer;
+    },
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    // Acme is chosen already, so the open list offers Beta and Gamma.
+    expect(seen.offered).toEqual(['Beta', 'Gamma']);
+    expect(result.actions[0]).toEqual({ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: the option is already chosen' });
+    expect(result.pending_actions).toBeUndefined();
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+    await expect(page.locator('#tags_dropdown [title="Beta"]')).toHaveAttribute('aria-selected', 'true');
+  } finally { await mcp.close(); }
+});
+
+test('before input, an option from an open list must still be unchosen and listed under the same open combobox', async ({ page }) => {
+  await page.setContent(multiSelect);
+  const { driver, id } = await driverFor(page);
+  // The click Jev's SELECT on Tags' list becomes (see the runtime).
+  const listed = async (name) => {
+    const seen = await driver.observe(id);
+    const box = seen.elements.find((e) => e.label === 'Tags');
+    const option = seen.elements.find((e) => e.role === 'option' && e.label === name);
+    expect(option.popup_of).toBe(box.i);
+    return { tool: 'click', chosen_as: 'select', listed_in: box, target: option.i, el: option, observedUrl: seen.url };
+  };
+  const notListed = 'STALE_TARGET: the option is no longer listed under the combobox it was chosen from';
+  try {
+    // Chosen after the check, before the journal: refused, nothing journaled.
+    let action = await listed('Beta');
+    await driver.assertTargetFresh(id, action);
+    await markChosen(page, 'Beta', true);
+    let journaled = 0;
+    let result = await driver.perform(id, action, action.el, { beforeDispatch: async () => { journaled++; } });
+    expect([result.state, result.error, journaled]).toEqual(['predispatch_rejected', 'STALE_TARGET: the option is already chosen', 0]);
+    // Chosen while the journal is written: still refused before input.
+    await markChosen(page, 'Beta', false);
+    action = await listed('Beta');
+    await driver.assertTargetFresh(id, action);
+    result = await driver.perform(id, action, action.el, { beforeDispatch: () => markChosen(page, 'Beta', true) });
+    expect([result.state, result.error]).toEqual(['predispatch_rejected', 'STALE_TARGET: the option is already chosen']);
+    // Its combobox closed, its list still drawn.
+    await markChosen(page, 'Beta', false);
+    action = await listed('Beta');
+    await page.evaluate(() => document.querySelector('#tags').setAttribute('aria-expanded', 'false'));
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow(notListed);
+    // The same options now show under Labels.
+    await page.evaluate(() => {
+      document.querySelector('#tags_dropdown').classList.add('ant-select-dropdown-hidden');
+      document.querySelector('#labels_dropdown').classList.remove('ant-select-dropdown-hidden');
+      document.querySelector('#labels').setAttribute('aria-expanded', 'true');
+    });
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow(notListed);
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+    // Tags open again: an option it lists unchosen is clicked.
+    await page.evaluate(() => {
+      document.querySelector('#labels_dropdown').classList.add('ant-select-dropdown-hidden');
+      document.querySelector('#labels').setAttribute('aria-expanded', 'false');
+      document.querySelector('#tags_dropdown').classList.remove('ant-select-dropdown-hidden');
+      document.querySelector('#tags').setAttribute('aria-expanded', 'true');
+    });
+    action = await listed('Gamma');
+    await driver.assertTargetFresh(id, action);
+    expect((await driver.perform(id, action, action.el)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => window.clicks)).toEqual(['tags_dropdown:Gamma']);
+  } finally { await driver.close(); }
+});
 
 // ccMonet's invoice form (Mac rerun, 2026-10-19): with the Customer list open,
 // Jev chose SELECT on "Currency :", which that list covers. The click that

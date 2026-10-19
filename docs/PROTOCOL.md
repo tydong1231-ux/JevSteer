@@ -164,6 +164,13 @@ floating box that holds that list (antd's visible copy), or, with no such link,
 options floating on their own while it is the one open combobox. Each such
 option carries `popup_of`, the `[i]` of its combobox, and choosing one is a
 click on that option (the run log shows `tool: "click"`, `chosen_as: "select"`).
+An option already chosen is not offered, because a click on a chosen option of
+a multi-select takes it out again. Before the journal write, the option must
+still be unchosen and still listed under the same combobox, which is still
+open; after the write, just before the click, it must still be unchosen.
+Otherwise the click is refused before any input as a stale target
+(`STALE_TARGET: the option is already chosen`, or `... no longer listed under
+the combobox it was chosen from`), and Jev looks again.
 SELECT on a closed custom combobox opens it with a click. When another
 combobox's open list covers it, that click is refused before the journal
 (`predispatch_rejected`, nothing pending), and the error names the cover:
