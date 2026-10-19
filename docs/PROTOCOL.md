@@ -268,7 +268,9 @@ MCP restarts. Acceptance requires the same observed page state and a non-busy pa
 That state includes what a focused field's popup says (search results under a
 search box, see above), which is read apart from the page text and also past
 its cutoff, so results that change before acceptance make the ticket stale. A
-secret field's popup is left out.
+secret field's popup is left out. It also includes each field's `hint` and
+`column`, which tell the host which field an unnamed one is, also where the
+text that shows them is past the page text's cutoff.
 A toast, such as antd's "Update successfully" message (under any class prefix),
 a toast or snackbar, or another fixed-position alert or status region, goes away
 on its own, so the state a ticket binds leaves its text out; the host still sees
@@ -280,7 +282,11 @@ class hook (badge, unread, antd's scroll-number) or is a small filled pill.
 When the milestone's contract speaks of a badge (it names the badge, such as
 "Cart" or "Todo", states its number, or asks about counts, unread items or
 notifications), its counts stay in the bound state, so "Cart 2" turning into
-"Cart 3" makes the ticket stale. A toast over an open drawer or modal is part of
+"Cart 3" makes the ticket stale. So do they when a text assertion rests on a
+count in the page text: a `text_contains` the page meets only inside a count
+("2" in "Todo 12"), or a `text_not_contains` a count could turn into, one with
+a word a count could be ("3", "3 items" or "99+" while "Cart 2" shows; a
+count is a word of its own, so never "INV-0003"). A toast over an open drawer or modal is part of
 the page text too. A new ticket waits while a toast shows, up to
 `JEVSTEER_REVIEW_TOAST_WAIT_MS` (default 4000), because the app may still be
 closing a drawer and reloading its list behind it. Acceptance does not wait: a

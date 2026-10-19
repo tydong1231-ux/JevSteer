@@ -85,3 +85,48 @@ test("a ticket binds what a focused field's popup says, unless the field is secr
   const pin = { ...search, label: "Card PIN", hint: undefined };
   assert.equal(reviewedState(bills("4321 is too short", pin)).digest, reviewedState(bills("4321 is fine", pin)).digest);
 });
+
+test("a text assertion that rests on a badge count binds the counts", () => {
+  const page = (text, review_text) => ({ url: "https://shop.test/cart", title: "Cart", text, review_text, elements: [] });
+  const cart = page("REF-42 Cart 2", "REF-42 Cart #");
+  const binds = (assertion, on = cart) => countsReferenced(on, { goal: "Remove an item", success_criteria: [], constraints: [], assertions: [assertion] });
+  // Text the page must not show: a count can turn into a word of it.
+  assert.equal(binds({ type: "text_not_contains", value: "3" }), true);
+  assert.equal(binds({ type: "text_not_contains", value: "3 items" }), true);
+  assert.equal(binds({ type: "text_not_contains", value: "99+" }), true);
+  // A count is a word of its own: it never turns into one with letters in it.
+  assert.equal(binds({ type: "text_not_contains", value: "INV-0003" }), false);
+  assert.equal(binds({ type: "text_not_contains", value: "Error" }), false);
+  // Text the page must show binds them only when the page shows it in a count alone.
+  const todo = page("Order Todo 12", "Order Todo #");
+  assert.equal(binds({ type: "text_contains", value: "2" }, todo), true);
+  assert.equal(binds({ type: "text_contains", value: "Order" }, todo), false);
+  assert.equal(binds({ type: "text_contains", value: "REF-42" }), false);
+  // With no count in the page text, no text assertion rests on one.
+  assert.equal(binds({ type: "text_not_contains", value: "3" }, page("REF-42 Cart", undefined)), false);
+});
+
+test("a ticket goes stale when a badge count turns into what an assertion forbids", async () => {
+  const k = new MemoryKapture({ text: "REF-42 Cart 2", review_text: "REF-42 Cart #", elements: [] });
+  const runtime = memoryRuntime(k, scriptedDecider([{ tool: "none", done: 0.99 }]));
+  const result = await runtime.run("Remove an item", { verificationMode: "host", evidenceLevel: "none", assertions: [{ type: "text_not_contains", value: "3" }] });
+  assert.equal(result.status, "host_review_required");
+  k.page.text = "REF-42 Cart 3";
+  const receipt = await runtime.reviewResult({ tabId: "test", reviewId: result.host_review.review_id, decision: "accept", goalEvidence: "Observed the cart" });
+  assert.equal(receipt.status, "host_review_stale");
+});
+
+// A field with no name of its own is known by the hint drawn over it or its
+// table column (see the snapshot); the host reads which field it is from them.
+test("a ticket goes stale when the hint or column that tells which field it is changes", async () => {
+  for (const key of ["hint", "column"]) {
+    const field = { i: 0, tag: "input", role: "textbox", label: "", value: "5", context: "", [key]: "Quantity" };
+    const k = new MemoryKapture({ text: "Invoice", elements: [field] });
+    const runtime = memoryRuntime(k, scriptedDecider([{ tool: "none", done: 0.99 }]));
+    const result = await runtime.run("Set the quantity to 5", { verificationMode: "host", evidenceLevel: "none" });
+    assert.equal(result.status, "host_review_required", key);
+    k.page.elements = [{ ...field, [key]: "Discount %" }];
+    const receipt = await runtime.reviewResult({ tabId: "test", reviewId: result.host_review.review_id, decision: "accept", goalEvidence: "Quantity shows 5" });
+    assert.equal(receipt.status, "host_review_stale", key);
+  }
+});

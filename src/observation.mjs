@@ -26,9 +26,11 @@ function expectsNavigation(before, action) {
 
 export function observationSignature(page) {
   // Generated selectors, timestamps and geometry do not define progress.
-  // `display` is what a select-like combobox shows as its value.
+  // `display` is what a select-like combobox shows as its value. `hint` and
+  // `column` say which field it is when it has no name of its own; the host
+  // reads them, also where the page text that shows them is past its cutoff.
   const state = [page.url, page.title, page.text, page.loading, page.elements.map((e) =>
-    [e.tag, e.role, e.label, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.options?.filter((o) => o.selected).map((o) => o.value)])];
+    [e.tag, e.role, e.label, e.hint, e.column, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.options?.filter((o) => o.selected).map((o) => o.value)])];
   if (page.page_id) state.push(page.page_id, page.frames, page.elements.map((e) => [e.form_key, e.record_key]));
   // What a focused field's popup says (search results) is read apart from
   // the page text, also past that text's cutoff, and a review can rest on it.
@@ -107,10 +109,41 @@ const said = (text, token) => {
   return new RegExp(`(^|[^\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}\\p{N}])`, "u").test(text);
 };
 
+// The page text with each badge count its review copy shows as "#" taken
+// out (as "\0", which no assertion holds), and whether it had one.
+function textWithoutCounts(page) {
+  const raw = String(page.text ?? "").split(/(\s+)/), marked = String(page.review_text ?? page.text ?? "").split(/(\s+)/);
+  let counts = false;
+  for (let i = 0; i < raw.length && i < marked.length; i += 2) {
+    if (marked[i] === "#" && /^\d{1,6}\+?$/.test(raw[i])) { raw[i] = "\0"; counts = true; }
+    else if (raw[i] !== marked[i]) break;
+  }
+  return { text: raw.join(""), counts };
+}
+
+// Whether a text assertion rests on a badge count in the page text. One that
+// must hold does when the page holds its text only in a count ("2" in
+// "Todo 12"). One whose text the page must not show does when a count could
+// turn into it, which takes a word of it that a count could be ("3" while
+// "Cart 2" shows): a count is a word of its own.
+function assertionsRestOnCounts(page, assertions) {
+  const { text, counts } = textWithoutCounts(page);
+  if (!counts) return false;
+  const kept = toastText(page).without(text);
+  return (assertions || []).some((a) => {
+    if (typeof a?.value !== "string" || !a.value.trim()) return false;
+    const fold = (v) => (a.case_sensitive ? v : v.toLowerCase());
+    if (a.type === "text_contains") return !fold(kept).includes(fold(a.value));
+    if (a.type === "text_not_contains") return a.value.trim().split(/\s+/).some((word) => /^\d*\+?$/.test(word));
+    return false;
+  });
+}
+
 // Whether a milestone's contract speaks of a count that a badge on the page
 // shows: it names the badge ("Cart", "Todo"), states its number, or asks
-// about counts at all. A ticket for such a contract binds the counts too, so
-// "Cart 2" turning into "Cart 3" makes it stale.
+// about counts at all, or a text assertion rests on one (see
+// assertionsRestOnCounts). A ticket for such a contract binds the counts too,
+// so "Cart 2" turning into "Cart 3" makes it stale.
 export function countsReferenced(page, contract = {}) {
   const text = [contract.goal, ...(contract.success_criteria || []), ...(contract.constraints || []),
     ...(contract.assertions || []).flatMap((a) => [a.value, a.label, a.context])].filter((v) => typeof v === "string" && v).join("\n").toLowerCase();
@@ -118,6 +151,7 @@ export function countsReferenced(page, contract = {}) {
   const pairs = [[page.text, page.review_text], ...page.elements.flatMap((e) => [[e.label, e.review_label, true], [e.context, e.review_context]])];
   const badges = pairs.filter(([value, copy]) => copy != null && copy !== value).flatMap(([value, copy, after]) => badgeCounts(value, copy, { after }));
   if (!badges.length) return false;
+  if (assertionsRestOnCounts(page, contract.assertions)) return true;
   if (/(^|[^a-z])(badges?|counters?|counts?|unread|notifications?)($|[^a-z])|角标|未读|计数/.test(text)) return true;
   return badges.some(({ count, words }) => said(text, count) || words.some((w) => said(text, w)));
 }
