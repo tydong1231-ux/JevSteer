@@ -184,6 +184,9 @@ export class PlaywrightDriver {
         }
         if (forced(action, current)) await handle.hover({ trial: true, timeout });
         else if (['click', 'hover'].includes(action.tool)) await handle[action.tool]({ trial: true, timeout });
+        // A custom combobox opens on a click. One that another combobox's
+        // open list covers fails here, before the journal, not after.
+        else if (action.tool === 'select' && current.tag !== 'select') await handle.click({ trial: true, timeout });
         return handle;
       } catch (error) { await handle.dispose(); throw error; }
     }, beforeDispatch, async (handle, mark) => {

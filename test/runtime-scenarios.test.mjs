@@ -261,6 +261,34 @@ test("large pages keep original target indices across the two-stage decision", a
   assert.equal(runtime.resolve(k.page, answer, {}).el.selector, "#item-300");
 });
 
+test("on a large page the first stage sees the focused field's popup, and SELECT still finds an open combobox's far options", async () => {
+  const customer = { i: 0, selector: "#customer", tag: "input", role: "combobox", label: "Customer", value: "Acme", expanded: true };
+  const rows = Array.from({ length: 299 }, (_, n) => ({ ...button, i: n + 1, selector: `#row-${n}`, label: `Record ${n}` }));
+  const option = { i: 300, selector: "#acme", tag: "div", role: "option", label: "Acme Ltd", popup_of: 0 };
+  const k = new MemoryKapture({ elements: [customer, ...rows, option], popup: { field: 0, text: "Acme Ltd" } });
+  const calls = [];
+  const runtime = memoryRuntime(k, async (state, questions) => {
+    calls.push({ state, questions });
+    const answers = questions.group ? { ...decision({ tool: "select", target: null }), group: { choice: "0", probabilities: { "0": 0.99 } } } : { select_target: { choice: "0>300", probabilities: { "0>300": 0.99, __none__: 0.01 } } };
+    return { answers, ms: 1, tokens: 1 };
+  });
+  const answer = await runtime.decide(k.page, { goal: "Choose customer Acme Ltd", success_criteria: [], constraints: [], guidance: [] }, {}, [], null, null);
+  assert.equal(answer.stages, 2);
+  assert.deepEqual(calls[0].state.page.popup, { field: '[0] combobox "Customer"', field_value: "Acme", shows: "Acme Ltd" });
+  assert.deepEqual(Object.keys(calls[1].questions.select_target.criteria), ["0>300", "__none__"]);
+  const action = runtime.resolve(k.page, answer, {});
+  assert.deepEqual([action.tool, action.el.selector], ["click", "#acme"]);
+});
+
+test("a head that turns down its only target stops for guidance, and nothing is typed", async () => {
+  const k = new MemoryKapture({ text: "Vendor 1 CP-MEIJI CO.,LTD.", elements: [{ i: 0, selector: "#size", tag: "input", role: "combobox", label: "Page Size", value: "20" }] });
+  const runtime = memoryRuntime(k, scriptedDecider([() => ({ ...decision({ tool: "type", target: null }), type_target: { choice: "__none__", probabilities: { "0": 0.2, __none__: 0.8 } } })]));
+  const result = await runtime.run("Search for vendor CP-MEIJI", { values: { vendor: "CP-MEIJI" }, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev chose TYPE, but the one control it could do that on does not fit task\.goal, so no input was sent\./);
+  assert.equal(k.commands.length, 0);
+});
+
 test("network evidence stops monitoring even when the decision service fails", async () => {
   const k = new MemoryKapture();
   const runtime = memoryRuntime(k, async () => { throw new Error("decision service offline"); });

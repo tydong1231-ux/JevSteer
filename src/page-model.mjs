@@ -85,17 +85,34 @@ function modelElement(e, multiFrame) {
   put("record_key", e.record_key);
   if (typeof e.expanded === "boolean") out.expanded = e.expanded;
   if (typeof e.selected === "boolean") out.selected = e.selected;
+  // The [i] of the field whose popup shows this element: an open combobox's
+  // option, or a result under a search box.
+  put("popup_of", e.popup_of);
   put("validation_message", e.validation_message);
   return out;
+}
+
+// What the focused field's popup shows, next to that field: search results
+// under a global search box read as that box's results, not as page text.
+function popupForModel(page) {
+  const field = page.popup && page.elements.find((e) => e.i === page.popup.field);
+  if (!field || !squash(page.popup.text)) return undefined;
+  return {
+    field: `[${field.i}] ${brief(field)}`,
+    ...(sensitiveField(field) ? {} : { field_value: squash(field.value, 80) }),
+    shows: squash(page.popup.text, 600),
+  };
 }
 
 export function toModelPage(page) {
   const multiFrame = new Set(page.elements.map((e) => e.frame_id).filter(Boolean)).size > 1
     || Number(page.metrics?.frame_count) > 1;
+  const popup = popupForModel(page);
   return {
     url: page.url,
     title: page.title,
     ...(page.background_context ? { background_context: squash(page.background_context, 600) } : {}),
+    ...(popup ? { popup } : {}),
     text: squash(page.text, config.modelPageTextChars),
     metrics: page.metrics,
     loading: page.loading,

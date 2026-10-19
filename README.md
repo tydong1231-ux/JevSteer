@@ -95,7 +95,9 @@ JevSteer can search, inspect, and verify the observed result. **If it cannot con
   independently ranks compatible targets for click, type, select, enter and hover.
   Only the chosen operation's target can execute.
 - **Native dropdown shortcuts:** small menus choose a specific option in one
-  call; large menus retain a follow-up option choice.
+  call; large menus retain a follow-up option choice. An open custom combobox
+  (antd, react-select) offers the options its list shows the same way, and the
+  chosen one is clicked.
 - **Separate text generation:** the host can pass named `values`, or optionally
   supply `TEXT_MODEL_API_KEY` / `TEXT_MODEL_BASE_URL` / `TEXT_MODEL` for a
   low-cost OpenAI-compatible model to fill ordinary fields from the goal. Missing

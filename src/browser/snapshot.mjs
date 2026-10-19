@@ -325,6 +325,67 @@ export function readDOM(elements) {
   const floats = (e) => ancestors(e).some((p) => ['absolute', 'fixed'].includes(getComputedStyle(p).position));
   const permitted = (e) => !modal || ancestors(e).includes(modal) || !!closest(e, '[role=listbox],[role=option]') || popups.some((p) => p.contains(e))
     || opened && role(e) === 'option' && floats(e);
+  // The field whose popup holds an element. An open combobox names its list
+  // in aria-controls or aria-owns. antd names a hidden copy and draws the
+  // options beside it, so a list reaches out to the floating box that holds
+  // it, unless that box also holds the combobox. Without such a link, an
+  // option in a floating box of its own belongs to the one open combobox.
+  // A focused text field that holds text can draw a floating box under or
+  // over itself with no link at all: suggestions, or the results of a global
+  // search box ("Vendor 1 CP-MEIJI CO.,LTD." on ccMonet).
+  const floating = (p) => ['absolute', 'fixed'].includes(getComputedStyle(p).position);
+  const floatOf = (p) => {
+    for (let up = 0; p && p !== document.body && up < 5; up++, p = p.parentElement) if (floating(p)) return p;
+    return undefined;
+  };
+  const openBoxes = all.filter((c) => role(c) === 'combobox' && c.tagName !== 'SELECT' && c.getAttribute('aria-expanded') === 'true' && visible(c));
+  const lists = openBoxes.map((c) => [c, `${c.getAttribute('aria-controls') || ''} ${c.getAttribute('aria-owns') || ''}`.split(/\s+/).filter(Boolean)
+    .map((id) => c.getRootNode().getElementById?.(id) || document.getElementById(id)).filter(Boolean)
+    .map((l) => { const box = floatOf(l); return box && !box.contains(c) ? box : l; })]);
+  let focused = document.activeElement;
+  while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+  if (!focused || !all.includes(focused) || !focused.matches(TYPABLE) || !String(focused.value ?? focused.textContent ?? '').trim() || !visible(focused)) focused = undefined;
+  // A box drawn just under or over the focused field and across from it,
+  // later in the page than the field, in a wrapper up to 4 levels out, that
+  // holds a control other than a text field. Not a floating label or a clear
+  // button inside the field, not a fixed header above it, and not the
+  // floating parts of the next line item (an antd select's search box, a
+  // remove button at the row's end).
+  const popupBoxes = (() => {
+    if (!focused || openBoxes.includes(focused)) return [];
+    const f = focused.getBoundingClientRect();
+    const controls = new Set(all);
+    const judged = new Map();
+    const fits = (n) => {
+      if (!judged.has(n)) {
+        const r = !n.contains(focused) && focused.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING && floating(n) && n.getBoundingClientRect();
+        judged.set(n, !!r && r.width * r.height > 0 && r.left < f.right && r.right > f.left
+          && (r.top >= f.bottom - 1 && r.top - f.bottom <= 64 || r.bottom <= f.top + 1 && f.top - r.bottom <= 64)
+          && visible(n) && [n, ...n.querySelectorAll('*')].some((c) => controls.has(c) && !c.matches(TYPABLE) && visible(c)));
+      }
+      return judged.get(n);
+    };
+    for (let w = focused.parentElement, up = 0; w && w !== document.body && up < 4; w = w.parentElement, up++) {
+      const boxes = [...w.querySelectorAll('*')].filter(fits);
+      const outer = boxes.filter((b) => !boxes.some((o) => o !== b && o.contains(b)));
+      if (outer.length) return outer;
+    }
+    return [];
+  })();
+  const popupOwner = (e) => {
+    const option = role(e) === 'option' && !closest(e, 'select');
+    const linked = lists.find(([c, roots]) => option && c.contains(e) || roots.some((r) => r.contains(e)));
+    if (linked) return linked[0];
+    const box = option && openBoxes.length === 1 && ancestors(e).slice(1).find(floating);
+    if (box && !box.contains(openBoxes[0])) return openBoxes[0];
+    return popupBoxes.some((b) => b.contains(e)) ? focused : undefined;
+  };
+  // What the focused field's popup says, for Jev to read as that field's.
+  const popupText = (() => {
+    const own = focused && lists.find(([c]) => c === focused);
+    const boxes = own ? own[1].filter((r) => visible(r)) : popupBoxes;
+    return boxes.map((b) => text(b, 600)).filter(Boolean).join(' ').slice(0, 600);
+  })();
   // A toast ("Update successfully") floats over the page and goes away on its
   // own: a message or notification notice under any class prefix (antd's
   // ant-message-notice, or a renamed one), a toast or snackbar, and any
@@ -384,6 +445,8 @@ export function readDOM(elements) {
       checked: 'checked' in e ? e.checked : e.hasAttribute('aria-checked') ? e.getAttribute('aria-checked') === 'true' : undefined,
       selected: e.hasAttribute('aria-selected') ? e.getAttribute('aria-selected') === 'true' : undefined,
       expanded: e.hasAttribute('aria-expanded') ? e.getAttribute('aria-expanded') === 'true' : undefined,
+      // The ordinal of the field whose popup holds this element (see popupOwner).
+      popup_of: ((owner) => (owner ? all.indexOf(owner) : undefined))(popupOwner(e)),
       disabled: e.matches(':disabled') || ariaOff.some((p) => !dragOnly(p)),
       // Inside a drag-only one. Playwright's input checks still count it as
       // disabled; the driver checks such targets itself.
@@ -412,6 +475,7 @@ export function readDOM(elements) {
     documentKey: String(performance.timeOrigin), url: location.href, title: document.title,
     text: pageText, review_text: pageReview, background_context: modal ? text(document.querySelector('h1'), 500) : undefined,
     modal: !!modal,
+    popup: focused && popupText ? { field: all.indexOf(focused), text: popupText } : undefined,
     toasts: toastRoots.map((e) => text(e, 300)).filter(Boolean),
     loading: { busy: document.readyState === 'loading' || all.some((e) => visible(e) && permitted(e) && e.getAttribute('aria-busy') === 'true') || [...document.querySelectorAll('[aria-busy=true],[role=progressbar]')].some(visible) },
     elements: filtered,
@@ -451,7 +515,8 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
     const documentId = `${info.id}:${revision}:${data.documentKey}`;
     for (const e of data.elements) {
       const selector = `pw-ref:${snapshotId}:${info.id}:${e.ordinal}`;
-      const target = { ...e, selector, snapshot_id: snapshotId, page_id: pageId, session_id: sessionId, frame_id: info.id, document_id: documentId, identity_version: 2 };
+      const { popup_of: _, ...described } = e;
+      const target = { ...described, selector, snapshot_id: snapshotId, page_id: pageId, session_id: sessionId, frame_id: info.id, document_id: documentId, identity_version: 2 };
       target.value_hash = createHash('sha256').update(String(e.value ?? '')).digest('hex');
       if (sensitiveField(target)) {
         target.value = '[REDACTED]'; target.text = '';
@@ -470,6 +535,15 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
   const elements = active.flatMap((f) => f.data.elements.map((e) => e.target));
   if (elements.length > maxElements) throw new Error(`OBSERVATION_LIMIT: ${elements.length} interactive elements, more than ${maxElements}; narrow the observation scope`);
   elements.forEach((e, i) => { e.i = i; });
+  // An element in a field's popup names that field by its index here, and so
+  // does the popup of the focused field.
+  let popup;
+  for (const f of active) {
+    const byOrdinal = new Map(f.data.elements.map((e) => [e.ordinal, e.target]));
+    for (const e of f.data.elements) if (e.popup_of != null && byOrdinal.get(e.popup_of)?.i != null) e.target.popup_of = byOrdinal.get(e.popup_of).i;
+    const field = f.data.popup && byOrdinal.get(f.data.popup.field);
+    if (!popup && field?.i != null) popup = { field: field.i, text: f.data.popup.text };
+  }
   const main = frames.find((f) => f.info.frame === page.mainFrame())?.data;
   return {
     refs,
@@ -480,6 +554,7 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
       ...(active.some((f) => f.data.review_text != null) ? { review_text: active.map((f) => f.data.review_text ?? f.data.text).join('\n') } : {}),
       loading: { busy: active.some((f) => f.data.loading.busy) }, elements,
       toasts: active.flatMap((f) => f.data.toasts),
+      ...(popup ? { popup } : {}),
       frames: active.map((f) => ({ frame_id: f.info.id, document_id: f.documentId, url: f.data.url })),
       metrics: { element_count: elements.length, frame_count: active.length },
     },

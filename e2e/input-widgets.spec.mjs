@@ -154,15 +154,21 @@ const drawerSelect = `<style>
 // Without the listbox link (no aria-controls), the open list still belongs to
 // the drawer while its combobox is open.
 const unlinked = drawerSelect.replace(/ aria-owns="rc_select_1_list"| aria-controls="rc_select_1_list"| id="rc_select_1_list"/g, '');
-for (const [variant, html] of [['', drawerSelect], [' (no listbox link)', unlinked]]) {
-  test(`an antd select in a drawer: type to search, then click the visible option; the field is not typed again${variant}`, async ({ page }, testInfo) => {
+// Jev may click the option, or choose SELECT, as it did on ccMonet (Mac rerun,
+// 2026-10-19): the open combobox then offers the option its list shows.
+for (const [variant, html] of [['', drawerSelect], [' (no listbox link)', unlinked]]) for (const how of ['click', 'select']) {
+  test(`an antd select in a drawer: type to search, then ${how === 'click' ? 'click the visible option' : 'SELECT the option the open list shows'}; the field is not typed again${variant}`, async ({ page }, testInfo) => {
     await page.setContent(html);
     const seen = {};
     const mcp = await mcpFixture(page, testInfo, scriptedDecider([
       (state) => decision({ tool: 'type', target: pick((e) => e.label === 'Customer')(state) }),
       (state, questions) => {
-        seen.open = { tools: Object.keys(questions.tool.criteria), elements: state.page.elements.map((e) => [e.role, e.label]) };
-        return decision({ tool: 'click', target: pick((e) => e.role === 'option' && e.label === 'Acme Ltd')(state) });
+        seen.open = {
+          elements: state.page.elements.map((e) => [e.role, e.label]),
+          select: Object.entries(questions.select_target?.criteria || {}).map(([key, c]) => [key, c.control, c.choose_option]),
+        };
+        const option = pick((e) => e.role === 'option' && e.label === 'Acme Ltd')(state);
+        return decision(how === 'click' ? { tool: 'click', target: option } : { tool: 'select', target: `${pick((e) => e.label === 'Customer')(state)}>${option}` });
       },
       (state, questions) => {
         seen.picked = { customer: state.page.elements.find((e) => e.label === 'Customer'), typable: Object.values(questions.type_target?.criteria || {}).map((c) => c.control) };
@@ -174,10 +180,12 @@ for (const [variant, html] of [['', drawerSelect], [' (no listbox link)', unlink
       expect(result.status).toBe('host_review_required');
       // The open list's visible option is observed, though it is drawn outside
       // the drawer. The hidden listbox and its copies are not, nor is the page
-      // behind the drawer. SELECT on the open combobox would only close it.
+      // behind the drawer. SELECT on the open combobox would only close it, so
+      // it offers the option the list shows instead (or none).
       expect(seen.open.elements).toEqual([['combobox', 'Customer'], ['textbox', 'Reference'], ['button', 'Save as Draft'], ['option', 'Acme Ltd']]);
-      expect(seen.open.tools).not.toContain('select');
-      expect(result.actions.map((a) => [a.action, a.effect?.status])).toEqual([['type', 'confirmed'], ['click', 'changed']]);
+      expect(seen.open.select).toEqual([['0>3', '[0] combobox "Customer"', 'Acme Ltd'], ['__none__', undefined, undefined]]);
+      // Either way, the option is clicked.
+      expect(result.actions.map((a) => [a.action, a.element, a.effect?.status])).toEqual([['type', 'combobox "Customer"', 'confirmed'], ['click', 'option "Acme Ltd"', 'changed']]);
       await expect(page.locator('.ant-select-selection-item')).toHaveText('Acme Ltd');
       // The search text cleared when the option was picked. The field shows
       // the option, so it is not offered for TYPE again.
@@ -186,3 +194,85 @@ for (const [variant, html] of [['', drawerSelect], [' (no listbox link)', unlink
     } finally { await mcp.close(); }
   });
 }
+
+// ccMonet's invoice form (Mac rerun, 2026-10-19): with the Customer list open,
+// Jev chose SELECT on "Currency :", which that list covers. The click that
+// would open it waited after the journal until it timed out, and left a
+// pending action. It is now tried before the journal: no input, nothing
+// pending, and Jev looks again knowing what covers the target. Two such
+// refusals in a row stop the run.
+const covered = `<style>
+    .ant-select { position: relative; width: 240px; height: 28px; border: 1px solid #ccc; margin-bottom: 12px; }
+    .ant-select input { width: 100%; height: 26px; border: 0; }
+    .ant-select-dropdown { position: absolute; width: 280px; height: 120px; background: #fff; border: 1px solid #ccc; z-index: 1050; }
+  </style>
+  <h1>New invoice</h1>
+  <div class="ant-col"><div>Customer</div><div class="ant-select"><input id="customer" role="combobox" type="search" aria-expanded="true" aria-controls="customer_list" value="Acme"></div></div>
+  <div class="ant-col"><div>Currency :</div><div class="ant-select" id="currency-box"><input id="currency" role="combobox" type="search" aria-expanded="false" aria-controls="currency_list" value=""></div></div>
+  <div class="ant-select-dropdown"><div><div role="listbox" id="customer_list" style="height:0;width:0;overflow:hidden"></div>
+    <div aria-selected="false" class="ant-select-item ant-select-item-option" title="Acme Ltd">Acme Ltd</div></div></div>
+  <script>
+    const box = document.querySelector('#currency-box').getBoundingClientRect();
+    Object.assign(document.querySelector('.ant-select-dropdown').style, { top: box.top - 20 + 'px', left: box.left - 20 + 'px' });
+    document.querySelector('#currency').addEventListener('mousedown', (e) => e.target.setAttribute('aria-expanded', 'true'));
+    document.querySelector('.ant-select-item-option').addEventListener('click', () => {
+      Object.assign(document.querySelector('#customer'), { value: 'Acme Ltd' }).setAttribute('aria-expanded', 'false');
+      document.querySelector('.ant-select-dropdown').style.display = 'none';
+    });
+  </script>`;
+
+const covering = 'the target is covered by another element (<div class="ant-select-dropdown">); no input was sent';
+const currency = (state) => decision({ tool: 'select', target: pick((e) => e.label === 'Currency')(state) });
+
+test('SELECT on a combobox that an open list covers is refused before any input; Jev looks again and picks from the list', async ({ page }, testInfo) => {
+  await page.setContent(covered);
+  const seen = {};
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    currency,
+    (state) => {
+      seen.history = state.task.history.at(-1);
+      return decision({ tool: 'select', target: `${pick((e) => e.label === 'Customer')(state)}>${pick((e) => e.role === 'option')(state)}` });
+    },
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Choose customer Acme Ltd on the new invoice', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(result.status).toBe('host_review_required');
+    expect(seen.history).toEqual({ recovery: 'reobserve', reason: 'target_covered', input_sent: false, detail: covering });
+    expect(result.actions.map((a) => [a.action ?? a.recovery, a.element ?? a.reason, a.effect?.status])).toEqual([
+      ['reobserve', 'target_covered', undefined],
+      ['click', 'option "Acme Ltd"', 'changed'],
+    ]);
+    expect(result.pending_actions).toBeUndefined();
+    await expect(page.locator('#currency')).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('#customer')).toHaveValue('Acme Ltd');
+  } finally { await mcp.close(); }
+});
+
+// The third same choice on the same page is not tried again.
+test('a target chosen again while it stays covered stops the run with nothing pending', async ({ page }, testInfo) => {
+  await page.setContent(covered);
+  const again = await mcpFixture(page, testInfo, scriptedDecider([currency]));
+  try {
+    const result = await again.call('browser_run', { tab_id: again.id, goal: 'Choose customer Acme Ltd on the new invoice', verification_mode: 'host', max_actions: 5, evidence_level: 'none' });
+    expect(result.status).toBe('stuck');
+    expect(result.actions.map((a) => [a.action ?? a.recovery, a.error ?? a.detail])).toEqual([['reobserve', covering], ['reobserve', covering]]);
+    expect(result.pending_actions).toBeUndefined();
+    await expect(page.locator('#currency')).toHaveAttribute('aria-expanded', 'false');
+  } finally { await again.close(); }
+});
+
+// A button that never holds still: the browser waits for it to stop moving
+// until its timeout. No input was sent, so nothing is pending.
+test('a target that never becomes ready is refused before any input', async ({ page }, testInfo) => {
+  await page.setContent(`<style>@keyframes shake { from { transform: translateX(0) } to { transform: translateX(40px) } }</style>
+    <h1>Report</h1><button style="animation: shake 0.2s infinite alternate">Generate</button>`);
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([(state) => decision({ tool: 'click', target: pick((e) => e.label === 'Generate')(state) })]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Generate the report', verification_mode: 'host', max_actions: 2, evidence_level: 'none' });
+    expect(result.status).toBe('action_failed');
+    expect(result.info).toMatch(/^The browser refused this action before sending any input/);
+    expect(result.actions.map((a) => [a.action, a.error])).toEqual([['click', 'the target never became ready for input; no input was sent']]);
+    expect(result.pending_actions).toBeUndefined();
+  } finally { await mcp.close(); }
+});

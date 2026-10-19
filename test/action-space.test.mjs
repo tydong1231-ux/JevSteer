@@ -116,6 +116,60 @@ test("an open combobox is not a SELECT target; a field known only by its hint ca
   assert.equal(space.questions.type_target.criteria["3"].table_column, "QTY");
 });
 
+test("an open combobox offers the options its popup lists for SELECT; choosing one clicks it", () => {
+  const elements = [
+    { i: 0, selector: "#customer", tag: "input", role: "combobox", label: "Customer", value: "Acme", expanded: true },
+    { i: 1, selector: "#currency", tag: "input", role: "combobox", label: "Currency", value: "", display: "SGD", expanded: false },
+    { i: 2, selector: "#acme", tag: "div", role: "option", label: "Acme Ltd", popup_of: 0, selected: false },
+    { i: 3, selector: "#acme-old", tag: "div", role: "option", label: "Acme Old", popup_of: 0, disabled: true },
+    { i: 4, selector: "#beta", tag: "div", role: "option", label: "Beta LLC", popup_of: 0, selected: true },
+    { i: 5, selector: "#other", tag: "div", role: "option", label: "Standalone" },
+  ];
+  const space = buildTargetSpace(elements);
+  // Enabled, unselected options of the open combobox; the closed one as before.
+  assert.deepEqual(space.candidates.select.map((c) => c.key), ["0>2", "1"]);
+  assert.equal(space.questions.select_target.criteria["0>2"].control, '[0] combobox "Customer"');
+  assert.equal(space.questions.select_target.criteria["0>2"].choose_option, "Acme Ltd");
+  // A second-stage question sees part of the page; the options come from all of it.
+  assert.deepEqual(buildTargetSpace(elements.slice(0, 2), elements).candidates.select.map((c) => c.key), ["0>2", "1"]);
+  const runtime = new JevSteerRuntime();
+  const action = runtime.resolve({ url: "https://erp.test/invoices/new", elements }, {
+    tool: { choice: "select", probabilities: { select: 0.7 } },
+    select_target: choice(space.questions.select_target.criteria, "0>2"),
+  }, { customer: "Acme" });
+  assert.deepEqual([action.tool, action.chosen_as, action.target, action.el.selector, action.value, action.p_target], ["click", "select", 2, "#acme", undefined, 1]);
+});
+
+test("a head with one target can turn it down", () => {
+  const elements = [
+    { i: 0, selector: "#search", tag: "input", type: "text", role: "textbox", label: "", hint: "Search contacts", value: "CP-MEIJI", type_completed: true },
+    { i: 1, selector: "#size", tag: "input", role: "combobox", label: "Page Size", value: "20" },
+  ];
+  const space = buildTargetSpace(elements);
+  // After the search box was typed, "Page Size" is the only TYPE target left.
+  assert.deepEqual(Object.keys(space.questions.type_target.criteria), ["1", "__none__"]);
+  assert.deepEqual(Object.keys(space.questions.click_target.criteria), ["0", "1"]);
+  const runtime = new JevSteerRuntime();
+  const action = runtime.resolve({ url: "https://erp.test/bills", elements }, {
+    tool: { choice: "type", probabilities: { type: 0.6 } },
+    type_target: choice(space.questions.type_target.criteria, "__none__"),
+  }, { vendor: "CP-MEIJI" });
+  assert.deepEqual([action.declined, action.target, action.el, action.candidates[0].element], [true, null, undefined, "none of the targets"]);
+});
+
+test("DONE is judged by the success criteria when the host gives them", async () => {
+  const asked = [];
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    asked.push(questions.done.instructions);
+    return { answers: { ...Object.fromEntries(Object.entries(questions).filter(([, q]) => q.type === "noul").map(([k]) => [k, { noul: 0.01 }])), tool: { choice: "none", probabilities: { none: 1 } } }, ms: 1, tokens: 1 };
+  } });
+  const p = page();
+  await runtime.decide(p, normalizeTaskContract({ goal: "Search for vendor CP-MEIJI", successCriteria: ["Search results list CP-MEIJI CO.,LTD."] }), {}, []);
+  await runtime.decide(p, normalizeTaskContract({ goal: "Search for vendor CP-MEIJI" }), {}, []);
+  assert.match(asked[0], /task\.success_criteria say what achieved looks like: check each of them against page as it is now, including page\.popup\.$/);
+  assert.doesNotMatch(asked[1], /success_criteria/);
+});
+
 test("the value chooser sees a field's table column and hint", async () => {
   let selected;
   const runtime = new JevSteerRuntime({ decider: async (state, questions) => {

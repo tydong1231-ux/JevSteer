@@ -147,10 +147,44 @@ antd draws a select's options in a portal at the end of `<body>`, as divs with
 `aria-selected` and no role, and keeps `role=option` copies in a 0×0 listbox
 for screen readers. The visible divs are observed as options, also while a
 drawer or modal is open; the hidden copies are not (a click on them only waits
-until it times out). An open combobox is not offered for SELECT, which would
-only close its list again: Jev clicks the option.
+until it times out). An open combobox is not offered for SELECT itself, which
+would only close its list again. SELECT offers the options its list shows
+instead: those in the list its `aria-controls` or `aria-owns` names, or in the
+floating box that holds that list (antd's visible copy), or, with no such link,
+options floating on their own while it is the one open combobox. Each such
+option carries `popup_of`, the `[i]` of its combobox, and choosing one is a
+click on that option (the run log shows `tool: "click"`, `chosen_as: "select"`).
+SELECT on a closed custom combobox opens it with a click. When another
+combobox's open list covers it, that click is refused before the journal
+(`predispatch_rejected`, nothing pending), and the error names the cover:
+`the target is covered by another element (<div class="ant-select-dropdown">); no input was sent`.
+Any covered target is refused this way, and Jev looks again with the refusal
+in its history (`recovery: "reobserve"`, `reason: "target_covered"`), as after
+a stale target; the same choice a third time on the same page stops the run as
+`stuck`. A target that never becomes ready for another reason (it keeps
+moving, say) stops the run as `action_failed`, with nothing pending.
+
+A focused text field that holds text can draw results or suggestions under or
+over itself with no ARIA link, such as ccMonet's global search ("Vendor 1
+CP-MEIJI CO.,LTD."). A floating box in a wrapper up to four levels out from the
+field, later in the page, across from it and at most 64 px under or over it,
+that holds a control other than a text field, is the field's popup. Its
+controls carry `popup_of`, and Jev's page gets
+`popup: { field, field_value, shows }`, also in the first call of a two-stage
+decision on a large page. The floating parts of the next line item (an antd
+select's search box, a remove button at the row's end), a fixed bar above the
+field and a footer far below it are not popups. A field this run typed keeps
+the `hint` it showed then, so the search box still reads as "Search contacts,
+..." after its hint layer goes. When the contract has success criteria, Jev's
+done question tells it to check each of them against the page as it is now,
+`page.popup` included.
 
 If workflow knowledge is missing, return `needs_guidance` instead of guessing. The host patches the current milestone and resumes.
+A target head with only one offered target can also answer `__none__`: that
+target does not fit the action toward the goal (after the global search was
+typed, "Page Size" was the only TYPE target left). When it is the chosen
+action's head, no input is sent and the milestone stops with `needs_guidance`;
+`info` says the one control does not fit task.goal.
 
 ## Host review
 
