@@ -195,7 +195,10 @@ export class PlaywrightDriver {
       }
       // Requests the page starts from here on belong to this input; the next
       // observation waits for them (see observe).
-      if (!['wait', 'none'].includes(action.tool)) record.inputAt = Date.now();
+      if (!['wait', 'none'].includes(action.tool)) {
+        record.inputAt = Date.now();
+        record.events.input(record.inputAt);
+      }
       switch (action.tool) {
         case 'click': mark(); await handle.click({ timeout, force }); break;
         case 'hover': mark(); await handle.hover({ timeout }); break;

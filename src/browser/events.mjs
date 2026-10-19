@@ -1,39 +1,59 @@
 import { safeUrl } from '../evidence.mjs';
 import { trackerRequest } from '../trackers.mjs';
 
+// A slow report or save is waited on until it returns. A request still open
+// after STREAM_MS is a stream or will not return, and is no longer waited on.
+const STREAM_MS = 30000;
+// A long poll holds its request open until the server has news, and the page
+// sends the next one as soon as it returns, with no input in between.
+const HELD_MS = 8000;
+const RESENT_MS = 1000;
+
 export class PageEvents {
-  constructor(page, { retainBodies = false, limit = 1000 } = {}) {
+  constructor(page, { retainBodies = false, limit = 1000, now = Date.now } = {}) {
     this.page = page;
     this.limit = limit;
     this.retainBodies = retainBodies;
+    this.now = now;
     this.cursor = 0;
     this.entries = [];
     this.responses = new Map();
     this.listeners = [];
     this.pendingDialog = null;
     // Start times of the page's own data requests: open ones, and recent ones.
-    // Endpoints seen holding a request open for a long time (long polling)
-    // are not waited on again. Analytics and ad beacons are not the page's
-    // data: a form interaction fires them whether or not anything is saved.
+    // Analytics and ad beacons are not the page's data: a form interaction
+    // fires them whether or not anything is saved. Long polls are not either.
     this.open = new Map();
     this.started = [];
-    this.longLived = new Set();
+    this.inputAt = -Infinity;
+    this.heldUntil = new Map();
+    this.longPolls = new Set();
     const on = (name, fn) => { page.on(name, fn); this.listeners.push([name, fn]); };
     on('request', (req) => {
       if (!DATA_REQUESTS.has(req.resourceType()) || trackerRequest(req.url())) return;
-      const at = Date.now();
+      const at = this.now();
+      const key = endpoint(req);
+      if (at - (this.heldUntil.get(key) ?? -Infinity) <= RESENT_MS && at - this.inputAt > RESENT_MS) this.longPolls.add(key);
+      if (this.longPolls.has(key)) return;
       this.open.set(req, at);
       this.started.push(at);
       if (this.started.length > 500) this.started.splice(0, this.started.length - 500);
     });
-    on('requestfinished', (req) => this.open.delete(req));
+    const finished = (req) => {
+      const at = this.open.get(req);
+      if (at == null) return;
+      this.open.delete(req);
+      const now = this.now();
+      if (now - at >= HELD_MS) this.heldUntil.set(endpoint(req), now);
+    };
+    on('requestfinished', finished);
     on('response', (response) => {
       const req = response.request();
       const entry = this.push({ kind: 'network', requestId: String(this.cursor + 1), method: req.method(), url: safeUrl(response.url()), status: response.status(), type: req.resourceType() });
       if (retainBodies) this.responses.set(entry.requestId, response);
     });
     on('requestfailed', (req) => {
-      this.open.delete(req);
+      finished(req);
       this.push({ kind: 'network', requestId: String(this.cursor + 1), method: req.method(), url: safeUrl(req.url()), type: req.resourceType(), failed: true });
     });
     // Console text and dialog messages can contain financial data or secrets.
@@ -50,16 +70,15 @@ export class PageEvents {
     while (this.entries.length > this.limit) this.responses.delete(this.entries.shift().requestId);
     return value;
   }
+  // The driver's input. A request sent within RESENT_MS of it belongs to the
+  // input, even when it repeats a long-held one.
+  input(at = this.now()) { this.inputAt = at; }
   // XHR and fetch requests started at or after `since`, and how many of them
-  // are still open. One open for maxAgeMs or longer is a long poll or a
-  // stream: it no longer counts, nor do later requests to its endpoint.
-  requests(since = 0, { now = Date.now(), maxAgeMs = 8000 } = {}) {
+  // are still open. A long poll's requests count in neither.
+  requests(since = 0, { now = this.now(), maxAgeMs = STREAM_MS } = {}) {
     let pending = 0;
     for (const [req, at] of this.open) {
-      if (now - at >= maxAgeMs) {
-        this.longLived.add(endpoint(req));
-        this.open.delete(req);
-      } else if (at >= since && !this.longLived.has(endpoint(req))) pending++;
+      if (at >= since && now - at < maxAgeMs && !this.longPolls.has(endpoint(req))) pending++;
     }
     return { started: this.started.filter((at) => at >= since).length, pending };
   }
@@ -84,7 +103,9 @@ export class PageEvents {
     this.responses.clear();
     this.open.clear();
     this.started = [];
-    this.longLived.clear();
+    this.inputAt = -Infinity;
+    this.heldUntil.clear();
+    this.longPolls.clear();
   }
 }
 

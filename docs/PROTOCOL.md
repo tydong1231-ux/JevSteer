@@ -278,10 +278,14 @@ With the Playwright driver, observation after an input also waits while XHR or
 fetch requests the page started after that input are still open, up to the
 action settle budget (`JEVSTEER_ACTION_SETTLE_MS`). A report whose Generate
 button shows nothing until its request returns is then seen in the same round,
-without waits or a second click. A request open for 8 s or more counts as a long
-poll or stream; it and later requests to its endpoint are not waited on. A click
-that has changed nothing yet is watched for 1 s more, since handlers can wait
-before sending a request; clicks into text fields and native selects are not.
+without waits or a second click. A slow report or save is waited on until it
+returns; a request still open after 30 s counts as a stream and is no longer
+waited on. When a request held open for 8 s or more returns and the page sends
+another to the same endpoint within a second, with no input in the second before
+it, the endpoint is a long poll: from then on its requests are neither waited on
+nor counted. A click that has changed nothing yet is watched for 1 s more, since
+handlers can wait before sending a request; clicks into text fields and native
+selects are not.
 Each action in the result carries `requests`: how many data requests the page
 sent after it. A click with an `unknown` effect and `requests: 0` did not reach
 a handler that does anything visible or remote. Jev's next decision sees these
