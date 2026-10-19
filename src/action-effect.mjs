@@ -23,9 +23,11 @@ export function verifyActionEffect(before, after, action) {
   if (action.tool === "type") {
     if (action.el?.type === "password") return { status: "unknown", check: "field_value_redacted" };
     if (!current) return { status: changed ? "changed" : "unknown", check: "field_value" };
-    // Rich-text editors (contenteditable) expose their content as text, not value.
-    const useText = current.value == null && current.contenteditable;
-    if (current.value == null && !useText) return { status: changed ? "changed" : "unknown", check: "field_value" };
+    // Native fields report a value (an empty field has none in the snapshot,
+    // so a fill that did not take still fails). Rich-text editors and custom
+    // textboxes have no value and expose their content as text instead.
+    const native = current.tag === "input" || current.tag === "textarea";
+    const useText = !native && current.value == null;
     const limit = useText ? TEXT_CHARS : VALUE_CHARS;
     const actual = squash(useText ? current.text : current.value, limit);
     const expected = squash(action.expected_value, limit);

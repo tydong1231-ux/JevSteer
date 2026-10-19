@@ -108,6 +108,16 @@ test("typing multi-line or long text is confirmed against the normalized snapsho
   assert.equal(wrong.status, "failed");
 });
 
+test("a fill that leaves a native field empty is still a failed effect", () => {
+  const el = { selector: "#email", tag: "input", type: "email" };
+  const after = buildSemanticPage({
+    domHtml: '<body><input id="email" type="email"></body>',
+    rawElements: [{ visible: true, selector: "#email", tagName: "input", value: "" }],
+  }).elements[0];
+  assert.equal(after.value, undefined);
+  assert.equal(verifyActionEffect(page([el]), page([after]), { tool: "type", el, expected_value: "a@b.test" }).status, "failed");
+});
+
 test("contenteditable typing is checked against element text, not a missing value", () => {
   const el = { selector: "#editor", tag: "div", role: "textbox", contenteditable: true };
   const after = { ...el, text: "Hello world" };
@@ -123,10 +133,12 @@ test("select effect accepts an option matched by its visible text", () => {
 });
 
 test("secret detection keeps short tokens to whole words", () => {
-  for (const name of ["password", "confirmPassword", "user_pass", "PIN", "cardPin", "pin_code", "otp", "smsOtp", "2fa", "cvv", "api_key", "apiKey", "access_token", "Authorization", "set-cookie", "security_code", "client_secret"]) {
+  for (const name of ["password", "confirmPassword", "user_pass", "PIN", "cardPin", "pin_code", "otp", "smsOtp", "2fa", "cvv", "api_key", "apiKey", "access_token", "Authorization", "set-cookie", "security_code", "client_secret",
+    // Compound names the previous substring rule hid from Jev must stay hidden.
+    "userpass", "dbpass", "cardpin", "userpin", "pin1", "pins", "pinnumber", "pinCode", "totp", "hotp_code", "cardcvv", "cvv2", "otpvalue", "passkey", "passport", "2FA", "use2FA"]) {
     assert.equal(isSensitiveName(name), true, name);
   }
-  for (const name of ["shipping_address", "mapping", "opinion", "passed", "passenger", "spinner", "email", "Customer name"]) {
+  for (const name of ["shipping_address", "shippingAddress", "mapping", "opinion", "passed", "passenger", "passing", "spinner", "pinned", "hotpot", "footprint", "email", "Customer name"]) {
     assert.equal(isSensitiveName(name), false, name);
   }
   assert.deepEqual(redact({ shipping_address: "1 Main St", pin: "1234", passed: true }), { shipping_address: "1 Main St", pin: "[REDACTED]", passed: true });
@@ -145,6 +157,14 @@ test("url_matches assertions keep the regex verbatim", () => {
   const pattern = "^https://app\\.test/(a|b)  /" + "c".repeat(250);
   const [assertion] = normalizeAssertions([{ type: "url_matches", value: pattern }]);
   assert.equal(assertion.value, pattern);
+});
+
+test("aria-labelledby ignores empty id references", () => {
+  const result = buildSemanticPage({
+    domHtml: '<body><div id="">Unrelated</div><span id="l">Email</span><input id="f" aria-labelledby=" l "></body>',
+    rawElements: [{ visible: true, selector: "#f", tagName: "input" }],
+  });
+  assert.equal(result.elements[0].label, "Email");
 });
 
 test("semantic snapshot stays fast on pages with thousands of labelled controls", () => {

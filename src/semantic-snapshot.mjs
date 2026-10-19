@@ -46,6 +46,7 @@ function buildIndex($) {
   let labelsFor;
   return {
     byId(id) {
+      if (!id) return null;
       if (!ids) {
         ids = new Map();
         $("[id]").each((_, el) => {
