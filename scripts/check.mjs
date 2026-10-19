@@ -2,10 +2,16 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const roots = ["bin", "src", "scripts", "test"];
+const roots = ["bin", "src", "scripts", "test", "e2e"];
 const files = [];
+async function collect(root) {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (entry.isDirectory()) await collect(join(root, entry.name));
+    else if (entry.name.endsWith(".mjs")) files.push(join(root, entry.name));
+  }
+}
 for (const root of roots) {
-  for (const name of await readdir(root)) if (name.endsWith(".mjs")) files.push(join(root, name));
+  await collect(root).catch((e) => { if (e.code !== 'ENOENT') throw e; });
 }
 let failed = false;
 for (const file of files) {

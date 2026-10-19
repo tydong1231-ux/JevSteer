@@ -42,24 +42,23 @@ const milestoneSchema = z.object({
   max_actions: z.number().int().min(1).max(40).optional(),
 });
 
-export function createServer() {
-  const runtime = new JevSteerRuntime();
+export function createServer({ runtime = new JevSteerRuntime() } = {}) {
   const server = new McpServer({
     name: "jevsteer",
     title: "JevSteer Browser Runtime",
     version: "0.4.0",
-    description: "Host-planned, verified low-cost browser execution: milestones by the host, Jev inside each milestone, Kapture on the user's Chrome.",
+    description: "Host-planned, verified low-cost browser execution with Playwright or legacy Kapture.",
   }, { instructions: SERVER_POLICY });
 
   server.registerTool("browser_doctor", {
     title: "Browser Doctor",
-    description: "Check TypeSafe, Kapture, connected tabs and tab leases.",
+    description: "Check the Jev provider, selected browser driver, connected pages and page leases.",
     inputSchema: z.object({}),
   }, wrap(async () => text(await runtime.doctor())));
 
   server.registerTool("browser_tabs", {
     title: "List Browser Tabs",
-    description: "List Chrome tabs connected through Kapture.",
+    description: "List pages in the selected browser session. Choose tab_id explicitly when multiple pages exist.",
     inputSchema: z.object({}),
   }, wrap(async () => text({ tabs: await runtime.tabs() })));
 
@@ -182,8 +181,8 @@ export function createServer() {
     inputSchema: z.object({ tab_id: z.string().optional() }),
   }, wrap(async ({ tab_id }) => {
     const tab = await runtime.selectTab(tab_id);
-    const shot = await runtime.kapture.screenshot(tab.tabId, { scale: 1, format: "png" });
-    if (!shot?.data) throw new Error("Kapture screenshot did not return image data");
+    const shot = await runtime.driver.screenshot(tab.tabId, { scale: 1, format: "png" });
+    if (!shot?.data) throw new Error("Browser screenshot did not return image data");
     return { content: [{ type: "image", data: shot.data, mimeType: shot.mimeType || "image/png" }] };
   }));
 

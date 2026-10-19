@@ -70,6 +70,7 @@ export function toModelPage(page) {
       near: sensitiveField(e) ? undefined : e.near,
       context: e.context,
       scope: e.scope,
+      ...(e.frame_id ? { frame_id: e.frame_id, form_key: e.form_key, record_key: e.record_key } : {}),
       invalid: e.invalid,
       expanded: e.expanded,
       selected: e.selected,
