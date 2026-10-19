@@ -361,9 +361,11 @@ its transport timeout. `JEVSTEER_ACTION_SETTLE_MS` defaults to 8000 and
 quiet period before a host review ticket binds the page, to 1000. A `wait`
 watches the page for up to `JEVSTEER_WAIT_MS` (default 5000) and ends as soon as
 it changes; `JEVSTEER_MAX_IDLE_WAITS` (default 2) waits in a row that saw
-nothing change stop the milestone as `stuck`. With the
+nothing change stop the milestone as `stuck`, one more if the page kept sending
+requests. With the
 Playwright driver each round waits for quiet full snapshots only, and for open
-XHR/fetch requests the last input started; the Kapture DOM-metadata settle poll
+XHR/fetch requests the last input started, not counting analytics and ad
+beacons; the Kapture DOM-metadata settle poll
 is skipped because Playwright metadata carries no DOM size. Link navigation, explicit GET search-form
 submissions and search Enter can wait up to `JEVSTEER_NAVIGATION_SETTLE_MS`
 (default 15000) for an observed route change. Checkboxes, radios and fields in

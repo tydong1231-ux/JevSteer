@@ -1,4 +1,5 @@
 import { safeUrl } from '../evidence.mjs';
+import { trackerRequest } from '../trackers.mjs';
 
 export class PageEvents {
   constructor(page, { retainBodies = false, limit = 1000 } = {}) {
@@ -12,13 +13,14 @@ export class PageEvents {
     this.pendingDialog = null;
     // Start times of the page's own data requests: open ones, and recent ones.
     // Endpoints seen holding a request open for a long time (long polling)
-    // are not waited on again.
+    // are not waited on again. Analytics and ad beacons are not the page's
+    // data: a form interaction fires them whether or not anything is saved.
     this.open = new Map();
     this.started = [];
     this.longLived = new Set();
     const on = (name, fn) => { page.on(name, fn); this.listeners.push([name, fn]); };
     on('request', (req) => {
-      if (!DATA_REQUESTS.has(req.resourceType())) return;
+      if (!DATA_REQUESTS.has(req.resourceType()) || trackerRequest(req.url())) return;
       const at = Date.now();
       this.open.set(req, at);
       this.started.push(at);

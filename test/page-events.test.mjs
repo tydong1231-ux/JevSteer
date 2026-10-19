@@ -35,3 +35,16 @@ test("page events count the data requests an input started and the ones still op
   events.close();
   assert.deepEqual(events.requests(0), { started: 0, pending: 0 });
 });
+
+test("analytics and ad beacons are not counted as the page's data requests", () => {
+  const page = new EventEmitter();
+  const events = new PageEvents(page);
+  const since = Date.now();
+  for (const url of ["https://www.google.com/rmkt/collect/1/?en=form_start", "https://api2.amplitude.com/2/httpapi", "https://region1.google-analytics.com/g/collect?v=2"]) {
+    page.emit("request", { resourceType: () => "fetch", method: () => "POST", url: () => url });
+  }
+  assert.deepEqual(events.requests(since), { started: 0, pending: 0 });
+  page.emit("request", request("xhr"));
+  assert.deepEqual(events.requests(since), { started: 1, pending: 1 });
+  events.close();
+});

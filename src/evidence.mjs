@@ -1,4 +1,5 @@
 import { sensitiveName } from "./sensitive.mjs";
+import { trackerRequest } from "./trackers.mjs";
 
 function truncate(value, max = 1200) {
   const s = typeof value === "string" ? value : JSON.stringify(value);
@@ -10,6 +11,8 @@ function truncate(value, max = 1200) {
 export function safeUrl(value) {
   try {
     const url = new URL(String(value));
+    // A beacon's query holds visitor ids and hashed emails, not app data.
+    if (trackerRequest(url.href)) { url.search = ""; url.hash = ""; }
     for (const key of [...url.searchParams.keys()]) if (sensitiveName(key)) url.searchParams.set(key, "[REDACTED]");
     if (url.hash && /(access_token|id_token|secret|session|api_key|authorization)/i.test(url.hash)) url.hash = "#[REDACTED]";
     return url.toString();
@@ -39,9 +42,7 @@ function parseMaybeJson(value) {
 }
 
 export function relevantRequest(request) {
-  try {
-    if (/(^|\.)(clarity\.ms|google-analytics\.com|analytics\.google\.com|segment\.io)$/.test(new URL(request?.url).hostname)) return false;
-  } catch {}
+  if (trackerRequest(request?.url)) return false;
   const method = String(request?.method || "GET").toUpperCase();
   const status = Number(request?.status || 0);
   return !["GET", "HEAD", "OPTIONS"].includes(method) || status >= 400;

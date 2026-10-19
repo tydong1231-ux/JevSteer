@@ -286,18 +286,31 @@ Each action in the result carries `requests`: how many data requests the page
 sent after it. A click with an `unknown` effect and `requests: 0` did not reach
 a handler that does anything visible or remote. Jev's next decision sees these
 counts; the effect and constraint guards do not, so a form that checks a name
-as it is typed does not make its Add button look like a save. Link navigation, the submit button of an explicit GET search form
+as it is typed does not make its Add button look like a save. Analytics,
+advertising and error-monitoring beacons (Google Analytics and Ads, Amplitude,
+Segment, Sentry, Datadog RUM and similar) are not counted, waited on or listed
+as relevant evidence: a form interaction fires them whether or not anything is
+saved. Their URLs are recorded without query strings, which carry visitor ids
+and hashed emails. Link navigation, the submit button of an explicit GET search form
 and search Enter wait for route progress within `JEVSTEER_NAVIGATION_SETTLE_MS`;
 no browser input is replayed by this wait. Checkboxes, radios and fields inside
 that form, and same-page `#` links, are judged in place without that wait.
 A `wait` watches the page for up to `JEVSTEER_WAIT_MS` (default 5000, never more
 than the action settle budget) and ends as soon as the page changes. ccMonet's
-Profit and Loss report, for example, shows about 6 s after Generate, after its
-requests have returned and with no spinner; one wait now sees it. A wait after
+Profit and Loss report, for example, shows 6 to 10 s after Generate, after its
+requests have returned and with no spinner; one or two waits see it. A wait after
 which the page did not change, nothing on it is loading and the page sent no new
 request is marked `page_changed: false` in history. `JEVSTEER_MAX_IDLE_WAITS`
-(default 2) such waits in a row stop the milestone as `stuck`;
-`JEVSTEER_MAX_WAITS` (default 12) bounds all waits.
+(default 2) such waits in a row stop the milestone as `stuck`. A page that keeps
+sending requests, such as one polling badge counters, stops after one more wait
+than that with nothing visible changing. `JEVSTEER_MAX_WAITS` (default 12)
+bounds all waits.
+
+With `JEVSTEER_LOG=1`, stderr gets one row per round: Jev's scores, the chosen
+action, `observe_ms` (watching the previous input or wait), `decide_ms` and
+`requests`. A guarded input adds a `guards` row with the effect and constraint
+verdicts and the target's scope and context. `explain: true` returns the round
+rows, guard verdicts included, in the result.
 `browser_open` can return `navigation_unconfirmed` with a `tab_id` when its
 acknowledgement is lost and fresh DOM metadata cannot confirm the exact requested
 URL. Inspect that tab before another navigation. Redirects to a different URL

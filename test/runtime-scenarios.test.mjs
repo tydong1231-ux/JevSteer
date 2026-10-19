@@ -111,6 +111,16 @@ test("a sign-in page returns needs_login even when Jev also asks for vision", as
   assert.equal(form.commands.length + both.commands.length, 0);
 });
 
+test("explained rounds carry their timing and the guards' verdicts", async () => {
+  const k = new MemoryKapture({ elements: [button] });
+  k.onCommand = (command) => { if (command === "click") k.page.text = "Saved"; };
+  const result = await memoryRuntime(k, scriptedDecider([{ tool: "click" }, { tool: "none", done: 0.99 }])).run("Save", { evidenceLevel: "none", explain: true });
+  const [click, after] = result.rounds;
+  assert.equal(typeof click.decide_ms, "number");
+  assert.equal(typeof click.side_effect_guard, "number");
+  assert.equal(typeof after.observe_ms, "number");
+});
+
 test("low target confidence returns ambiguous without a click", async () => {
   const k = new MemoryKapture({ elements: [button] });
   const result = await memoryRuntime(k, scriptedDecider([() => {
@@ -351,14 +361,17 @@ test("a wait ends as soon as the page changes", async () => {
   assert.ok(Date.now() - started < 2500, `took ${Date.now() - started} ms`);
 });
 
-test("a wait in which the page sent requests is not idle", async () => {
+test("a wait in which the page sent requests is not idle, but three of them in a row stop", async () => {
   const k = new MemoryKapture({ text: "Generating", elements: [button] });
   let sent = 0;
-  // A job the page polls: each wait sees one more request, and no change yet.
+  // A job the page polls, or a page that polls badge counters: each wait sees
+  // one more request and no visible change.
   const runtime = memoryRuntime(k, scriptedDecider([() => { k.page.requests_since_input = ++sent; return decision({ tool: "wait" }); }]));
-  const result = await runtime.run("Show the report", { maxActions: 4, evidenceLevel: "none" });
-  assert.equal(result.status, "max_actions");
+  const result = await runtime.run("Show the report", { maxActions: 10, evidenceLevel: "none" });
   assert.ok(result.actions.every((a) => a.page_changed === undefined));
+  assert.equal(result.status, "stuck");
+  assert.equal(result.actions.filter((a) => a.action === "wait").length, 3);
+  assert.match(result.info, /did not change in 3 waits.*kept sending requests/);
 });
 
 test("the effect and constraint guards do not see how many requests earlier inputs sent", async () => {

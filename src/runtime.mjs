@@ -922,6 +922,7 @@ export class JevSteerRuntime {
       let pending;
       let waits = 0;
       let idleWaits = 0;
+      let quietWaits = 0;
       let retried = false;
       let lastAction = null;
       let lastGoodCheckpoint = null;
@@ -957,8 +958,8 @@ export class JevSteerRuntime {
         // sent no request means the page is settled: the result Jev waits for
         // is not coming, as when a report was generated for the old period.
         // Jev sees that in history.
-        const idleWait = lastAction?.tool === "wait" && lastChange === "no obvious visible change" && !page.loading?.busy && !page.pending_requests
-          && !(page.requests_since_input > (previous?.requests_since_input ?? 0));
+        const quietWait = lastAction?.tool === "wait" && lastChange === "no obvious visible change" && !page.loading?.busy && !page.pending_requests;
+        const idleWait = quietWait && !(page.requests_since_input > (previous?.requests_since_input ?? 0));
         if (idleWait) {
           const lastWait = history.findLast((h) => h.action === "wait");
           if (lastWait) lastWait.page_changed = false;
@@ -983,6 +984,7 @@ export class JevSteerRuntime {
           }
         }
         let answer;
+        const decideStarted = Date.now();
         if (executionMode === "form") {
           try {
             if (this.driver.kind !== "playwright" || verificationMode !== "host" || journalRecords.length) throw new Error("FORM_BINDING_REJECTED: form mode requires native Playwright, host verification and no unresolved actions");
@@ -1022,6 +1024,11 @@ export class JevSteerRuntime {
           stages: answer.stages,
           elements: page.elements.length,
           candidates: action.candidates,
+          // Time spent watching the previous input or wait, then deciding.
+          ...(observed.ms != null ? { observe_ms: observed.ms } : {}),
+          ...(observed.timed_out ? { observe_timed_out: true } : {}),
+          ...(page.requests_since_input != null ? { requests: page.requests_since_input } : {}),
+          decide_ms: Date.now() - decideStarted,
         };
         rounds.push(row);
         log(`r${round}`, JSON.stringify(row));
@@ -1199,9 +1206,13 @@ export class JevSteerRuntime {
         if (action.tool === "wait") {
           // Stop after a few waits in a row that changed nothing.
           idleWaits = idleWait ? idleWaits + 1 : 0;
-          if (idleWaits >= config.maxIdleWaits) {
+          // A page that keeps polling (badge counters, notifications) sends
+          // requests in every wait. One more wait than the idle limit, with
+          // nothing visible changing, is the most it gets.
+          quietWaits = quietWait ? quietWaits + 1 : 0;
+          if (idleWaits >= config.maxIdleWaits || quietWaits > config.maxIdleWaits) {
             status = "stuck";
-            info = `Jev kept waiting, but the page did not change in ${idleWaits} waits and nothing on it is loading. Waiting longer will not reach task.goal; inspect the page.${emptiedNote(page, confirmedTypes)}`;
+            info = `Jev kept waiting, but the page did not change in ${Math.max(idleWaits, quietWaits)} waits and nothing on it is loading${idleWaits < config.maxIdleWaits ? ", though it kept sending requests" : ""}. Waiting longer will not reach task.goal; inspect the page.${emptiedNote(page, confirmedTypes)}`;
             break;
           }
           if (++waits > config.maxWaits) { status = "stuck"; info = "The page never settled after repeated waits."; break; }
@@ -1319,6 +1330,12 @@ export class JevSteerRuntime {
           row.side_effect_guard = Number(sideEffect.toFixed(2));
           row.irreversible_guard = Number(irreversibleRisk.toFixed(2));
         }
+        // The round's row was logged before these verdicts existed.
+        if (exact || constraintGuard) log(`r${round} guards`, JSON.stringify({
+          ...(exact ? { side_effect_guard: row.side_effect_guard, irreversible_guard: row.irreversible_guard } : {}),
+          ...(constraintGuard ? { constraint_guard: Number(exactConstraintRisk.toFixed(2)) } : {}),
+          element: brief(action.el), scope: action.el?.scope || undefined, context: squash(action.el?.context, 160) || undefined,
+        }));
 
         const appliedBarrier = GUARDED.has(action.tool)
           ? await this.journal.replayProtected(tab.tabId, action, page, { intent: contract.goal })
