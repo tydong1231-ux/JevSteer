@@ -68,3 +68,20 @@ test("a ticket's assertions are checked on the page without its toasts, which is
   // The digest a ticket binds is the same with or without the toast.
   assert.equal(reviewedState(page).digest, reviewedState(kept).digest);
 });
+
+// ccMonet's global search: the results float under the focused box, read
+// apart from the page text, which stops at 24,000 characters.
+test("a ticket binds what a focused field's popup says, unless the field is secret", () => {
+  const search = { i: 0, tag: "input", role: "textbox", hint: "Search contacts, vendor bills...", value: "CP-MEIJI", context: "" };
+  const bills = (popup, field = search) => ({
+    url: "https://erp.test/protected/purchase/bills", title: "Bills", text: "Vendor Bills",
+    elements: [field], ...(popup ? { popup: { field: 0, text: popup } } : {}),
+  });
+  const found = reviewedState(bills("Vendor 1 CP-MEIJI CO.,LTD.")).digest;
+  assert.notEqual(reviewedState(bills("No results")).digest, found);
+  assert.notEqual(reviewedState(bills()).digest, found);
+  assert.equal(reviewedState(bills("Vendor 1 CP-MEIJI CO.,LTD.")).digest, found);
+  // A secret field's popup is read by no one (see readablePopup).
+  const pin = { ...search, label: "Card PIN", hint: undefined };
+  assert.equal(reviewedState(bills("4321 is too short", pin)).digest, reviewedState(bills("4321 is fine", pin)).digest);
+});

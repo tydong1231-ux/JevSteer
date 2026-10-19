@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { verifyActionEffect } from "./action-effect.mjs";
-import { FIELDISH } from "./page-model.mjs";
+import { FIELDISH, readablePopup } from "./page-model.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -30,6 +30,10 @@ export function observationSignature(page) {
   const state = [page.url, page.title, page.text, page.loading, page.elements.map((e) =>
     [e.tag, e.role, e.label, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.options?.filter((o) => o.selected).map((o) => o.value)])];
   if (page.page_id) state.push(page.page_id, page.frames, page.elements.map((e) => [e.form_key, e.record_key]));
+  // What a focused field's popup says (search results) is read apart from
+  // the page text, also past that text's cutoff, and a review can rest on it.
+  const popup = readablePopup(page);
+  if (popup) state.push(["popup", popup.field.i, popup.text]);
   return createHash("sha256").update(JSON.stringify(state)).digest("hex");
 }
 

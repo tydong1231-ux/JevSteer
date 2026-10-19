@@ -244,29 +244,61 @@ const multiSelect = `<style>
   </script>`;
 const markChosen = (page, name, chosen) => page.evaluate(([n, c]) => document.querySelector(`#tags_dropdown [title="${n}"]`).setAttribute('aria-selected', String(c)), [name, chosen]);
 
-test('an option the page chooses on its own after Jev looked is not clicked, so the multi-select keeps it', async ({ page }, testInfo) => {
-  await page.setContent(multiSelect);
-  const seen = {};
-  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
-    async (state, questions) => {
-      seen.offered = Object.values(questions.select_target?.criteria || {}).map((c) => c.choose_option).filter(Boolean);
-      const answer = decision({ tool: 'select', target: `${pick((e) => e.label === 'Tags')(state)}>${pick((e) => e.role === 'option' && e.label === 'Beta')(state)}` });
-      // A late update chooses Beta after Jev looked, before the click.
-      await markChosen(page, 'Beta', true);
-      return answer;
-    },
-    { tool: 'none', done: 0.99 },
-  ]));
-  try {
-    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
-    // Acme is chosen already, so the open list offers Beta and Gamma.
-    expect(seen.offered).toEqual(['Beta', 'Gamma']);
-    expect(result.actions[0]).toEqual({ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: the option is already chosen' });
-    expect(result.pending_actions).toBeUndefined();
-    expect(await page.evaluate(() => window.clicks)).toEqual([]);
-    await expect(page.locator('#tags_dropdown [title="Beta"]')).toHaveAttribute('aria-selected', 'true');
-  } finally { await mcp.close(); }
-});
+// Jev chooses Beta from Tags' open list: with SELECT, or with a click on the
+// option, which the CLICK head offers too.
+const betaFromTags = (how) => (state) => {
+  const beta = pick((e) => e.role === 'option' && e.label === 'Beta')(state);
+  return decision(how === 'select' ? { tool: 'select', target: `${pick((e) => e.label === 'Tags')(state)}>${beta}` } : { tool: 'click', target: beta });
+};
+
+for (const how of ['select', 'click']) {
+  test(`an option the page chooses on its own after Jev looked is not clicked, so the multi-select keeps it (${how})`, async ({ page }, testInfo) => {
+    await page.setContent(multiSelect);
+    const seen = {};
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+      async (state, questions) => {
+        seen.offered = Object.values(questions.select_target?.criteria || {}).map((c) => c.choose_option).filter(Boolean);
+        const answer = betaFromTags(how)(state);
+        // A late update chooses Beta after Jev looked, before the click.
+        await markChosen(page, 'Beta', true);
+        return answer;
+      },
+      { tool: 'none', done: 0.99 },
+    ]));
+    try {
+      const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+      expect(await page.evaluate(() => window.clicks)).toEqual([]);
+      await expect(page.locator('#tags_dropdown [title="Beta"]')).toHaveAttribute('aria-selected', 'true');
+      // Acme is chosen already, so the open list offers Beta and Gamma.
+      expect(seen.offered).toEqual(['Beta', 'Gamma']);
+      expect(result.actions[0]).toEqual({ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: the option is already chosen' });
+      expect(result.pending_actions).toBeUndefined();
+    } finally { await mcp.close(); }
+  });
+}
+
+// A click on a chosen option of a multi-select takes it out. Jev's click to
+// take Acme out is sent while Acme is still chosen. Once the page has taken
+// Acme out on its own after Jev looked, that click would put it back.
+for (const late of [false, true]) {
+  test(`a click Jev chooses to take an option out of a multi-select ${late ? 'is not sent once the page has taken it out on its own' : 'is sent while the option is still chosen'}`, async ({ page }, testInfo) => {
+    await page.setContent(multiSelect);
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+      async (state) => {
+        const answer = decision({ tool: 'click', target: pick((e) => e.role === 'option' && e.label === 'Acme')(state) });
+        if (late) await markChosen(page, 'Acme', false);
+        return answer;
+      },
+      { tool: 'none', done: 0.99 },
+    ]));
+    try {
+      const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: "Take the Acme tag off the contact", verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+      expect(await page.evaluate(() => window.clicks)).toEqual(late ? [] : ['tags_dropdown:Acme']);
+      await expect(page.locator('#tags_dropdown [title="Acme"]')).toHaveAttribute('aria-selected', 'false');
+      if (late) expect(result.actions[0]).toEqual({ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: the option is no longer chosen' });
+    } finally { await mcp.close(); }
+  });
+}
 
 // Tags and Labels list the same names, and the open list floats apart from
 // Tags. The guards must see which field a choice changes: a rule about Tags
@@ -275,10 +307,7 @@ for (const how of ['select', 'click']) {
   test(`the guards see which combobox an option from its open list changes, so a rule about that field stops it (${how})`, async ({ page }, testInfo) => {
     await page.setContent(multiSelect);
     const judged = {};
-    const steps = scriptedDecider([(state) => {
-      const beta = pick((e) => e.role === 'option' && e.label === 'Beta')(state);
-      return decision(how === 'select' ? { tool: 'select', target: `${pick((e) => e.label === 'Tags')(state)}>${beta}` } : { tool: 'click', target: beta });
-    }]);
+    const steps = scriptedDecider([betaFromTags(how)]);
     const decider = async (state, questions) => {
       if (questions.action_side_effect) {
         judged.effects = state.proposed_action;
@@ -374,6 +403,93 @@ test('before input, an option from an open list must still be unchosen and liste
   } finally { await driver.close(); }
 });
 
+test('before input, an option Jev clicks in an open list must still be chosen or unchosen as Jev saw it', async ({ page }) => {
+  await page.setContent(multiSelect);
+  const { driver, id } = await driverFor(page);
+  // A click Jev chooses on an option of Tags' open list (see the runtime).
+  const clickListed = async (name) => {
+    const seen = await driver.observe(id);
+    const box = seen.elements.find((e) => e.label === 'Tags');
+    const option = seen.elements.find((e) => e.role === 'option' && e.label === name);
+    expect(option.popup_of).toBe(box.i);
+    return { tool: 'click', listed_in: box, target: option.i, el: option, observedUrl: seen.url };
+  };
+  const unchosen = 'STALE_TARGET: the option is no longer chosen';
+  try {
+    // Jev clicks chosen Acme to take it out. Taken out after the check,
+    // before the journal: refused, nothing journaled.
+    let action = await clickListed('Acme');
+    await driver.assertTargetFresh(id, action);
+    await markChosen(page, 'Acme', false);
+    let journaled = 0;
+    let result = await driver.perform(id, action, action.el, { beforeDispatch: async () => { journaled++; } });
+    expect([result.state, result.error, journaled]).toEqual(['predispatch_rejected', unchosen, 0]);
+    // Taken out while the journal is written: still refused before input.
+    await markChosen(page, 'Acme', true);
+    action = await clickListed('Acme');
+    await driver.assertTargetFresh(id, action);
+    result = await driver.perform(id, action, action.el, { beforeDispatch: () => markChosen(page, 'Acme', false) });
+    expect([result.state, result.error]).toEqual(['predispatch_rejected', unchosen]);
+    // Taken out before the check.
+    await markChosen(page, 'Acme', true);
+    action = await clickListed('Acme');
+    await markChosen(page, 'Acme', false);
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow(unchosen);
+    // Unchosen Beta, chosen after the check: refused as a SELECT of it is.
+    action = await clickListed('Beta');
+    await driver.assertTargetFresh(id, action);
+    await markChosen(page, 'Beta', true);
+    result = await driver.perform(id, action, action.el);
+    expect([result.state, result.error]).toEqual(['predispatch_rejected', 'STALE_TARGET: the option is already chosen']);
+    // Its combobox closed: refused, as for SELECT.
+    action = await clickListed('Gamma');
+    await page.evaluate(() => document.querySelector('#tags').setAttribute('aria-expanded', 'false'));
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow('STALE_TARGET: the option is no longer listed under the combobox it was chosen from');
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+    // As Jev saw it, chosen: the click takes Beta out.
+    await page.evaluate(() => document.querySelector('#tags').setAttribute('aria-expanded', 'true'));
+    action = await clickListed('Beta');
+    await driver.assertTargetFresh(id, action);
+    expect((await driver.perform(id, action, action.el)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => window.clicks)).toEqual(['tags_dropdown:Beta']);
+    await expect(page.locator('#tags_dropdown [title="Beta"]')).toHaveAttribute('aria-selected', 'false');
+  } finally { await driver.close(); }
+});
+
+// The host's own click (browser_act) on an option the snapshot showed in an
+// open list is checked the same way, against that snapshot.
+test('browser_act clicks an option of an open list only while it is listed under the combobox the snapshot showed, chosen or not as shown', async ({ page }, testInfo) => {
+  await page.setContent(multiSelect);
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([]));
+  const option = async (name) => {
+    await mcp.runtime.snapshotText(mcp.id);
+    return mcp.runtime.shown.elements.find((e) => e.role === 'option' && e.label === name).i;
+  };
+  const click = (element) => mcp.call('browser_act', { tab_id: mcp.id, action: 'click', element });
+  const showList = (id, open) => page.evaluate(([id, open]) => {
+    document.querySelector(`#${id}`).setAttribute('aria-expanded', String(open));
+    document.querySelector(`#${id}_dropdown`).classList.toggle('ant-select-dropdown-hidden', !open);
+  }, [id, open]);
+  try {
+    // Chosen by the page after the snapshot: a click would take it out.
+    let beta = await option('Beta');
+    await markChosen(page, 'Beta', true);
+    await expect(click(beta)).rejects.toThrow('STALE_ELEMENT: option "Beta" is chosen now. Take a new browser_snapshot.');
+    // The same options now listed under Labels, Tags closed.
+    await markChosen(page, 'Beta', false);
+    beta = await option('Beta');
+    await showList('tags', false);
+    await showList('labels', true);
+    await expect(click(beta)).rejects.toThrow('STALE_ELEMENT: option "Beta" is no longer listed under the open combobox "Tags". Take a new browser_snapshot.');
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+    // Listed under Tags as the snapshot showed: clicked.
+    await showList('labels', false);
+    await showList('tags', true);
+    await click(await option('Gamma'));
+    expect(await page.evaluate(() => window.clicks)).toEqual(['tags_dropdown:Gamma']);
+  } finally { await mcp.close(); }
+});
+
 // Two antd selects with the same caption: identical controls. The first is
 // open and empty; the second is closed and shows `shown` when given. Each
 // lists the same options.
@@ -395,46 +511,66 @@ const twinTags = (shown) => `<style>
       o.setAttribute('aria-selected', String(o.getAttribute('aria-selected') !== 'true'));
     });
   </script>`;
-const chooseUnderFirst = (state) => decision({ tool: 'select', target: `${state.page.elements.find((e) => e.role === 'combobox' && e.expanded)?.i}>${pick((e) => e.role === 'option' && e.label === 'Beta')(state)}` });
+// Jev chooses Beta from the open list: with SELECT on the open combobox, or
+// with a click on the option.
+const betaUnderOpen = (how) => (state) => {
+  const beta = pick((e) => e.role === 'option' && e.label === 'Beta')(state);
+  return decision(how === 'select' ? { tool: 'select', target: `${state.page.elements.find((e) => e.role === 'combobox' && e.expanded)?.i}>${beta}` } : { tool: 'click', target: beta });
+};
 
-// Codex on ac65567: the open list moved from the chosen select to its twin
-// after Jev looked. The twin's identical option is the only one shown, and
-// its select matches the chosen one's identity. The chosen select is found by
-// what it shows (nothing), not by being the open one; it is closed now.
-test('an option is not clicked once its list has moved to an identical combobox', async ({ page }, testInfo) => {
-  await page.setContent(twinTags('Urgent'));
-  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
-    async (state) => {
-      const answer = chooseUnderFirst(state);
-      await page.evaluate(() => {
-        document.querySelector('#a').setAttribute('aria-expanded', 'false');
-        document.querySelector('#a_dropdown').classList.add('ant-select-dropdown-hidden');
-        document.querySelector('#b').setAttribute('aria-expanded', 'true');
-        document.querySelector('#b_dropdown').classList.remove('ant-select-dropdown-hidden');
-      });
-      return answer;
-    },
-    { tool: 'none', done: 0.99 },
-  ]));
-  try {
-    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
-    expect(result.actions[0]).toEqual({ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: the option is no longer listed under the combobox it was chosen from' });
-    expect(result.pending_actions).toBeUndefined();
-    expect(await page.evaluate(() => window.clicks)).toEqual([]);
-  } finally { await mcp.close(); }
-});
+for (const how of ['select', 'click']) {
+  // Codex on ac65567: the open list moved from the chosen select to its twin
+  // after Jev looked. The twin's identical option is the only one shown, and
+  // its select matches the chosen one's identity. The chosen select is found
+  // by what it shows (nothing), not by being the open one; it is closed now.
+  test(`an option is not clicked once its list has moved to an identical combobox (${how})`, async ({ page }, testInfo) => {
+    await page.setContent(twinTags('Urgent'));
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+      async (state) => {
+        const answer = betaUnderOpen(how)(state);
+        await page.evaluate(() => {
+          document.querySelector('#a').setAttribute('aria-expanded', 'false');
+          document.querySelector('#a_dropdown').classList.add('ant-select-dropdown-hidden');
+          document.querySelector('#b').setAttribute('aria-expanded', 'true');
+          document.querySelector('#b_dropdown').classList.remove('ant-select-dropdown-hidden');
+        });
+        return answer;
+      },
+      { tool: 'none', done: 0.99 },
+    ]));
+    try {
+      const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+      expect(await page.evaluate(() => window.clicks)).toEqual([]);
+      expect(result.actions[0]).toEqual({ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: the option is no longer listed under the combobox it was chosen from' });
+      expect(result.pending_actions).toBeUndefined();
+    } finally { await mcp.close(); }
+  });
 
-// Twins that nothing tells apart but which one is open: an option from the
-// open one's list is refused, as the open list could move to the other.
-test('an option listed under one of two identical comboboxes nothing tells apart is refused, and the run stops as ambiguous', async ({ page }, testInfo) => {
+  // Twins that nothing tells apart but which one is open: an option from the
+  // open one's list is refused, as the open list could move to the other.
+  test(`an option listed under one of two identical comboboxes nothing tells apart is refused, and the run stops as ambiguous (${how})`, async ({ page }, testInfo) => {
+    await page.setContent(twinTags());
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([betaUnderOpen(how)]));
+    try {
+      const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+      expect(await page.evaluate(() => window.clicks)).toEqual([]);
+      expect(result.status).toBe('ambiguous');
+      expect(result.info).toMatch(/^Jev chose option "Beta" from the list of one of several identical comboboxes on this page, and nothing tells them apart, so no input was sent/);
+      expect(result.actions.map((a) => a.detail ?? a.error)).toEqual(["STALE_TARGET: ambiguous: the option's combobox has identical twins", "STALE_TARGET: ambiguous: the option's combobox has identical twins"]);
+      expect(result.pending_actions).toBeUndefined();
+    } finally { await mcp.close(); }
+  });
+}
+
+// The same for the host's own click: in the snapshot, only which one is open
+// tells the two comboboxes apart.
+test('browser_act does not click an option listed under one of two identical comboboxes nothing tells apart', async ({ page }, testInfo) => {
   await page.setContent(twinTags());
-  const mcp = await mcpFixture(page, testInfo, scriptedDecider([chooseUnderFirst]));
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([]));
   try {
-    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
-    expect(result.status).toBe('ambiguous');
-    expect(result.info).toMatch(/^Jev chose option "Beta" from the list of one of several identical comboboxes on this page, and nothing tells them apart, so no input was sent/);
-    expect(result.actions.map((a) => a.detail ?? a.error)).toEqual(["STALE_TARGET: ambiguous: the option's combobox has identical twins", "STALE_TARGET: ambiguous: the option's combobox has identical twins"]);
-    expect(result.pending_actions).toBeUndefined();
+    await mcp.runtime.snapshotText(mcp.id);
+    const beta = mcp.runtime.shown.elements.find((e) => e.role === 'option' && e.label === 'Beta').i;
+    await expect(mcp.call('browser_act', { tab_id: mcp.id, action: 'click', element: beta })).rejects.toThrow("STALE_TARGET: ambiguous: the option's combobox has identical twins");
     expect(await page.evaluate(() => window.clicks)).toEqual([]);
   } finally { await mcp.close(); }
 });

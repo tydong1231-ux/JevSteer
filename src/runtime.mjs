@@ -13,7 +13,7 @@ import { normalizeMilestonePlan, milestoneForHost } from "./milestones.mjs";
 import { verifyActionEffect } from "./action-effect.mjs";
 import { sameDateText } from "./date-text.mjs";
 import { buildEvidencePacket, evidenceRef, relevantRequest, safeUrl, sanitizeNetworkBody, summarizeRequest } from "./evidence.mjs";
-import { buildTargetSpace, availableTools, eligibleFor, listedOptions, NO_TARGET, TARGETED_TOOLS } from "./decision-space.mjs";
+import { buildTargetSpace, availableTools, eligibleFor, listedOptions, listingCombobox, NO_TARGET, TARGETED_TOOLS } from "./decision-space.mjs";
 import { generateFieldText } from "./text-helper.mjs";
 import { locateSameElement, equivalentLink, sameIdentity, rememberField, findRemembered, twinsOf, pickTwin } from "./element-identity.mjs";
 import { ActionJournal } from "./action-journal.mjs";
@@ -155,6 +155,31 @@ function observedFor(page, el, listedIn) {
   const observed = (e) => page.elements.find((x) => x.i === e.i);
   const owner = listedIn && observed(listedIn);
   return { twins: twinsOf(observed(el) || el, page), ...(owner ? { owner_twins: twinsOf(owner, page, { ignore: ["expanded"] }) } : {}) };
+}
+
+// A click browser_act sends to an option of an open combobox's list is
+// checked as Jev's is (see resolve). From the snapshot to the click, an
+// option the snapshot showed in such a list stays listed under that
+// combobox, found as the snapshot told it from identical ones; and an option
+// so listed then or now is still chosen or unchosen as the snapshot showed
+// it. Returns the combobox that lists it now, for the driver's checks.
+function listedSinceSnapshot(shown, oldElement, current, currentElement) {
+  const listedIn = listingCombobox(currentElement, current.elements);
+  const shownOwner = listingCombobox(oldElement, shown.elements);
+  if (shownOwner) {
+    const owners = current.elements.filter((e) => e.frame_id === shownOwner.frame_id && e.document_id === shownOwner.document_id && sameIdentity(shownOwner, e, current.url));
+    const twins = twinsOf(shownOwner, shown, { ignore: ["expanded"] });
+    // As for Jev's click (see the driver): the open list can move to a twin.
+    if (twins && !twins.distinct) throw new Error("STALE_TARGET: ambiguous: the option's combobox has identical twins");
+    const owner = twins ? pickTwin(twins, owners) : owners.length === 1 ? owners[0] : undefined;
+    if (!listedIn || owner !== listedIn) {
+      throw new Error(`STALE_ELEMENT: ${brief(oldElement)} is no longer listed under the open ${brief(shownOwner)}. Take a new browser_snapshot.`);
+    }
+  }
+  if ((shownOwner || listedIn) && (oldElement.selected === true) !== (currentElement.selected === true)) {
+    throw new Error(`STALE_ELEMENT: ${brief(oldElement)} is ${currentElement.selected === true ? "chosen" : "no longer chosen"} now. Take a new browser_snapshot.`);
+  }
+  return listedIn;
 }
 
 // Names those fields when a run stops without verifying its goal.
@@ -899,7 +924,8 @@ export class JevSteerRuntime {
     // showed then and offers it no more for TYPE. Built from the page as
     // observed, a typed search box known only by its hint would not take
     // the Enter Jev chose for it.
-    const space = buildTargetSpace(answer.target_elements || page.elements);
+    const offered = answer.target_elements || page.elements;
+    const space = buildTargetSpace(offered);
     // A Jev choice head can only address the operation it was built for.
     const targetAnswer = answer[`${tool}_target`] || answer.target;
     const candidates = space.candidates[tool] || [];
@@ -910,10 +936,15 @@ export class JevSteerRuntime {
     const onlyValueKey = tool === "type" && Object.keys(values).length === 1 ? Object.keys(values)[0] : undefined;
     // An option an open combobox lists is chosen by clicking it. Before the
     // click, the driver checks that this combobox still lists it, unchosen.
+    // A CLICK Jev chooses on such an option is checked the same way, except
+    // that the option must still be chosen or unchosen as Jev saw it: a click
+    // on a chosen option of a multi-select takes it out.
     const listed = picked?.listed;
+    const listedIn = listed ? picked.element : tool === "click" ? listingCombobox(picked?.element, offered) : undefined;
     return {
       tool: listed ? "click" : tool,
-      ...(listed ? { chosen_as: "select", listed_in: picked.element } : {}),
+      ...(listed ? { chosen_as: "select" } : {}),
+      ...(listedIn ? { listed_in: listedIn } : {}),
       ...(TARGETED.has(tool) && targetAnswer?.choice === NO_TARGET ? { declined: true } : {}),
       p_tool: answer.tool.probabilities?.[answer.tool.choice] ?? 0,
       target: (listed || picked?.element)?.i ?? null,
@@ -1967,10 +1998,12 @@ export class JevSteerRuntime {
       // selector; these actions can submit a form just like clicking Save.
       const current = element != null || GUARDED.has(action) ? await this.readPage(tab.tabId) : null;
       const currentElement = oldElement ? this.findCurrentElement(oldElement, current, action) : undefined;
+      const listedIn = action === "click" && currentElement ? listedSinceSnapshot(this.shown, oldElement, current, currentElement) : undefined;
       const normalized = {
         tool: action,
         target: currentElement?.i,
         el: currentElement,
+        ...(listedIn ? { listed_in: listedIn } : {}),
         // Ignore parameters that the browser command itself ignores.
         // Otherwise an unused value/key could change a journal fingerprint
         // and bypass protection against replaying the identical mutation.
@@ -1978,7 +2011,7 @@ export class JevSteerRuntime {
           : action === "type" ? value : undefined,
         key: action === "press_key" ? (key || "Escape") : action === "press_enter" ? "Enter" : undefined,
         observedUrl: current?.url,
-        observed: current && currentElement ? observedFor(current, currentElement) : undefined,
+        observed: current && currentElement ? observedFor(current, currentElement, listedIn) : undefined,
       };
       const guarded = GUARDED.has(action);
       if (guarded) {

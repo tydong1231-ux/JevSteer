@@ -139,6 +139,15 @@ test("an open combobox offers the options its popup lists for SELECT; choosing o
     select_target: choice(space.questions.select_target.criteria, "0>2"),
   }, { customer: "Acme" });
   assert.deepEqual([action.tool, action.chosen_as, action.target, action.el.selector, action.value, action.p_target], ["click", "select", 2, "#acme", undefined, 1]);
+  assert.equal(action.listed_in.selector, "#customer");
+  // A CLICK on an option the open combobox lists, chosen or not, keeps that
+  // combobox too, so the driver checks it the same way before input. An
+  // option no open combobox lists is a plain click.
+  const click = (target) => runtime.resolve({ url: "https://erp.test/invoices/new", elements }, {
+    tool: { choice: "click", probabilities: { click: 0.7 } },
+    click_target: { choice: String(target), probabilities: { [String(target)]: 0.9 } },
+  }, {});
+  assert.deepEqual([4, 5].map((i) => [click(i).el.selector, click(i).chosen_as, click(i).listed_in?.selector]), [["#beta", undefined, "#customer"], ["#other", undefined, undefined]]);
 });
 
 test("a head with one target can turn it down", () => {

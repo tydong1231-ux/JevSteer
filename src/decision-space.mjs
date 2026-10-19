@@ -48,6 +48,14 @@ export function listedOptions(e, pool = []) {
   return pool.filter(o => o.popup_of === e.i && o.role === "option" && o.selector && !o.disabled && o.selected !== true).slice(0, 24);
 }
 
+// The open combobox whose list shows this option, chosen or not. A click on
+// the option is checked before input like a SELECT of it (see the driver).
+export function listingCombobox(o, pool = []) {
+  if (o?.role !== "option" || o.popup_of == null || !o.selector) return undefined;
+  const e = pool.find((x) => x.i === o.popup_of);
+  return SELECTISH(e) && e.tag !== "select" && e.expanded === true ? e : undefined;
+}
+
 // A head with one target would give it every time, fitting or not: after the
 // search box was typed, "Page Size" was the only TYPE target left. It can
 // answer this instead.

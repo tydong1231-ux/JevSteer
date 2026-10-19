@@ -150,7 +150,7 @@ export class PlaywrightDriver {
     if (!pick) throw new Error(`STALE_TARGET: ambiguous: ${matches.length} identical controls`);
     if (pick.disabled || action.tool === 'type' && pick.readonly) throw new Error('STALE_TARGET: disabled or read-only');
     if (['type', 'select'].includes(action.tool) && String(original.value ?? '') !== String(pick.value ?? '')) throw new Error('STALE_TARGET: live field value changed');
-    if (action.chosen_as === 'select') assertStillListed(action, pick, fresh);
+    if (action.listed_in) assertStillListed(action, pick, fresh);
     action.el = pick;
   }
 
@@ -181,8 +181,8 @@ export class PlaywrightDriver {
         const doc = `${this.frameInfo(entry.frame).id}:${this.frameInfo(entry.frame).revision}:${state.documentKey}`;
         if (!current || doc !== target.document_id || !sameIdentity(target, current, state.url) || current.disabled) throw new Error('STALE_TARGET: live target identity changed');
         if (['type', 'select'].includes(action.tool) && !sensitiveFieldValueEqual(target, current)) throw new Error('STALE_TARGET: live field value changed');
-        if (action.chosen_as === 'select') {
-          if (current.selected === true) throw new Error(OPTION_CHOSEN);
+        if (action.listed_in) {
+          assertChosenAsSeen(action, current);
           owner = await pinned(record, action.listed_owner, timeout);
           await assertOwnerHolds(owner, action.listed_owner, handle);
         }
@@ -212,8 +212,8 @@ export class PlaywrightDriver {
         if (!current || !sameIdentity(action.el, current, state.url) || current.disabled
             || doc !== action.el.document_id
             || ['type', 'select'].includes(action.tool) && !sensitiveFieldValueEqual(action.el, current)) throw new Error('STALE_TARGET: target changed while persisting intent');
-        if (action.chosen_as === 'select') {
-          if (current.selected === true) throw new Error(OPTION_CHOSEN);
+        if (action.listed_in) {
+          assertChosenAsSeen(action, current);
           await assertOwnerHolds(owner, action.listed_owner, handle);
         }
         force = forced(action, current);
@@ -317,14 +317,21 @@ function forced(action, current) {
   return current.drag_disabled === true && ['click', 'type', 'select'].includes(action.tool);
 }
 
-// An option chosen from an open combobox's list is clicked (see
-// listedOptions). Before input it must still be listed under that combobox,
-// which is still open, and must not be chosen already: on a multi-select a
-// click on a chosen option takes it out again.
+// An option from an open combobox's list is clicked: one chosen with SELECT
+// (see listedOptions), or one Jev clicks. Before input it must still be
+// listed under that combobox, which is still open, and still chosen or
+// unchosen as it was when the click was chosen: on a multi-select a click on
+// a chosen option takes it out again. SELECT offers only unchosen options.
 const OPTION_CHOSEN = 'STALE_TARGET: the option is already chosen';
+const OPTION_UNCHOSEN = 'STALE_TARGET: the option is no longer chosen';
 const NOT_LISTED = 'STALE_TARGET: the option is no longer listed under the combobox it was chosen from';
+function assertChosenAsSeen(action, option) {
+  if ((option.selected === true) !== (action.listed_chosen === true)) throw new Error(action.listed_chosen ? OPTION_UNCHOSEN : OPTION_CHOSEN);
+}
 function assertStillListed(action, option, page) {
-  if (option.selected === true) throw new Error(OPTION_CHOSEN);
+  // `action.el` is still the option as the decision saw it.
+  action.listed_chosen = action.chosen_as !== 'select' && action.el?.selected === true;
+  assertChosenAsSeen(action, option);
   const listedIn = action.listed_in;
   if (!listedIn) throw new Error(NOT_LISTED);
   // Its combobox is found as any target is: the one control with its

@@ -152,6 +152,44 @@ test('on a page too large for one decision, the group summary shows the box Jev 
   } finally { await mcp.close(); }
 });
 
+// Search results under a box that sits past the page text that is read (the
+// first 24,000 characters). What they say is read only as the box's popup,
+// and the summary is in no control's own text.
+const farResults = `<p>${'Bills imported from the bank feed. '.repeat(800)}</p>
+  <div style="position:relative;width:600px">
+    <div style="position:relative"><input type="text" placeholder="Search bills" style="width:100%"></div>
+    <div id="results" style="position:absolute;left:0;right:0;top:100%;margin-top:8px;display:none;background:#fff">
+      <p id="summary">1 bill matches CP-MEIJI: 9001563832, ฿1,732.00</p>
+      <div><button type="button">See all results</button></div>
+    </div>
+  </div>
+  <script>
+    const box = document.querySelector('input');
+    box.addEventListener('input', () => { document.querySelector('#results').style.display = box.value ? '' : 'none'; });
+  </script>`;
+
+test('a review ticket binds the results under the search box, so results that change before acceptance make it stale', async ({ page }, testInfo) => {
+  await page.setContent(farResults);
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'type', target: state.page.elements.find((e) => e.placeholder === 'Search bills').i }),
+    { tool: 'none', done: 0.99 },
+  ]));
+  const search = () => mcp.call('browser_run', {
+    tab_id: mcp.id, goal: 'Search bills for CP-MEIJI', success_criteria: ['The results show the CP-MEIJI bill 9001563832'],
+    values: { vendor: 'CP-MEIJI' }, verification_mode: 'host', max_actions: 3, evidence_level: 'none',
+  });
+  const review = (ticket) => mcp.call('browser_review', { tab_id: mcp.id, review_id: ticket.host_review.review_id, decision: 'accept', goal_evidence: 'The search box shows CP-MEIJI', criteria_evidence: ['The results under the box list bill 9001563832'] });
+  try {
+    const ticket = await search();
+    expect(ticket.status).toBe('host_review_required');
+    // The host reads the results from the popup; the page text stops before them.
+    expect(ticket.verification.observation.popup.shows).toBe('1 bill matches CP-MEIJI: 9001563832, ฿1,732.00 See all results');
+    expect(ticket.verification.observation.text).not.toContain('9001563832');
+    await page.evaluate(() => { document.querySelector('#summary').textContent = 'No bills match CP-MEIJI'; });
+    expect((await review(ticket)).status).toBe('host_review_stale');
+  } finally { await mcp.close(); }
+});
+
 // A password box whose strength popup echoes what was typed, after more page
 // text than Jev reads.
 const secretEcho = `<p>${'Terms of service. '.repeat(560)}</p>

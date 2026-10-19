@@ -195,6 +195,17 @@ unlinked list still drawn for it).
 Otherwise the click is refused before any input as a stale target
 (`STALE_TARGET: the option is already chosen`, or `... no longer listed under
 the combobox it was chosen from`), and Jev looks again.
+A CLICK Jev chooses on an option an open combobox lists, chosen or not, goes
+through the same checks, except that the option must still be chosen or
+unchosen as Jev saw it: a chosen one the page took out on its own after Jev
+looked is not clicked (`STALE_TARGET: the option is no longer chosen`), since
+the click would put it back. So does a click `browser_act` sends to such an
+option: from the `browser_snapshot` to the click, the option must stay listed
+under the open combobox the snapshot showed it under, that combobox found as
+the snapshot told it from identical ones, and stay chosen or unchosen as
+shown; otherwise it fails with `STALE_ELEMENT` and nothing is sent. When only
+which one is open told the comboboxes apart in the snapshot, it fails with the
+ambiguity error above.
 SELECT on a closed custom combobox opens it with a click. When another
 combobox's open list covers it, that click is refused before the journal
 (`predispatch_rejected`, nothing pending), and the error names the cover:
@@ -252,6 +263,10 @@ substitute for the host checking all semantic criteria and rejecting weak matche
 
 A pending ticket blocks browser input, navigation and new runs on that tab across
 MCP restarts. Acceptance requires the same observed page state and a non-busy page.
+That state includes what a focused field's popup says (search results under a
+search box, see above), which is read apart from the page text and also past
+its cutoff, so results that change before acceptance make the ticket stale. A
+secret field's popup is left out.
 A toast, such as antd's "Update successfully" message (under any class prefix),
 a toast or snackbar, or another fixed-position alert or status region, goes away
 on its own, so the state a ticket binds leaves its text out; the host still sees

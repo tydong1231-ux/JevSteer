@@ -345,10 +345,13 @@ test("the exact guards see an option chosen from an open list as a SELECT on its
   await runtime.checkConstraint(page, contract, action, []);
   const asSelect = { tool: "select", element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", selected_option: { text: "Closed" } };
   assert.deepEqual(seen, { "action_irreversible,action_side_effect": asSelect, violates: asSelect });
-  // A click on an option names its combobox, and whether the option is chosen
-  // now: a click on a chosen one of a multi-select takes it out.
+  // A CLICK on an option names its combobox, and whether the option is chosen
+  // now: a click on a chosen one of a multi-select takes it out. Such a click
+  // is checked before input as a SELECT is (see the driver).
   for (const [option, selected] of [[closed, false], [open, true]]) {
-    await runtime.checkConstraint(page, contract, { tool: "click", el: option }, []);
+    const click = runtime.resolve(page, decision({ tool: "click", target: option.i }), {});
+    assert.deepEqual([click.tool, click.chosen_as, click.listed_in?.selector, click.el.selector], ["click", undefined, "#status", option.selector]);
+    await runtime.checkConstraint(page, contract, click, []);
     assert.deepEqual(seen.violates, {
       tool: "click", element: `option "${option.label}"`, context: "Open Closed",
       option_of: { element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42" }, selected,
