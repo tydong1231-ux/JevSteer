@@ -232,9 +232,12 @@ notifications), its counts stay in the bound state, so "Cart 2" turning into
 "Cart 3" makes the ticket stale. A toast over an open drawer or modal is part of
 the page text too. A new ticket waits while a toast shows, up to
 `JEVSTEER_REVIEW_TOAST_WAIT_MS` (default 4000), because the app may still be
-closing a drawer and reloading its list behind it; a contract that asserts the
-toast's text does not wait. Acceptance does not wait: a toast then still makes
-the ticket stale.
+closing a drawer and reloading its list behind it. Acceptance does not wait: a
+toast then still makes the ticket stale. A deterministic assertion passes a
+ticket only when it also holds on what the ticket binds, the page without its
+toasts, so it still holds when the host accepts. An assertion met only by a
+toast fails with `verification_failed`: assert what the page keeps (a status,
+a saved row) instead.
 `host_review_stale` requires rejection and re-observation of the same milestone,
 not replaying the earlier action. After a stale ticket is rejected, rerunning
 that milestone with the same `run_id` re-observes: in host and hybrid modes the
@@ -327,8 +330,10 @@ the same way. It usually only closes a menu, popup or dialog, but a page can
 answer it (an autosave, a cancel) on channels the runtime cannot fully see: a
 WebSocket opened before JevSteer attached, a service worker, a save it
 debounces. So the runtime never infers its outcome from quiet traffic; the host
-checks the page and resolves it. Escape carries no remote risk, so a resolved
-Escape is not replay protected and can be pressed again.
+checks the page and resolves it. `not_applied` says nothing changed on the site
+(a menu, popup or dialog only closed), and Escape can be pressed again.
+`applied` says it saved or cancelled something on the site, and then the same
+Escape on that page is refused as a replay, like any applied input.
 
 The runtime can continue after a lost acknowledgement only when a low-risk local
 effect is mechanically confirmed, or return success when the final task outcome

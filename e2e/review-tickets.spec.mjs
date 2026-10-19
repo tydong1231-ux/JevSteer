@@ -131,6 +131,29 @@ for (const [name, onSave, said] of [
   });
 }
 
+// A ticket binds the page without its toasts, and the host accepts after they
+// have gone. An assertion met only by a toast would no longer hold then.
+for (const [value, status] of [['Update successfully', 'verification_failed'], ['Status: Saved', 'completed_host_verified']]) {
+  test(`a ticket assertion on "${value}" is checked on what the ticket binds`, async ({ page }, testInfo) => {
+    await page.setContent(customer);
+    const mcp = await mcpFixture(page, testInfo, save());
+    // Bind at once, while the toast shows.
+    Object.assign(mcp.runtime.observation, { reviewToastWaitMs: 0 });
+    try {
+      const ticket = await run(mcp, { assertions: [{ type: 'text_contains', value }] });
+      if (status === 'verification_failed') {
+        expect(ticket.status).toBe('verification_failed');
+        expect(ticket.verification.assertions[0]).toMatchObject({ passed: false, error: expect.stringMatching(/met only by a message that fades/) });
+        expect(ticket.info).toMatch(/Assert what the page keeps/);
+        return;
+      }
+      expect(ticket.status).toBe('host_review_required');
+      await expect(page.locator('.ant-message-notice')).toHaveCount(0);
+      expect((await review(mcp, ticket, 'accept')).status).toBe(status);
+    } finally { await mcp.close(); }
+  });
+}
+
 // ccMonet after Create in its customer drawer: the success message shows, the
 // drawer closes, and the list reloads behind it a moment later (Mac rerun,
 // 2026-10-19). A ticket issued at once missed the new row.

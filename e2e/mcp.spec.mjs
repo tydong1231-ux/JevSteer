@@ -292,8 +292,8 @@ test('while a write is unconfirmed, a new tab opens only a blank page or the add
 
 // Escape on no element is journaled like any input: a page can answer it
 // (an autosave, a cancel) on a channel the runtime cannot see. The host
-// resolves it; a resolved Escape is not replay protected.
-test('Escape pressed on no element waits for the host like any key; once resolved it frees the session and can be pressed again', async ({ page }, testInfo) => {
+// resolves it: not_applied when nothing changed on the site.
+test('Escape pressed on no element waits for the host like any key; resolved not_applied it frees the session and can be pressed again', async ({ page }, testInfo) => {
   await page.setContent('<form><label>Search <input name="q"></label></form><div role="menu"><div role="menuitem">Export</div></div>');
   const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]), { driver: { sessionId: 'escape-fixture' } });
   try {
@@ -305,7 +305,7 @@ test('Escape pressed on no element waits for the host like any key; once resolve
     await expect(mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_ACTION/);
     const other = await mcp.call('browser_open', { url: 'about:blank' });
     await expect(mcp.call('browser_act', { tab_id: other.tab_id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
-    const resolved = await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: escape.action_id, resolution: 'applied', evidence: 'The menu closed and nothing was saved' });
+    const resolved = await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: escape.action_id, resolution: 'not_applied', evidence: 'The menu closed and nothing changed on the site' });
     expect(resolved.replay_protected).toBe(false);
     expect(await mcp.runtime.journal.pending(mcp.id)).toEqual([]);
     expect((await mcp.call('browser_act', { tab_id: other.tab_id, action: 'press_key', key: 'Escape' })).status).toBe('action_unconfirmed');

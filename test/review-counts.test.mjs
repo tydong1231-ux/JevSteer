@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { countsReferenced, reviewedState } from "../src/observation.mjs";
+import { countsReferenced, reviewedState, withoutToasts } from "../src/observation.mjs";
+import { evaluateAssertions } from "../src/verification.mjs";
 import { MemoryKapture, memoryRuntime, scriptedDecider } from "./helpers/runtime.mjs";
 
 // ccMonet's sidebar as the snapshot reads it: the review copy shows each
@@ -50,4 +51,20 @@ test("a ticket for a contract about a count goes stale when the count changes", 
     const receipt = await runtime.reviewResult({ tabId: "test", reviewId: result.host_review.review_id, decision: "accept", goalEvidence: "Observed REF-42" });
     assert.equal(receipt.status, status, goal);
   }
+});
+
+test("a ticket's assertions are checked on the page without its toasts, which is what it binds", () => {
+  const page = {
+    url: "https://erp.test/protected/sales/customers", title: "Customers",
+    text: "Customers JevSteer QA Status: Saved Update successfully", toasts: ["Update successfully"],
+    elements: [{ i: 0, tag: "div", role: "alert", label: "Update successfully", toast: true, context: "Update successfully" }],
+  };
+  const kept = withoutToasts(page);
+  assert.equal(kept.text, "Customers JevSteer QA Status: Saved");
+  assert.deepEqual(kept.elements, []);
+  const checks = [{ type: "text_contains", value: "Update successfully" }, { type: "text_contains", value: "Status: Saved" }];
+  assert.deepEqual(evaluateAssertions(page, checks).map((a) => a.passed), [true, true]);
+  assert.deepEqual(evaluateAssertions(kept, checks).map((a) => a.passed), [false, true]);
+  // The digest a ticket binds is the same with or without the toast.
+  assert.equal(reviewedState(page).digest, reviewedState(kept).digest);
 });

@@ -515,7 +515,7 @@ test("manual click replay cannot be bypassed with ignored value or key parameter
   assert.equal(k.commands.filter(c => c.command === "click").length, 1);
 });
 
-test("manual Escape on no element is journaled like any key and is not repeated before it is resolved", async () => {
+test("manual Escape on no element is journaled like any key; resolved not_applied it can be pressed again, applied it is not replayed", async () => {
   const k = new MemoryKapture(page());
   const runtime = memoryRuntime(k, scriptedDecider([{}]));
   k.tabDetail = async () => ({ url: k.page.url, title: k.page.title });
@@ -527,10 +527,16 @@ test("manual Escape on no element is journaled like any key and is not repeated 
   assert.deepEqual((await runtime.journal.pending("test")).map((r) => [r.id, r.tool]), [[escape.action_id, "press_key"]]);
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /UNCONFIRMED_ACTION/);
   assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
-  // Once the host resolves it, Escape is not replay protected: it can be pressed again.
-  const resolved = await runtime.resolveAction({ tabId: "test", actionId: escape.action_id, resolution: "applied", evidence: "The menu closed and nothing was saved" });
-  assert.equal(resolved.replay_protected, false);
-  assert.equal((await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" })).status, "action_unconfirmed");
+  // Nothing changed on the site: it can be pressed again.
+  const local = await runtime.resolveAction({ tabId: "test", actionId: escape.action_id, resolution: "not_applied", evidence: "The menu closed and nothing changed on the site" });
+  assert.equal(local.replay_protected, false);
+  const again = await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" });
+  assert.equal(again.status, "action_unconfirmed");
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 2);
+  // It cancelled something on the site: the same Escape here is a replay.
+  const remote = await runtime.resolveAction({ tabId: "test", actionId: again.action_id, resolution: "applied", evidence: "The page discarded the draft on the server" });
+  assert.equal(remote.replay_protected, true);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /ACTION_ALREADY_APPLIED/);
   assert.equal(k.commands.filter(c=>c.command==="keypress").length, 2);
 });
 

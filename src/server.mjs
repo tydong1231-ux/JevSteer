@@ -173,7 +173,7 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
 
   server.registerTool("browser_act", {
     title: "Manual Browser Action",
-    description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. press_key Escape is journaled the same way, also with no element: a page can answer it (an autosave, a cancel). It carries no remote risk, so once resolved it can be pressed again. Never replay an uncertain action.",
+    description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. press_key Escape is journaled the same way, also with no element: a page can answer it (an autosave, a cancel). Resolve it not_applied when it only closed a menu, popup or dialog and nothing changed on the site, so it can be pressed again; applied when it changed something on the site. Never replay an uncertain action.",
     inputSchema: z.object({
       tab_id: z.string().optional(),
       action: z.enum(["click", "type", "press_enter", "press_key", "select", "hover", "scroll", "back", "wait"]),

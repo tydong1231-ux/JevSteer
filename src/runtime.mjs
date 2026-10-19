@@ -17,7 +17,7 @@ import { buildTargetSpace, availableTools, eligibleFor, listedOptions, NO_TARGET
 import { generateFieldText } from "./text-helper.mjs";
 import { locateSameElement, equivalentLink, sameIdentity, rememberField, findRemembered, twinsOf, pickTwin } from "./element-identity.mjs";
 import { ActionJournal, addressHash } from "./action-journal.mjs";
-import { countsReferenced, observeUntilReady, observationSignature, observationLimitError, reviewedState, sameReviewedState, transientNavigationError } from "./observation.mjs";
+import { countsReferenced, observeUntilReady, observationSignature, observationLimitError, reviewedState, sameReviewedState, transientNavigationError, withoutToasts } from "./observation.mjs";
 import { HostReviewStore, reviewDigest, reviewReceipt } from "./host-review.mjs";
 import { sensitiveName, sensitiveField } from "./sensitive.mjs";
 import { bindForm, nextFormDecision } from "./form-binding.mjs";
@@ -47,8 +47,9 @@ const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"])
 // Escape pressed on no element usually only closes a menu, popup or dialog.
 // A page can also answer it (cancel an edit, autosave) on a channel the
 // runtime cannot see, so it is journaled like any other key and its outcome
-// is the host's to resolve. It carries no remote risk: once resolved it can
-// be pressed again.
+// is the host's to resolve: not_applied when nothing changed on the site,
+// which lets it be pressed again; applied when something did, which guards
+// it against replay like any applied input.
 const bareEscape = (action) => action.tool === "press_key" && action.key === "Escape" && action.target == null;
 
 const pendingLine = (r) => `${r.tool} on tab_id ${r.page_id} (action_id ${r.id}, ${r.created_at})`;
@@ -161,7 +162,6 @@ function canonicalNativeSelectValue(element, supplied) {
 // Recognizable link navigation, including meaningful same-document fragments,
 // is repeatable. Empty '#' is often a JS click target and stays conservative.
 function manualRemoteRisk(action) {
-  if (action.tool === "press_key" && action.key === "Escape") return 0;
   if (action.tool !== "click") return 1;
   const el = action.el;
   if (!(el?.tag === "a" || el?.role === "link") || !el?.href) return 1;
@@ -623,7 +623,7 @@ export class JevSteerRuntime {
       ? forHost(verified) : verified;
   }
 
-  async reviewPage(tabId, captureEnabled, { issuing = false, assertions = [] } = {}) {
+  async reviewPage(tabId, captureEnabled, { issuing = false } = {}) {
     // Chrome's debugger notice changes viewport height. Reproduce the same
     // inspection environment for ticket creation and acceptance, without input.
     const capture = captureEnabled ? await this.startNetworkCapture(tabId, `review-${randomUUID()}`, "inspection", "summary") : null;
@@ -634,12 +634,10 @@ export class JevSteerRuntime {
     // ("Update successfully") shows, the app may still be closing a drawer and
     // reloading the list behind it: a new ticket waits for it to go, up to a
     // limit. Acceptance does not: a toast then (a late error) makes it stale.
-    // Nor does a ticket whose assertions read the toast.
     const toastsUntil = Date.now() + (issuing ? this.observation.reviewToastWaitMs ?? 0 : 0);
-    const asserted = (toast) => assertions.some((a) => typeof a.value === "string" && a.value && toast.toLowerCase().includes(a.value.toLowerCase()));
     try {
       return (await observeUntilReady(() => this.readPage(tabId), { ...this.observation, quietMs: Math.max(this.observation.quietMs ?? 0, this.observation.reviewQuietMs ?? 0),
-        ready: (page) => !page.toasts?.length || Date.now() >= toastsUntil || page.toasts.some(asserted) })).page;
+        ready: (page) => !page.toasts?.length || Date.now() >= toastsUntil })).page;
     }
     finally { if (capture) await this.finishNetworkCapture(tabId, capture, "host-review", "inspection", "summary"); }
   }
@@ -1773,8 +1771,13 @@ export class JevSteerRuntime {
         if (result.status === "host_review_required") {
           // Use an explicit, reproducible inspection session after evidence
           // cleanup rather than binding a transient debugger/banner frame.
-          const page = await this.reviewPage(tab.tabId, network.available === true, { issuing: true, assertions: milestone.assertions });
-          const assertions = evaluateAssertions(page, milestone.assertions);
+          const page = await this.reviewPage(tab.tabId, network.available === true, { issuing: true });
+          // The ticket binds the page without its toasts, and the host accepts
+          // later, when they have gone. An assertion passes only when it also
+          // holds on what is bound, so it still holds at acceptance.
+          const kept = evaluateAssertions(withoutToasts(page), milestone.assertions);
+          const assertions = evaluateAssertions(page, milestone.assertions).map((a, i) => a.passed && !kept[i].passed
+            ? { ...kept[i], error: "met only by a message that fades (a toast); a host review binds what the page keeps" } : a);
           result.url = page.url;
           result.title = page.title;
           // A contract about a count the page shows in a badge binds it too.
@@ -1785,7 +1788,9 @@ export class JevSteerRuntime {
           if (assertions.some(a => !a.passed) || page.loading?.busy) {
             result.status = assertions.some(a => !a.passed) ? "verification_failed" : "verification_uncertain";
             result.verification.status = result.status;
-            result.info = "The page changed or is busy after evidence capture. Inspect the fresh observation before resuming; no input was replayed.";
+            result.info = page.loading?.busy && !assertions.some(a => !a.passed)
+              ? "The page changed or is busy after evidence capture. Inspect the fresh observation before resuming; no input was replayed."
+              : "An assertion does not hold on the page the ticket would bind, which leaves out messages that fade (toasts): the page changed, or the assertion was met only by such a message. Inspect the fresh observation. Assert what the page keeps (a status, a saved row) and rerun the same milestone; no input was replayed.";
             return { result, network };
           }
           const review = await this.reviews.issue(tab.tabId, {
@@ -1958,7 +1963,7 @@ export class JevSteerRuntime {
           ...(effect ? { effect } : {}),
           ...(observationError ? { observation_error: observationError } : {}),
           info: bareEscape(normalized)
-            ? "Escape was sent. A page can answer it (an autosave, a cancel), so it is journaled like any key. Check the page; if it only closed a menu, popup or dialog, resolve it as applied with that evidence. A resolved Escape can be pressed again."
+            ? "Escape was sent. A page can answer it (an autosave, a cancel), so it is journaled like any key. Check the page. If it only closed a menu, popup or dialog and nothing changed on the site, resolve it as not_applied with that evidence; Escape can then be pressed again. If it saved or cancelled something on the site, resolve it as applied; the same Escape on this page is then refused as a replay."
             : "Manual action was dispatched. Its business outcome needs independent verification; resolve applied/not_applied with evidence before resuming.",
         };
       }

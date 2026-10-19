@@ -40,10 +40,11 @@ const digest = (value) => createHash("sha256").update(String(value)).digest("hex
 // digests of the toasts it showed: any other toast at acceptance, such as a
 // late error, still makes the ticket stale. With `counts`, badge counts stay
 // in (see countsReferenced).
-export function reviewedState(page, { counts = false } = {}) {
+// The toasts a page shows, and a function that takes their text out of a
+// text. An element's context is its row's or parent's text, which can hold a
+// toast shown next to it.
+function toastText(page) {
   const toasts = (page.toasts || []).filter((toast) => toast && page.text?.includes(toast));
-  // An element's context is its row's or parent's text, which can hold a
-  // toast shown next to it.
   const without = (value) => {
     if (value == null) return value;
     let text = String(value);
@@ -53,6 +54,20 @@ export function reviewedState(page, { counts = false } = {}) {
     }
     return text.replace(/\s+/g, " ").trim();
   };
+  return { toasts, without };
+}
+
+// The page without its toasts, which go away on their own. A host review
+// ticket binds the page without them (see reviewedState), so its assertions
+// are checked on this too.
+export function withoutToasts(page) {
+  const { without } = toastText(page);
+  return { ...page, text: without(String(page.text ?? "")), toasts: [],
+    elements: page.elements.filter((e) => !e.toast).map((e) => ({ ...e, context: without(e.context) })) };
+}
+
+export function reviewedState(page, { counts = false } = {}) {
+  const { toasts, without } = toastText(page);
   // A badge count ("Todo 41") changes as other work adds to it: the review
   // copies the snapshot made show it as "#".
   const review = (copy, value) => counts ? value : copy ?? value;
