@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { repeatsBlock, elementFingerprint, toModelPage } from "../src/page-model.mjs";
+import { repeatsBlock, elementFingerprint, toModelPage, brief, formatPage } from "../src/page-model.mjs";
 
 test("repeatsBlock detects repeated cycles", () => {
   assert.equal(repeatsBlock(["a", "b", "a", "b", "a", "b"], 2, 3), true);
@@ -41,4 +41,17 @@ test("model page leaves out empty and default fields without losing state", () =
     { i: 5, tag: "input", label: "Password", type: "password", value: "[REDACTED]" },
   ]);
   assert.equal(toModelPage({ ...page, metrics: { frame_count: 2 } }).elements[0].frame_id, "f1");
+});
+
+test("a hint and a table column reach Jev; a hint names a field only when nothing else does", () => {
+  const search = { i: 0, tag: "input", role: "textbox", type: "text", label: "", hint: "Search contacts, vendor bills..." };
+  const qty = { i: 1, tag: "input", role: "textbox", label: "QTY", column: "QTY", value: "" };
+  const page = { url: "https://erp.test", title: "Bills", text: "Bills", metrics: {}, elements: [search, qty] };
+  assert.deepEqual(toModelPage(page).elements, [
+    { i: 0, tag: "input", role: "textbox", hint: "Search contacts, vendor bills...", type: "text" },
+    { i: 1, tag: "input", role: "textbox", label: "QTY", value: "", column: "QTY" },
+  ]);
+  assert.equal(brief(search), 'textbox "Search contacts, vendor bills..."');
+  assert.equal(brief({ ...search, placeholder: "Keyword" }), 'textbox "Keyword"');
+  assert.match(formatPage(page), /\[0\] <input> role=textbox type=text hint="Search contacts, vendor bills..."/);
 });

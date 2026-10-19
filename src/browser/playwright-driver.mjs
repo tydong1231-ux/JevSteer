@@ -4,7 +4,7 @@ import { config } from '../config.mjs';
 import { sameIdentity, equivalentLink } from '../element-identity.mjs';
 import { FIELDISH, SELECTISH } from '../page-model.mjs';
 import { isDateText } from '../date-text.mjs';
-import { observeUntilReady } from '../observation.mjs';
+import { observeUntilReady, observationSignature } from '../observation.mjs';
 import { captureSnapshot, readDOM } from './snapshot.mjs';
 import { PageEvents } from './events.mjs';
 import { sessionIdentity, physicalPageId } from './sessions.mjs';
@@ -15,7 +15,7 @@ import { SENSITIVE_PATTERNS } from '../sensitive.mjs';
 export class PlaywrightDriver {
   constructor(options = {}) {
     this.kind = 'playwright';
-    this.options = { headless: config.browserHeadless, userDataDir: config.browserProfile, cdpEndpoint: config.browserCdpEndpoint, channel: config.browserChannel, inputMode: config.browserInputMode, timeoutMs: config.browserTimeoutMs, ...options };
+    this.options = { headless: config.browserHeadless, userDataDir: config.browserProfile, cdpEndpoint: config.browserCdpEndpoint, channel: config.browserChannel, inputMode: config.browserInputMode, timeoutMs: config.browserTimeoutMs, maxElements: config.observationMaxElements, ...options };
     if (options.context) this.options.userDataDir = options.userDataDir;
     if (this.options.cdpEndpoint && options.userDataDir) throw new Error('BROWSER_CONFIG: choose profile or CDP, not both');
     if (options.context && this.options.cdpEndpoint) throw new Error('BROWSER_CONFIG: choose borrowed context or CDP, not both');
@@ -118,7 +118,7 @@ export class PlaywrightDriver {
   async observe(ref, scope) {
     const record = await this.record(ref);
     if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
-    const result = await captureSnapshot(record.page, { pageId: record.pageId, sessionId: this.sessionId, frameInfo: (f) => this.frameInfo(f), scope });
+    const result = await captureSnapshot(record.page, { pageId: record.pageId, sessionId: this.sessionId, frameInfo: (f) => this.frameInfo(f), scope, maxElements: this.options.maxElements });
     record.refs = result.refs;
     // A report or record the last input asked for shows nothing until its
     // response arrives, often with no spinner. Observation waits while such
@@ -135,10 +135,16 @@ export class PlaywrightDriver {
     const record = await this.record(ref);
     if (!original?.snapshot_id || original.page_id !== record.pageId || original.session_id !== this.sessionId) throw new Error('STALE_TARGET: wrong page/session or no observation-bound target');
     const fresh = await this.observe(ref);
+    // The page this check read: a refusal is about it (see the runtime).
+    const now = action.checkedOn = observationSignature(fresh);
     if (action.observedUrl && fresh.url !== action.observedUrl) throw new Error('STALE_TARGET: page navigated after decision');
     const matches = fresh.elements.filter((e) => e.frame_id === original.frame_id && e.document_id === original.document_id && sameIdentity(original, e, fresh.url));
     if (!matches.length) throw new Error('STALE_TARGET: changed document/record/form');
-    const pick = matches.length === 1 ? matches[0] : action.tool === 'click' ? equivalentLink(original, matches, fresh.url) : undefined;
+    // Of identical controls, the one in the same place, if nothing on the
+    // page changed since the decision.
+    const { signature, twins } = action.observed || {};
+    const twin = twins?.count === matches.length && signature === now ? matches[twins.index] : undefined;
+    const pick = matches.length === 1 ? matches[0] : (action.tool === 'click' && equivalentLink(original, matches, fresh.url)) || twin;
     if (!pick) throw new Error(`STALE_TARGET: ambiguous: ${matches.length} identical controls`);
     if (pick.disabled || action.tool === 'type' && pick.readonly) throw new Error('STALE_TARGET: disabled or read-only');
     if (['type', 'select'].includes(action.tool) && String(original.value ?? '') !== String(pick.value ?? '')) throw new Error('STALE_TARGET: live field value changed');

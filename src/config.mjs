@@ -39,6 +39,12 @@ export const config = {
   navigationSettleMs: num("JEVSTEER_NAVIGATION_SETTLE_MS", 15000),
   observationQuietMs: num("JEVSTEER_OBSERVATION_QUIET_MS", 250),
   reviewQuietMs: num("JEVSTEER_REVIEW_QUIET_MS", 1000),
+  // A review ticket waits this long at most for a toast to go away: the app
+  // may still be closing a drawer and reloading its list behind it.
+  reviewToastWaitMs: num("JEVSTEER_REVIEW_TOAST_WAIT_MS", 4000),
+  // Interactive elements one Playwright observation reads at most. Wikipedia's
+  // history at 100 revisions holds about 1100.
+  observationMaxElements: num("JEVSTEER_MAX_ELEMENTS", 2000),
   waitWatchMs: num("JEVSTEER_WAIT_MS", 5000),
   maxWaits: num("JEVSTEER_MAX_WAITS", 12),
   maxIdleWaits: num("JEVSTEER_MAX_IDLE_WAITS", 2),

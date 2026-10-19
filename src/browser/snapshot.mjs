@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { sensitiveField } from '../sensitive.mjs';
 
 // This selector is only a discovery surface. It is never a durable identity.
-export const INTERACTIVE = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option],[role=combobox],[role=listbox],[role=textbox],[role=searchbox],[role=spinbutton],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"]),.cursor-pointer';
+// antd draws a select's options as divs with aria-selected and no role (its
+// role=option copies sit in a hidden 0×0 listbox): those are options too.
+export const INTERACTIVE = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option],[role=combobox],[role=listbox],[role=textbox],[role=searchbox],[role=spinbutton],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"]),.cursor-pointer,[aria-selected]:not([role]):not(td):not(th):not(tr)';
 
 // Runs in the browser exclusively to READ state. No attributes, handlers,
 // hidden nodes, DOM values or application state are changed by observation.
@@ -12,11 +14,23 @@ export function readDOM(elements) {
   const parent = (e) => e.parentElement || e.getRootNode()?.host;
   const ancestors = (e) => { const a = []; for (let p = e; p; p = parent(p)) a.push(p); return a; };
   const closest = (e, selector) => ancestors(e).find((p) => p.matches(selector));
+  // A box of at most 1px that clips what overflows it draws nothing inside
+  // it: antd's 0×0 accessibility listbox, "visually hidden" text clipped to
+  // rect(0 0 0 0) or inset(50%). A click on its content waits until it times
+  // out, so that content is not observed.
+  const clipsAll = (p, style) => {
+    if (style.display === 'inline' || style.display === 'contents') return false;
+    const tiny = () => { const r = p.getBoundingClientRect(); return r.width <= 1 || r.height <= 1; };
+    if (/hidden|clip/.test(`${style.overflowX} ${style.overflowY}`) && tiny()) return true;
+    if (style.clipPath === 'inset(50%)') return true;
+    const rect = style.clip.match(/^rect\(([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px\)$/);
+    return !!rect && ['absolute', 'fixed'].includes(style.position) && (rect[2] - rect[4] <= 1 || rect[3] - rect[1] <= 1);
+  };
   const visible = (e) => {
     if (!e.isConnected || !e.getClientRects().length) return false;
     return !ancestors(e).some((p) => {
       const style = getComputedStyle(p);
-      return p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse';
+      return p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || clipsAll(p, style);
     });
   };
   // A count in a badge ("Todo 41") changes on its own as other work adds to
@@ -38,12 +52,20 @@ export function readDOM(elements) {
     return COUNT.test(node.textContent) && pill(node);
   };
   // The text, and with `review` also its review copy when it holds a count.
-  const read = (e, max = 500, review = false) => {
-    if (!e) return [''];
+  // Hidden, inert and aria-hidden content is not read: a walk checks each
+  // node on its way down, and the ancestors of where it starts once. The
+  // controls of one row share its text, so each text is read once.
+  const unread = (p) => {
+    if (p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true') return true;
+    const style = getComputedStyle(p);
+    return style.display === 'none' || style.visibility === 'hidden';
+  };
+  const reads = new Map();
+  const readNow = (e, max, review) => {
+    if (ancestors(e).slice(1).some(unread)) return [''];
     const walk = (node, inBadge) => {
       if (node.nodeType === Node.TEXT_NODE) return node.textContent;
-      if (node.nodeType !== Node.ELEMENT_NODE || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|INPUT|TEXTAREA|SELECT|OPTION)$/.test(node.tagName)
-          || ancestors(node).some((p) => p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true' || ['none'].includes(getComputedStyle(p).display) || getComputedStyle(p).visibility === 'hidden')) return '';
+      if (node.nodeType !== Node.ELEMENT_NODE || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|INPUT|TEXTAREA|SELECT|OPTION)$/.test(node.tagName) || unread(node)) return '';
       const badge = review && !inBadge && badged(node);
       const inner = [...(node.shadowRoot || node).childNodes].map((child) => walk(child, inBadge || badge)).join(' ');
       return badge ? `\uE000${inner}\uE001` : inner;
@@ -51,6 +73,14 @@ export function readDOM(elements) {
     const marked = walk(e, false);
     if (!marked.includes('\uE000')) return [clean(marked, max)];
     return [clean(marked.replace(/[\uE000\uE001]/g, ''), max), clean(marked.replace(/\uE000[^\uE001]*\uE001/g, ' # '), max)];
+  };
+  const read = (e, max = 500, review = false) => {
+    if (!e) return [''];
+    const key = `${max}:${review}`;
+    let known = reads.get(e);
+    if (!known) reads.set(e, known = new Map());
+    if (!known.has(key)) known.set(key, readNow(e, max, review));
+    return known.get(key);
   };
   const text = (e, max = 500) => read(e, max)[0];
   const idText = (e, ids) => (ids || '').split(/\s+/).map((id) => text(e.getRootNode().getElementById?.(id), 180)).filter(Boolean).join(' ');
@@ -215,6 +245,33 @@ export function readDOM(elements) {
     }
     return '';
   };
+  // Text drawn over a field that has no placeholder attribute: a hint layer
+  // ("Search contacts, vendor bills, ..."), or antd's select placeholder. It
+  // goes away once the field holds a value, so it tells Jev what the field
+  // is for but never names it: a name must stay the same while typing.
+  const hintText = (e) => {
+    if (!e.matches(TYPABLE) || e.getAttribute('placeholder')) return '';
+    let box = e;
+    for (let depth = 0; depth < 3; depth++) {
+      const up = parent(box);
+      if (!up || up === document.body || fieldsIn(up) > 1) break;
+      box = up;
+    }
+    if (box === e) return '';
+    const f = e.getBoundingClientRect();
+    for (const n of box.querySelectorAll('*')) {
+      if (n.contains(e) || e.contains(n) || closest(n, SHOWN) || n.matches(FIELD) || ![...n.childNodes].some((c) => c.nodeType === Node.TEXT_NODE && c.textContent.trim())) continue;
+      const style = getComputedStyle(n);
+      if (style.display === 'none' || style.visibility !== 'visible' || n.closest('[aria-hidden=true]')) continue;
+      const own = closest(n, '[class*="placeholder" i]');
+      const r = n.getBoundingClientRect();
+      const over = Math.max(0, Math.min(r.right, f.right) - Math.max(r.left, f.left)) * Math.max(0, Math.min(r.bottom, f.bottom) - Math.max(r.top, f.top));
+      if (!(own && box.contains(own)) && !(r.width * r.height > 0 && over >= r.width * r.height / 2)) continue;
+      const words = text(own && box.contains(own) ? own : n, 121);
+      if (words && words.length <= 120) return words;
+    }
+    return '';
+  };
   const visualName = (e) => {
     if (!e.matches(TYPABLE)) return '';
     const label = cellHeader(e) || precedingLabel(e);
@@ -244,25 +301,40 @@ export function readDOM(elements) {
   };
   const name = (e) => clean(e.getAttribute('aria-label') || idText(e, e.getAttribute('aria-labelledby'))
     || [...(e.labels || [])].map((l) => text(l, 180)).join(' ') || text(closest(e, 'label'), 180)
-    || e.getAttribute('alt') || e.getAttribute('title') || (e.matches('button,a,[role=button],[role=option],.cursor-pointer') ? text(e, 180) : '')
+    || e.getAttribute('alt') || e.getAttribute('title') || (e.matches('button,a,[role=button],.cursor-pointer') || role(e) === 'option' ? text(e, 180) : '')
     || (['submit', 'button', 'reset'].includes(e.type) ? e.value : '')
     || (e.matches('button,[role=button],.cursor-pointer') ? iconName(e) || iconHint(e) : '') || placeholderName(e) || e.getAttribute('name'));
   const role = (e) => e.getAttribute('role') || ({ A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', SUMMARY: 'button' })[e.tagName]
-    || (e.tagName === 'INPUT' ? ({ checkbox: 'checkbox', radio: 'radio', search: 'searchbox', submit: 'button', reset: 'button', button: 'button', number: 'spinbutton' })[e.type] || 'textbox' : e.isContentEditable ? 'textbox' : undefined);
+    || (e.tagName === 'INPUT' ? ({ checkbox: 'checkbox', radio: 'radio', search: 'searchbox', submit: 'button', reset: 'button', button: 'button', number: 'spinbutton' })[e.type] || 'textbox' : e.isContentEditable ? 'textbox'
+      : e.hasAttribute('aria-selected') && !/^(TD|TH|TR)$/.test(e.tagName) ? 'option' : undefined);
   const all = [...elements];
   const modals = all.filter((e) => e.matches('dialog[open],[role=dialog][aria-modal=true]') && visible(e));
   // Dialogs without focusable attributes are discovered independently.
   for (const e of document.querySelectorAll('dialog[open],[role=dialog][aria-modal=true]')) if (visible(e) && !modals.includes(e)) modals.push(e);
   const modal = modals.at(-1);
-  const permitted = (e) => !modal || ancestors(e).includes(modal) || !!closest(e, '[role=listbox],[role=option]');
+  // A popup that a control in the modal opened belongs to it, though it is
+  // drawn outside: an antd select in a drawer shows its options at the end
+  // of the body. The popup is its listbox's box, up to 4 levels out, short
+  // of any box that holds the modal. Without such a link, an option that
+  // floats outside the modal belongs to it while a control in it is open.
+  const popups = !modal ? [] : [...modal.querySelectorAll('[aria-expanded=true][aria-controls],[aria-expanded=true][aria-owns]')]
+    .flatMap((c) => `${c.getAttribute('aria-controls') || ''} ${c.getAttribute('aria-owns') || ''}`.split(/\s+/).filter(Boolean))
+    .map((id) => modal.getRootNode().getElementById?.(id) || document.getElementById(id)).filter((p) => p && !modal.contains(p))
+    .map((p) => { for (let up = 0; up < 4 && p.parentElement && p.parentElement !== document.body && !p.parentElement.contains(modal); up++) p = p.parentElement; return p; });
+  const opened = !!modal?.querySelector('[aria-expanded=true]');
+  const floats = (e) => ancestors(e).some((p) => ['absolute', 'fixed'].includes(getComputedStyle(p).position));
+  const permitted = (e) => !modal || ancestors(e).includes(modal) || !!closest(e, '[role=listbox],[role=option]') || popups.some((p) => p.contains(e))
+    || opened && role(e) === 'option' && floats(e);
   // A toast ("Update successfully") floats over the page and goes away on its
   // own: a message or notification notice under any class prefix (antd's
   // ant-message-notice, or a renamed one), a toast or snackbar, and any
   // fixed-position alert or status region. The outermost one that floats
   // counts. Host review tickets leave its text out of the state they bind.
-  // (Page code: constants must live inside this function.)
+  // (Page code: constants must live inside this function.) A toast shows
+  // over an open drawer too, though it is drawn outside it: "Please select
+  // Payment Terms" after a Save in the drawer.
   const TOAST = '[role=alert],[role=status],[aria-live=assertive],[aria-live=polite],[class*="message-notice" i],[class*="notification-notice" i],[class*="toast" i],[class*="snackbar" i],[data-sonner-toast],.el-message,.el-notification';
-  const toastLike = [...(modal || document).querySelectorAll(TOAST)].filter((e) => visible(e)
+  const toastLike = [...document.querySelectorAll(TOAST)].filter((e) => visible(e)
     && !e.querySelector('input,textarea,select') && ancestors(e).some((p) => getComputedStyle(p).position === 'fixed') && text(e, 301).length <= 300);
   const toastRoots = toastLike.filter((e) => !toastLike.some((t) => t !== e && t.contains(e)));
   // dnd-kit renders each sortable or draggable item as role=button with
@@ -304,6 +376,11 @@ export function readDOM(elements) {
       download: e.matches('a[href]') && e.hasAttribute('download') || undefined,
       value: 'value' in e ? String(e.value) : e.isContentEditable ? e.innerText : undefined,
       display: shown(e),
+      // The table column a field sits in: such a field belongs to its row's
+      // item (an invoice line), not to the document.
+      column: e.matches(TYPABLE) && cellHeader(e) || undefined,
+      // What text drawn over an unnamed field says it is for.
+      hint: (!label || label === e.getAttribute('name')) && hintText(e) || undefined,
       checked: 'checked' in e ? e.checked : e.hasAttribute('aria-checked') ? e.getAttribute('aria-checked') === 'true' : undefined,
       selected: e.hasAttribute('aria-selected') ? e.getAttribute('aria-selected') === 'true' : undefined,
       expanded: e.hasAttribute('aria-expanded') ? e.getAttribute('aria-expanded') === 'true' : undefined,
@@ -325,7 +402,12 @@ export function readDOM(elements) {
     return descriptor;
   };
   const filtered = all.map((e, i) => visible(e) && permitted(e) && !e.matches('dialog,[role=dialog]') ? describe(e, i) : null).filter(Boolean);
-  const [pageText, pageReview] = read(modal || document.body, 24000, true);
+  const [modalText, modalReview] = read(modal || document.body, 24000, true);
+  // With a modal open, the page says what the modal says, and what a toast
+  // over it says.
+  const over = modal ? toastRoots.filter((t) => !modal.contains(t)).map((t) => text(t, 300)).filter(Boolean) : [];
+  const pageText = [modalText, ...over].join(' ').trim();
+  const pageReview = modalReview === undefined ? undefined : [modalReview, ...over].join(' ').trim();
   return {
     documentKey: String(performance.timeOrigin), url: location.href, title: document.title,
     text: pageText, review_text: pageReview, background_context: modal ? text(document.querySelector('h1'), 500) : undefined,
@@ -336,7 +418,17 @@ export function readDOM(elements) {
   };
 }
 
-export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scope, maxElements = 1000 }) {
+// Playwright's result serializer takes longer than readDOM itself on a large
+// page (about 600 of 1,000 ms for 2,000 controls); one JSON string crosses
+// in a few milliseconds. A page that changed how JSON encodes (old
+// Prototype.js adds Array.prototype.toJSON) gets the object sent as before.
+// The function is built here from readDOM's own source, so the page runs no
+// eval of its own.
+const readDOMJson = new Function('elements', `const data = (${readDOM.toString()})(elements);
+  try { if (JSON.stringify({ a: [1, 'x', true, null], b: { c: 2 } }) === '{"a":[1,"x",true,null],"b":{"c":2}}') return JSON.stringify(data); } catch {}
+  return data;`);
+
+export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scope, maxElements = 2000 }) {
   const snapshotId = randomUUID();
   const refs = new Map();
   const frames = [];
@@ -350,7 +442,10 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
     const query = scope ? frame.locator(scope).locator(INTERACTIVE) : frame.locator(INTERACTIVE + ',dialog[open],[role=dialog][aria-modal=true]');
     if (scope && !await frame.locator(scope).count()) continue;
     let data;
-    try { data = await query.evaluateAll(readDOM); }
+    try {
+      const raw = await query.evaluateAll(readDOMJson);
+      data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    }
     catch (error) { if (frame.isDetached()) continue; throw error; }
     if (info.revision !== revision) throw new Error('SNAPSHOT_CHANGED: document navigated during capture');
     const documentId = `${info.id}:${revision}:${data.documentKey}`;

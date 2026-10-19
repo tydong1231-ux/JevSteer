@@ -45,6 +45,15 @@ export function equivalentLink(original, matches, base) {
   return matches.find((e) => e.ordinal != null && e.ordinal === original.ordinal) || matches[0];
 }
 
+// Identical controls, such as two unnamed selects in one filter row, differ
+// only in their order. Where `el` is one of several on `page`: which one, of
+// how many. Order points at the same control only while the page is exactly
+// as it was when that control was chosen (see assertTargetFresh).
+export function twinsOf(el, page) {
+  const twins = page.elements.filter((e) => e.frame_id === el.frame_id && e.document_id === el.document_id && sameIdentity(el, e, page.url));
+  return twins.length > 1 && twins.includes(el) ? { index: twins.indexOf(el), count: twins.length } : undefined;
+}
+
 // True when the control is unique on `page` even without its surrounding text.
 export function uniqueWithoutContext(original, page) {
   return !!matchWithoutContext(original, page);

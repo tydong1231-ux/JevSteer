@@ -363,7 +363,10 @@ exact, including whitespace and empty strings. For example:
 new input begins after exhaustion, while an already dispatched command retains
 its transport timeout. `JEVSTEER_ACTION_SETTLE_MS` defaults to 8000 and
 `JEVSTEER_OBSERVATION_QUIET_MS` to 250, and `JEVSTEER_REVIEW_QUIET_MS`, the
-quiet period before a host review ticket binds the page, to 1000. A `wait`
+quiet period before a host review ticket binds the page, to 1000. A new ticket
+also waits while a toast shows, up to `JEVSTEER_REVIEW_TOAST_WAIT_MS` (default
+4000). A Playwright observation reads at most `JEVSTEER_MAX_ELEMENTS` (default
+2000) interactive elements. A `wait`
 watches the page for up to `JEVSTEER_WAIT_MS` (default 5000) and ends as soon as
 it changes; `JEVSTEER_MAX_IDLE_WAITS` (default 2) waits in a row that saw
 nothing change stop the milestone as `stuck`, one more if the page kept sending

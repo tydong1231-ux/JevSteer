@@ -26,8 +26,9 @@ function expectsNavigation(before, action) {
 
 export function observationSignature(page) {
   // Generated selectors, timestamps and geometry do not define progress.
+  // `display` is what a select-like combobox shows as its value.
   const state = [page.url, page.title, page.text, page.loading, page.elements.map((e) =>
-    [e.tag, e.role, e.label, e.context, e.scope, e.value, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.options?.filter((o) => o.selected).map((o) => o.value)])];
+    [e.tag, e.role, e.label, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.options?.filter((o) => o.selected).map((o) => o.value)])];
   if (page.page_id) state.push(page.page_id, page.frames, page.elements.map((e) => [e.form_key, e.record_key]));
   return createHash("sha256").update(JSON.stringify(state)).digest("hex");
 }
@@ -37,8 +38,9 @@ const digest = (value) => createHash("sha256").update(String(value)).digest("hex
 // The state a host review ticket binds. A toast ("Update successfully") goes
 // away on its own seconds later, so its text is left out. The ticket keeps
 // digests of the toasts it showed: any other toast at acceptance, such as a
-// late error, still makes the ticket stale.
-export function reviewedState(page) {
+// late error, still makes the ticket stale. With `counts`, badge counts stay
+// in (see countsReferenced).
+export function reviewedState(page, { counts = false } = {}) {
   const toasts = (page.toasts || []).filter((toast) => toast && page.text?.includes(toast));
   // An element's context is its row's or parent's text, which can hold a
   // toast shown next to it.
@@ -53,13 +55,52 @@ export function reviewedState(page) {
   };
   // A badge count ("Todo 41") changes as other work adds to it: the review
   // copies the snapshot made show it as "#".
-  const elements = page.elements.filter((e) => !e.toast).map((e) => ({ ...e, label: e.review_label ?? e.label, context: without(e.review_context ?? e.context) }));
-  return { digest: observationSignature({ ...page, text: without(String(page.review_text ?? page.text ?? "")), elements }), toasts: toasts.map(digest) };
+  const review = (copy, value) => counts ? value : copy ?? value;
+  const elements = page.elements.filter((e) => !e.toast).map((e) => ({ ...e, label: review(e.review_label, e.label), context: without(review(e.review_context, e.context)) }));
+  return { digest: observationSignature({ ...page, text: without(String(review(page.review_text, page.text) ?? "")), elements }), toasts: toasts.map(digest) };
 }
 
 export function sameReviewedState(page, record) {
-  const now = reviewedState(page);
+  const now = reviewedState(page, { counts: record.counts === true });
   return now.digest === record.state_digest && now.toasts.every((toast) => (record.toasts || []).includes(toast));
+}
+
+// The counts a "#" stands for in the review copy of a text, each with the
+// words next to it. A count follows what it counts ("Todo 41"): in a page's
+// text the word after it already belongs to the next thing on the page, so
+// only a control's own label also gives the word after ("2 items").
+function badgeCounts(text, copy, { after = false } = {}) {
+  const raw = String(text ?? "").split(" "), marked = String(copy ?? "").split(" ");
+  const word = (token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  const found = [];
+  for (let i = 0; i < raw.length && i < marked.length; i++) {
+    if (marked[i] !== "#" || raw[i] === "#") { if (raw[i] !== marked[i]) break; continue; }
+    const named = (token) => token !== "#" && /\p{L}/u.test(word(token));
+    const words = [marked.slice(0, i).findLast(named), after && marked.slice(i + 1).find(named)];
+    found.push({ count: raw[i].replace(/\+$/, ""), words: words.filter(Boolean).map(word) });
+  }
+  return found;
+}
+
+const said = (text, token) => {
+  const t = token.toLowerCase();
+  if (!/[a-z0-9]/.test(t)) return text.includes(t);
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}\\p{N}])`, "u").test(text);
+};
+
+// Whether a milestone's contract speaks of a count that a badge on the page
+// shows: it names the badge ("Cart", "Todo"), states its number, or asks
+// about counts at all. A ticket for such a contract binds the counts too, so
+// "Cart 2" turning into "Cart 3" makes it stale.
+export function countsReferenced(page, contract = {}) {
+  const text = [contract.goal, ...(contract.success_criteria || []), ...(contract.constraints || []),
+    ...(contract.assertions || []).flatMap((a) => [a.value, a.label, a.context])].filter((v) => typeof v === "string" && v).join("\n").toLowerCase();
+  if (!text) return false;
+  const pairs = [[page.text, page.review_text], ...page.elements.flatMap((e) => [[e.label, e.review_label, true], [e.context, e.review_context]])];
+  const badges = pairs.filter(([value, copy]) => copy != null && copy !== value).flatMap(([value, copy, after]) => badgeCounts(value, copy, { after }));
+  if (!badges.length) return false;
+  if (/(^|[^a-z])(badges?|counters?|counts?|unread|notifications?)($|[^a-z])|角标|未读|计数/.test(text)) return true;
+  return badges.some(({ count, words }) => said(text, count) || words.some((w) => said(text, w)));
 }
 
 // A click that changes nothing at first may still be at work: a handler can

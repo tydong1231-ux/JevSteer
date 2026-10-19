@@ -171,7 +171,7 @@ test('lost Save ACK persists across driver/runtime restart and new run ID withou
   } finally { await mcp.close(); await fixture.close(); }
 });
 
-test('replacement pages cannot bypass an unknown session write, and old records remain resolvable', async ({ page }, testInfo) => {
+test('replacement pages cannot bypass an unknown session write but can show what it did, and old records remain resolvable', async ({ page }, testInfo) => {
   await page.setContent('<button>Save</button>');
   const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]), { driver: { sessionId: 'replacement-fixture' } });
   try {
@@ -181,19 +181,22 @@ test('replacement pages cannot bypass an unknown session write, and old records 
     const newRef = (await mcp.driver.pages()).find((p) => p.pageId !== mcp.id);
     await expect(mcp.call('browser_run', { tab_id: newRef.pageId, goal: 'Continue with another run', evidence_level: 'none' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
     await page.close();
-    // After the page is gone the error still names its tab_id, action_id and the way out.
-    await expect(mcp.call('browser_open', { url: 'about:blank' })).rejects.toThrow(`click on tab_id ${mcp.id} (action_id ${record.id}, ${record.created_at}). Inspect what it did on the site, then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
+    // Opening a page sends it no input: a new tab is where the host checks the site.
+    const check = await mcp.call('browser_open', { url: 'about:blank' });
+    expect(check.url).toBe('about:blank');
+    // Input there is still blocked. After the page is gone the error still names its tab_id, action_id and the way out.
+    await expect(mcp.call('browser_run', { tab_id: check.tab_id, goal: 'Continue with another run', evidence_level: 'none' })).rejects.toThrow(`click on tab_id ${mcp.id} (action_id ${record.id}, ${record.created_at}). Inspect what it did on the site (browser_open and browser_snapshot still work), then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
     const resolution = await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: record.id, resolution: 'not_applied', evidence: 'Independent fixture oracle confirms no request reached the server' });
     expect(resolution.resolution).toBe('not_applied');
     await replacement.close();
   } finally { await mcp.close(); }
 });
 
-test('a run clicks either of two same-address links; two identical buttons stop as ambiguous with no input, not as a page error', async ({ page }, testInfo) => {
+test('a run clicks either of two same-address links, and the chosen one of two identical buttons only while the page is unchanged; otherwise it stops as ambiguous with no input, not as a page error', async ({ page }, testInfo) => {
   const pager = '<div>(<a href="/list?limit=20">20</a> | <a href="/list?limit=100">100</a>)</div>';
   await page.route('https://fixture.invalid/**', (route) => {
     const limit = new URL(route.request().url()).searchParams.get('limit');
-    route.fulfill({ contentType: 'text/html', body: limit ? `<h1>Showing ${limit} results</h1>` : `<h1>Results</h1>${pager}<ul><li>One</li></ul>${pager}<div><button onclick="window.loads=(window.loads||0)+1">Load</button></div><div><button onclick="window.loads=(window.loads||0)+1">Load</button></div>` });
+    route.fulfill({ contentType: 'text/html', body: limit ? `<h1>Showing ${limit} results</h1>` : `<h1>Results</h1>${pager}<ul><li>One</li></ul>${pager}<div><button onclick="window.loads=(window.loads||0)+1;window.which=1">Load</button></div><div><button onclick="window.loads=(window.loads||0)+1;window.which=2">Load</button></div>` });
   });
   await page.goto('https://fixture.invalid/list');
   const second = (name) => (state) => decision({ target: state.page.elements.filter((e) => e.label === name).at(-1)?.i });
@@ -203,16 +206,26 @@ test('a run clicks either of two same-address links; two identical buttons stop 
     expect(result.status).toBe('completed_verified');
     expect(page.url()).toContain('limit=100');
   } finally { await links.close(); }
+  // Nothing tells the two buttons apart but their order, which still points
+  // at the chosen one while nothing on the page changed.
   await page.goto('https://fixture.invalid/list');
-  // After a refusal Jev reads the history as an error; no input was sent.
-  const buttons = await mcpFixture(page, testInfo, scriptedDecider([second('Load'), (state) => decision({ target: state.page.elements.filter((e) => e.label === 'Load')[0].i, error: 0.9 }), second('Load')]));
+  const buttons = await mcpFixture(page, testInfo, scriptedDecider([second('Load'), { tool: 'none', done: 0.99 }]));
   try {
-    const result = await buttons.call('browser_run', { tab_id: buttons.id, goal: 'Load more results', max_actions: 6, evidence_level: 'none' });
+    const result = await buttons.call('browser_run', { tab_id: buttons.id, goal: 'Load more results', max_actions: 3, evidence_level: 'none' });
+    expect(result.actions.filter((a) => a.recovery)).toEqual([]);
+    expect(await page.evaluate(() => [window.loads, window.which])).toEqual([1, 2]);
+  } finally { await buttons.close(); }
+  // A list that grows after each choice. After a refusal Jev reads the history as an error; no input was sent.
+  await page.goto('https://fixture.invalid/list');
+  const grow = (pick) => async (state) => { await page.evaluate(() => document.querySelector('ul').append(Object.assign(document.createElement('li'), { textContent: 'More' }))); return pick(state); };
+  const growing = await mcpFixture(page, testInfo, scriptedDecider([grow(second('Load')), grow((state) => decision({ target: state.page.elements.filter((e) => e.label === 'Load')[0].i, error: 0.9 })), grow(second('Load'))]));
+  try {
+    const result = await growing.call('browser_run', { tab_id: growing.id, goal: 'Load more results', max_actions: 6, evidence_level: 'none' });
     expect(result.status).toBe('ambiguous');
     expect(result.info).toContain('identical controls');
     expect(result.actions.filter((a) => a.recovery === 'reobserve')).toEqual([{ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: ambiguous: 2 identical controls' }]);
     expect(await page.evaluate(() => window.loads)).toBeUndefined();
-  } finally { await buttons.close(); }
+  } finally { await growing.close(); }
 });
 
 test('Escape pressed on no element leaves no record that blocks the next tab; Enter does', async ({ page }, testInfo) => {
@@ -223,6 +236,7 @@ test('Escape pressed on no element leaves no record that blocks the next tab; En
     const other = await mcp.call('browser_open', { url: 'about:blank' });
     expect(other.tab_id).toBeTruthy();
     expect((await mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Enter' })).status).toBe('action_unconfirmed');
-    await expect(mcp.call('browser_open', { url: 'about:blank' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
+    const next = await mcp.call('browser_open', { url: 'about:blank' });
+    await expect(mcp.call('browser_act', { tab_id: next.tab_id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
   } finally { await mcp.close(); }
 });

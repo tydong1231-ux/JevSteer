@@ -202,6 +202,8 @@ test("after a sent Create, a verifier pass that Jev does not share goes to the h
     assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
     // The Create stays pending until the host accepts or resolves it.
     assert.equal((await runtime.journal.pending("test")).length, 1);
+    // The host is told what Jev did not see, and that the verifier passed.
+    if (mode === "hybrid") assert.equal(result.info, 'Jev did not find task.goal reached after a write this milestone sent (click on button "Create"): no message appeared after it. The verifier passed this page. A required field or a rule on the page may have stopped the write. Check the site before accepting this result, and resolve the pending action from what it shows. No input was replayed.');
   }
 });
 

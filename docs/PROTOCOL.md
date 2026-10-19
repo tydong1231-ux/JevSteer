@@ -52,9 +52,11 @@ such as "Generate only calculates the report" keeps a read-only button out of
 the remote-write journal.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
-on a closed/replaced Page blocks new input on other Pages in that session. The
-host can resolve the original `tab_id` and action ID after independent readback,
-even when the physical Page no longer exists. Changing profile/driver is not an
+on a closed/replaced Page blocks new input on other Pages in that session. It
+does not block `browser_open` or `browser_snapshot`: navigation and reading are
+how the host checks on the site what the action did, for example in a new tab
+on the record list. The host can resolve the original `tab_id` and action ID
+after independent readback, even when the physical Page no longer exists. Changing profile/driver is not an
 automatic journal migration: finish/reconcile old workflows before switching.
 
 Browser dialogs are held for host intervention; the driver never accepts them.
@@ -117,9 +119,11 @@ Pre-input target checks and journal fingerprints stay exact. Two links with the
 same text, context and address (Wikipedia's "20 | 50 | 100" pager above and
 below a list) load the same page, so a click on either is the same click; any
 other target that matches two identical controls is refused before input
-(`STALE_TARGET: ambiguous`). Jev gets one more look, then the milestone stops as
-`ambiguous` for the host. A refused choice sends no input, so on the unchanged
-page it is not reported as a page error.
+(`STALE_TARGET: ambiguous`), unless the page is exactly as it was when the
+control was chosen: then its order tells identical controls apart, such as two
+unnamed selects in one filter row. Otherwise Jev gets one more look, then the
+milestone stops as `ambiguous` for the host. A refused choice sends no input, so
+on the unchanged page it is not reported as a page error.
 
 A field with no accessible name, placeholder or label element takes the name a
 person reads next to it (Playwright driver): its column's header in a table (also
@@ -129,8 +133,22 @@ or just before it on the same line (an antd Form.Item caption such as
 "Customer" or "Due Date"). A search icon in the field's own box adds "(search)",
 or names it "Search" alone. A placeholder that only says how to fill a field
 ("Select date", "请输入", "YYYY-MM-DD") gives way to such a label and stays in
-`placeholder`. A select-like combobox whose input holds only search text (antd,
-react-select) reports the value it shows as `display`.
+`placeholder`. Text drawn over a field that has no placeholder attribute (a
+global search's "Search contacts, vendor bills, ..." layer, or an antd select's
+placeholder) is reported as `hint`: it tells Jev what an unnamed field is for,
+but it is never the field's name, because it goes away once the field holds a
+value. A field in a table cell also reports its column header as `column`; such
+a field belongs to its row's item, such as an invoice line, and the value
+chooser is told so. A select-like combobox whose input holds only search text
+(antd, react-select) reports the value it shows as `display`, and a field this
+run typed that now shows the typed value there is not offered for TYPE again.
+
+antd draws a select's options in a portal at the end of `<body>`, as divs with
+`aria-selected` and no role, and keeps `role=option` copies in a 0×0 listbox
+for screen readers. The visible divs are observed as options, also while a
+drawer or modal is open; the hidden copies are not (a click on them only waits
+until it times out). An open combobox is not offered for SELECT, which would
+only close its list again: Jev clicks the option.
 
 If workflow knowledge is missing, return `needs_guidance` instead of guessing. The host patches the current milestone and resumes.
 
@@ -164,6 +182,15 @@ showed, and any other toast at acceptance, such as a late error, makes the
 ticket stale. A count in a badge (a sidebar "Todo 41" that becomes 42 when the
 saved record adds a to-do) is left out of the bound state too: a badge has a
 class hook (badge, unread, antd's scroll-number) or is a small filled pill.
+When the milestone's contract speaks of a badge (it names the badge, such as
+"Cart" or "Todo", states its number, or asks about counts, unread items or
+notifications), its counts stay in the bound state, so "Cart 2" turning into
+"Cart 3" makes the ticket stale. A toast over an open drawer or modal is part of
+the page text too. A new ticket waits while a toast shows, up to
+`JEVSTEER_REVIEW_TOAST_WAIT_MS` (default 4000), because the app may still be
+closing a drawer and reloading its list behind it; a contract that asserts the
+toast's text does not wait. Acceptance does not wait: a toast then still makes
+the ticket stale.
 `host_review_stale` requires rejection and re-observation of the same milestone,
 not replaying the earlier action. After a stale ticket is rejected, rerunning
 that milestone with the same `run_id` re-observes: in host and hybrid modes the
@@ -200,7 +227,12 @@ A verifier pass that Jev does not share goes to the host
 (`host_review_required` in host and hybrid modes; `verification_uncertain` in
 jev mode, with the write still pending). A pass both agree on completes the
 milestone (`completed_verified`, or `host_review_required` in host mode). When
-the check fails, the milestone stops as before. No input is sent for this check.
+Jev did not find the goal reached and the result goes to the host, its `info`
+says what the write left behind: the message the page showed after it, or that
+none appeared, and that the page sent no data request after it when that is so.
+A Save that a required field stopped without a word looks like this; check the
+site before accepting. When the check fails, the milestone stops as before. No
+input is sent for this check.
 
 Multiple remote writes need separately reviewable outcomes. If an earlier write is
 unconfirmed, independently inspect and resolve it before the next mutation; do not
@@ -339,7 +371,10 @@ action, `observe_ms` (watching the previous input or wait), `decide_ms` and
 `requests`. A guarded input adds a `guards` row with the effect and constraint
 verdicts and the target's scope and context. `explain: true` returns the round
 rows, guard verdicts included, in the result.
-Playwright observations read at most 1000 interactive elements. A page over
+Playwright observations read at most 2000 interactive elements
+(`JEVSTEER_MAX_ELEMENTS`; Wikipedia's history at 100 revisions holds about
+1100). The snapshot crosses from the page as one JSON string, which reads a page
+of 1100 controls in about 0.2 s. A page over
 that limit, as when a search swaps its old list for the new one, is read again
 within the observation window. One still over it when the window ends stops the
 milestone as `observation_limit`: no further input is sent, and the result keeps

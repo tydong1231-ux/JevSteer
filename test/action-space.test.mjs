@@ -103,6 +103,33 @@ test("multiple value mapping is deferred until the selected field is known", asy
   assert.equal(observed[0].state.selected_field.label, "Email");
 });
 
+test("an open combobox is not a SELECT target; a field known only by its hint can be typed into", () => {
+  const space = buildTargetSpace([
+    { i: 0, selector: "#customer", tag: "input", role: "combobox", label: "Customer", value: "", expanded: true },
+    { i: 1, selector: "#terms", tag: "input", role: "combobox", label: "Payment Terms", value: "", expanded: false },
+    { i: 2, selector: "#search", tag: "input", type: "text", role: "textbox", label: "", hint: "Search contacts, vendor bills..." },
+    { i: 3, selector: "#qty", tag: "input", type: "text", role: "textbox", label: "QTY", column: "QTY", record_key: "line-1" },
+  ]);
+  assert.deepEqual(space.candidates.select.map((c) => c.key), ["1"]);
+  assert.deepEqual(space.candidates.type.map((c) => c.key), ["0", "1", "2", "3"]);
+  assert.equal(space.questions.type_target.criteria["2"].control, '[2] textbox "Search contacts, vendor bills..."');
+  assert.equal(space.questions.type_target.criteria["3"].table_column, "QTY");
+});
+
+test("the value chooser sees a field's table column and hint", async () => {
+  let selected;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    selected = state.selected_field;
+    return { answers: { selected_value: choice(questions.selected_value.criteria, "__none__") }, ms: 1, tokens: 4 };
+  } });
+  const line = { i: 0, selector: "#product", tag: "input", role: "combobox", label: "Preferred Name", column: "Preferred Name", hint: "Select product", record_key: "line-1", value: "" };
+  const value = await runtime.chooseFieldValue({ url: "https://erp.test", title: "Invoice", text: "Invoice", elements: [line] },
+    normalizeTaskContract({ goal: "Create an invoice for JevSteer QA" }), { customer_name: "JevSteer QA", quantity: "2" }, [], line);
+  assert.equal(value, undefined);
+  assert.equal(selected.table_column, "Preferred Name");
+  assert.equal(selected.hint, "Select product");
+});
+
 test("exact host field assertions bind start and end values without another model choice", async () => {
   const runtime = new JevSteerRuntime({ decider: async () => { throw new Error("must not guess an explicit binding"); } });
   const p={elements:[{i:0,selector:"#from",label:"Start date"},{i:1,selector:"#to",label:"End date"}]};

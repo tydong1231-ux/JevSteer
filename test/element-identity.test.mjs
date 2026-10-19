@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findRemembered, locateAfterAction, rememberField } from "../src/element-identity.mjs";
+import { findRemembered, locateAfterAction, rememberField, twinsOf } from "../src/element-identity.mjs";
 
 const doc = { frame_id: "f1", document_id: "f1:0:1", identity_version: 2 };
 const field = (i, context, extra = {}) => ({ i, ...doc, tag: "input", role: "textbox", label: "Credit limit", name: "credit", context, ...extra });
@@ -34,4 +34,13 @@ test("record keys, forms and documents still separate controls without context",
   assert.equal(locateAfterAction(before.elements[0], after, before), after.elements[0]);
   const otherDocument = page({ ...field(0, "a changed", { record_key: "line-1" }), document_id: "f1:1:2" });
   assert.equal(locateAfterAction(before.elements[0], otherDocument, before), undefined);
+});
+
+test("identical controls are told apart only by their order", () => {
+  const select = (i) => ({ i, ...doc, tag: "input", role: "combobox", label: "", context: "" });
+  const filters = page(select(0), select(1), field(2, "Amount"));
+  assert.deepEqual(twinsOf(filters.elements[1], filters), { index: 1, count: 2 });
+  assert.equal(twinsOf(filters.elements[2], filters), undefined);
+  // Another document's copy is not a twin.
+  assert.equal(twinsOf(filters.elements[0], page(filters.elements[0], { ...select(1), document_id: "f1:1:2" })), undefined);
 });

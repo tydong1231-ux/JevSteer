@@ -33,7 +33,7 @@ export function scriptedDecider(steps, { verifyScore = 0.99, inspect } = {}) {
     else if (questions.key) answers = { key: { choice: "Escape" } };
     else {
       const step = steps[Math.min(index++, steps.length - 1)];
-      answers = typeof step === "function" ? step(state, questions) : decision(step);
+      answers = typeof step === "function" ? await step(state, questions) : decision(step);
     }
     return { answers, ms: 1, tokens: 10 };
   };

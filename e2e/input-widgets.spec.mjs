@@ -94,3 +94,95 @@ test('a date the picker rewrites in its own format still counts as typed', async
     await expect(page.locator('[name=end]')).toHaveValue('2026/12/01');
   } finally { await mcp.close(); }
 });
+
+// antd 5's Select in a Drawer, as on ccMonet's invoice form. The options
+// render in a portal at the end of <body>. rc-select draws each visible
+// option as a div with aria-selected and no role, and keeps role=option
+// copies in a 0×0 listbox for screen readers; a click on those times out.
+const drawerSelect = `<style>
+    .ant-select { position: relative; width: 240px; height: 28px; border: 1px solid #ccc; }
+    .ant-select-selection-search-input { width: 100%; height: 26px; border: 0; }
+    .ant-select-selection-placeholder, .ant-select-selection-item { position: absolute; left: 6px; top: 5px; pointer-events: none; }
+    .ant-select-dropdown { position: absolute; top: 40px; left: 420px; width: 240px; background: #fff; border: 1px solid #ccc; z-index: 1050; }
+    .ant-select-dropdown-hidden { display: none; }
+    .ant-select-item-option { padding: 5px 12px; cursor: pointer; }
+  </style>
+  <h1>Sales invoices</h1><button>New invoice</button>
+  <div class="ant-drawer-content" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <div id="drawer-title">New invoice</div>
+    <div class="ant-col"><div>Customer</div>
+      <div class="ant-select ant-select-single ant-select-show-search"><div class="ant-select-selector">
+        <span class="ant-select-selection-search"><input id="rc_select_1" class="ant-select-selection-search-input" role="combobox" type="search" aria-expanded="false" aria-haspopup="listbox" aria-owns="rc_select_1_list" aria-autocomplete="list" aria-controls="rc_select_1_list" autocomplete="off" value=""></span>
+        <span class="ant-select-selection-placeholder">Select a customer</span>
+      </div></div>
+    </div>
+    <label>Reference <input name="reference"></label>
+    <button>Save as Draft</button>
+  </div>
+  <div style="position: absolute; top: 0; left: 0; width: 100%;"><div>
+    <div class="ant-select-dropdown ant-select-dropdown-hidden"><div>
+      <div role="listbox" id="rc_select_1_list" style="height: 0; width: 0; overflow: hidden;">
+        <div role="option" id="rc_select_1_list_0" aria-selected="false" aria-label="Acme Ltd">Acme Ltd</div>
+        <div role="option" id="rc_select_1_list_1" aria-selected="false" aria-label="Beta LLC">Beta LLC</div>
+      </div>
+      <div class="rc-virtual-list"><div class="rc-virtual-list-holder"><div class="rc-virtual-list-holder-inner">
+        <div aria-selected="false" class="ant-select-item ant-select-item-option" title="Acme Ltd"><div class="ant-select-item-option-content">Acme Ltd</div></div>
+        <div aria-selected="false" class="ant-select-item ant-select-item-option" title="Beta LLC"><div class="ant-select-item-option-content">Beta LLC</div></div>
+      </div></div></div>
+    </div></div>
+  </div></div>
+  <script>
+    const input = document.querySelector('#rc_select_1');
+    const dropdown = document.querySelector('.ant-select-dropdown');
+    const setOpen = (open) => { dropdown.classList.toggle('ant-select-dropdown-hidden', !open); input.setAttribute('aria-expanded', String(open)); };
+    input.addEventListener('mousedown', () => setOpen(true));
+    input.addEventListener('input', () => {
+      setOpen(true);
+      document.querySelector('.ant-select-selection-placeholder')?.style.setProperty('display', input.value ? 'none' : '');
+      for (const o of dropdown.querySelectorAll('.ant-select-item-option')) o.style.display = o.title.toLowerCase().includes(input.value.toLowerCase()) ? '' : 'none';
+    });
+    for (const o of dropdown.querySelectorAll('.ant-select-item-option')) o.addEventListener('click', () => {
+      input.value = '';
+      document.querySelector('.ant-select-selection-placeholder')?.remove();
+      document.querySelector('.ant-select-selection-item')?.remove();
+      input.parentElement.after(Object.assign(document.createElement('span'), { className: 'ant-select-selection-item', title: o.title, textContent: o.title }));
+      o.setAttribute('aria-selected', 'true');
+      setOpen(false);
+    });
+  </script>`;
+
+// Without the listbox link (no aria-controls), the open list still belongs to
+// the drawer while its combobox is open.
+const unlinked = drawerSelect.replace(/ aria-owns="rc_select_1_list"| aria-controls="rc_select_1_list"| id="rc_select_1_list"/g, '');
+for (const [variant, html] of [['', drawerSelect], [' (no listbox link)', unlinked]]) {
+  test(`an antd select in a drawer: type to search, then click the visible option; the field is not typed again${variant}`, async ({ page }, testInfo) => {
+    await page.setContent(html);
+    const seen = {};
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+      (state) => decision({ tool: 'type', target: pick((e) => e.label === 'Customer')(state) }),
+      (state, questions) => {
+        seen.open = { tools: Object.keys(questions.tool.criteria), elements: state.page.elements.map((e) => [e.role, e.label]) };
+        return decision({ tool: 'click', target: pick((e) => e.role === 'option' && e.label === 'Acme Ltd')(state) });
+      },
+      (state, questions) => {
+        seen.picked = { customer: state.page.elements.find((e) => e.label === 'Customer'), typable: Object.values(questions.type_target?.criteria || {}).map((c) => c.control) };
+        return decision({ tool: 'none', done: 0.99 });
+      },
+    ]));
+    try {
+      const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Choose customer Acme Ltd on the new invoice', values: { customer: 'Acme' }, verification_mode: 'host', max_actions: 4, evidence_level: 'none' });
+      expect(result.status).toBe('host_review_required');
+      // The open list's visible option is observed, though it is drawn outside
+      // the drawer. The hidden listbox and its copies are not, nor is the page
+      // behind the drawer. SELECT on the open combobox would only close it.
+      expect(seen.open.elements).toEqual([['combobox', 'Customer'], ['textbox', 'Reference'], ['button', 'Save as Draft'], ['option', 'Acme Ltd']]);
+      expect(seen.open.tools).not.toContain('select');
+      expect(result.actions.map((a) => [a.action, a.effect?.status])).toEqual([['type', 'confirmed'], ['click', 'changed']]);
+      await expect(page.locator('.ant-select-selection-item')).toHaveText('Acme Ltd');
+      // The search text cleared when the option was picked. The field shows
+      // the option, so it is not offered for TYPE again.
+      expect(seen.picked.customer).toMatchObject({ value: '', display: 'Acme Ltd' });
+      expect(seen.picked.typable).toEqual(['[1] textbox "Reference"']);
+    } finally { await mcp.close(); }
+  });
+}

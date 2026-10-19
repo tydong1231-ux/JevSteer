@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test';
 import { driverFor } from './helpers.mjs';
 
-const select = (id, shown = '') => `<div class="ant-select ant-select-single ant-select-allow-clear ant-select-show-arrow"><div class="ant-select-selector"><span class="ant-select-selection-wrap"><span class="ant-select-selection-search"><input id="${id}" class="ant-select-selection-search-input" role="combobox" type="search" aria-haspopup="listbox" aria-autocomplete="list" autocomplete="off" value=""></span>${shown ? `<span class="ant-select-selection-item" title="${shown}">${shown}</span>` : '<span class="ant-select-selection-placeholder"></span>'}</span></div><span class="ant-select-arrow"><span role="img" aria-label="down" class="anticon anticon-down"><svg width="12" height="12"></svg></span></span></div>`;
+const select = (id, shown = '', placeholder = '') => `<div class="ant-select ant-select-single ant-select-allow-clear ant-select-show-arrow"><div class="ant-select-selector"><span class="ant-select-selection-wrap"><span class="ant-select-selection-search"><input id="${id}" class="ant-select-selection-search-input" role="combobox" type="search" aria-haspopup="listbox" aria-autocomplete="list" autocomplete="off" value=""></span>${shown ? `<span class="ant-select-selection-item" title="${shown}">${shown}</span>` : `<span class="ant-select-selection-placeholder">${placeholder}</span>`}</span></div><span class="ant-select-arrow"><span role="img" aria-label="down" class="anticon anticon-down"><svg width="12" height="12"></svg></span></span></div>`;
 const picker = '<div class="ant-picker ant-picker-outlined"><div class="ant-picker-input"><input placeholder="Select date" aria-invalid="false" autocomplete="off" value=""><span class="ant-picker-suffix"><span role="img" aria-label="calendar" class="anticon anticon-calendar"><svg width="12" height="12"></svg></span></span></div></div>';
 const col = (caption, field) => `<div class="ant-col ant-col-6" style="display:inline-block;width:220px;vertical-align:top;margin-right:16px"><div>${caption}</div>${field}</div>`;
 const header = (name) => `<th class="flex"><div class="flex"><div class="flex-1"><p class="required">${name}</p></div></div></th>`;
@@ -32,6 +32,8 @@ test('unlabeled antd fields take the caption before them, and line inputs their 
     expect(fields.find((e) => e.label === 'Contact')).toMatchObject({ value: '', display: 'Jane Doe' });
     expect(fields.find((e) => e.label === 'Customer').display).toBeUndefined();
     expect(elements.find((e) => e.role === 'button').label).toBe('Delete line');
+    // Line inputs belong to their row's item: Jev is told which column each is in.
+    expect(fields.map((e) => e.column || '')).toEqual(['', '', '', '', '', '', 'Item', 'Quantity', 'Unit Price']);
   } finally { await driver.close(); }
 });
 
@@ -50,5 +52,33 @@ test('a separate header table names body cells; a search icon names a search box
     const { elements } = await driver.observe(id);
     const fields = elements.filter((e) => ['textbox'].includes(e.role));
     expect(fields.map((e) => e.label)).toEqual(['Search', 'Description', 'Amount', 'Total', '', '', '']);
+  } finally { await driver.close(); }
+});
+
+// ccMonet's global search draws its hint over an input that has no
+// placeholder, next to a "filter" button (Mac rerun, 2026-10-19). Its filter
+// popup holds antd selects whose only text is their placeholder.
+test('text drawn over an unnamed field is its hint, never its name', async ({ page }) => {
+  await page.setContent(`
+    <div style="display:flex;gap:300px"><span>ccMonet</span>
+      <div class="global-search" style="position:relative;width:420px">
+        <input class="ant-input" type="text" style="width:360px">
+        <div class="search-tip" style="position:absolute;left:8px;top:2px;pointer-events:none;color:#999">Search contacts, vendor bills, sales invoices, payrolls...</div>
+        <button aria-label="filter">⚙</button>
+      </div>
+    </div>
+    <div class="filter-row" style="display:flex;gap:16px;width:600px">${select('rc_select_20', '', 'Select field')}${select('rc_select_21', '', 'Select condition')}</div>
+    <script>document.querySelector('.ant-input').addEventListener('input', (e) => { document.querySelector('.search-tip').style.display = e.target.value ? 'none' : ''; });</script>`);
+  const { driver, id } = await driverFor(page);
+  try {
+    const fields = async () => (await driver.observe(id)).elements.filter((e) => ['combobox', 'textbox'].includes(e.role)).map((e) => [e.role, e.label, e.hint]);
+    expect(await fields()).toEqual([
+      ['textbox', '', 'Search contacts, vendor bills, sales invoices, payrolls...'],
+      ['combobox', '', 'Select field'],
+      ['combobox', '', 'Select condition'],
+    ]);
+    // The hint goes away once the field holds text; the name stays the same.
+    await page.fill('.ant-input', 'CHAIN1019');
+    expect((await fields())[0]).toEqual(['textbox', '', undefined]);
   } finally { await driver.close(); }
 });

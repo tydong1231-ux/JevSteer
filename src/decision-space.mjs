@@ -11,9 +11,11 @@ export function eligibleFor(e, tool) {
   // An ARIA listbox is a container, not one specific choice. Clicking its
   // center can select an unrelated child option at that coordinate.
   if (e.role === "listbox" && e.tag !== "select") return false;
-  const identifiableField = !!squash(e.label || e.placeholder || e.name || e.text);
+  const identifiableField = !!squash(e.label || e.placeholder || e.hint || e.name || e.text);
   if (tool === "type") return FIELDISH(e) && identifiableField && !e.type_completed;
-  if (tool === "select") return SELECTISH(e);
+  // An open combobox shows its options on the page, to choose with CLICK.
+  // SELECT on it would only close the list again.
+  if (tool === "select") return SELECTISH(e) && !(e.tag !== "select" && e.expanded === true);
   if (tool === "press_enter") return (FIELDISH(e) && identifiableField) || e.tag === "button" || e.role === "button";
   if (tool === "hover") return ["button", "a", "summary"].includes(e.tag)
     || ["button", "link", "menuitem", "tab", "option"].includes(e.role);
@@ -29,6 +31,7 @@ function describe(candidate) {
   if (e.record_key) result.record = squash(e.record_key, 80);
   if (e.context) result.record_context = squash(e.context, 180);
   if (e.scope) result.scope = squash(e.scope, 180);
+  if (e.column) result.table_column = squash(e.column, 60);
   if (e.value != null && !sensitiveField(e)) result.current_value = squash(e.value, 80);
   if (e.checked != null) result.checked = e.checked;
   if (e.options?.length && candidate.option == null) {
