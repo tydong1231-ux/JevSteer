@@ -9,6 +9,9 @@ import { ActionJournal } from '../src/action-journal.mjs';
 import { PlaywrightDriver } from '../src/browser/playwright-driver.mjs';
 
 const lookup = (state, name) => state.page.elements.find((e) => e.label === name)?.i;
+// Run, review and page ids and state digests are random hex, so they can hold
+// any digits. A leaked secret would show up outside them.
+const withoutIds = (value) => JSON.stringify(value).replace(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{32,}/gi, '<id>');
 
 test('MCP host oracle reads visible business cells independently without input or secret values', async ({ page }, testInfo) => {
   await page.setContent(`<table aria-label="Statement"><tr><th>Date</th><th>Amount</th></tr><tr><td>2026/5/3</td><td>12.65</td></tr><tr hidden><td>Hidden</td></tr></table><label>API Key<input value="fixture-secret"></label><label>Password<input type="password" value="fixture-password"></label><table hidden><tr><td>Hidden table</td></tr></table><script>window.changes=[];new MutationObserver(m=>changes.push(...m)).observe(document,{subtree:true,attributes:true,childList:true,characterData:true});window.inputs=0;document.addEventListener('input',()=>inputs++);</script>`);
@@ -29,7 +32,7 @@ test('MCP host oracle redacts PIN and 2FA controls like sensitiveName()', async 
   try {
     const oracle = await mcp.call('browser_inspect', { tab_id: mcp.id });
     expect(oracle.controls.map((e) => e.value)).toEqual(['[REDACTED]', '[REDACTED]', '[REDACTED]', '1 Main St']);
-    expect(JSON.stringify(oracle)).not.toMatch(/1234|654321|9999/);
+    expect(withoutIds(oracle)).not.toMatch(/1234|654321|9999/);
   } finally { await mcp.close(); }
 });
 
@@ -43,7 +46,7 @@ test('typing a host-supplied PIN is confirmed without exposing it', async ({ pag
     const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Enter the supplied card PIN without saving', values: { pin: '4321' }, verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
     await expect(page.locator('#pin')).toHaveValue('4321');
     expect(result.status).toBe('host_review_required');
-    expect(JSON.stringify(result)).not.toContain('4321');
+    expect(withoutIds(result)).not.toContain('4321');
   } finally { await mcp.close(); }
 });
 
