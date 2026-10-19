@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { elementFingerprint, pageDiff, squash } from "./page-model.mjs";
 import { locateAfterAction } from "./element-identity.mjs";
+import { sameDateText } from "./date-text.mjs";
 
 // Kapture snapshots give rich-text editors and custom textboxes no value; their
 // content is element text, whitespace-collapsed and cut to this many chars.
@@ -37,7 +38,10 @@ export function verifyActionEffect(before, after, action) {
     const asText = !native && current.value == null && current.text != null;
     const actual = asText ? squash(current.text, TEXT_CHARS) : String(current.value ?? "");
     const expected = asText ? squash(action.expected_value, TEXT_CHARS) : String(action.expected_value ?? "");
-    return { status: actual === expected ? "confirmed" : "failed", check: "field_value" };
+    if (actual === expected) return { status: "confirmed", check: "field_value" };
+    // A date picker rewrites a committed date in its own format: 2026/01/01.
+    if (sameDateText(actual, expected)) return { status: "confirmed", check: "field_value_date" };
+    return { status: "failed", check: "field_value" };
   }
 
   if (action.tool === "select") {

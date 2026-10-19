@@ -127,6 +127,27 @@ test("waiting does not clear an unconfirmed mutation or permit duplicate submiss
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
 });
 
+test("waits that change nothing on a settled page are marked for Jev and stop the run", async () => {
+  const k = new MemoryKapture({ text: "Profit and Loss 2026/1/1 - 2026/10/31", elements: [button] });
+  let seen;
+  const decider = scriptedDecider([(state) => { seen = structuredClone(state.task.history); return decision({ tool: "wait" }); }]);
+  const result = await memoryRuntime(k, decider).run("Show the report through 2026/12/31", { maxActions: 20, evidenceLevel: "none" });
+  assert.equal(result.status, "stuck");
+  assert.match(result.info, /did not change in 3 waits and nothing on it is loading/);
+  // What Jev saw on its last decision: each earlier wait changed nothing.
+  assert.deepEqual(seen.map((h) => [h.action, h.page_changed]), [["wait", false], ["wait", false], ["wait", false]]);
+  assert.equal(k.commands.length, 0);
+});
+
+test("waits while the page changes or loads are not idle", async () => {
+  const k = new MemoryKapture({ text: "Generating", elements: [button] });
+  let n = 0;
+  const decider = scriptedDecider([() => { k.page.text = `Generating ${n++}`; return decision({ tool: "wait" }); }]);
+  const result = await memoryRuntime(k, decider).run("Show the report", { maxActions: 5, evidenceLevel: "none" });
+  assert.equal(result.status, "max_actions");
+  assert.ok(result.actions.every((a) => a.page_changed === undefined));
+});
+
 test("navigation during a decision reobserves without replaying the click", async () => {
   const k = new MemoryKapture({ elements: [button] });
   const decider = scriptedDecider([{}, () => { k.page.url = "https://fixture.test/final"; k.page.text = "Saved detail"; return decision(); }, { tool: "none", done: 0.99 }]);
@@ -180,30 +201,45 @@ test("exact constraint guard sees the chosen native option, never a secret one",
   const el = { i: 0, selector: "#status", tag: "select", role: "combobox", label: "Status", options: [{ text: "Open", value: "open" }, { text: "Closed", value: "closed" }] };
   const contract = { goal: "Reopen the ticket", success_criteria: [], constraints: ["Do not set Status to Closed"], guidance: [] };
   const page = { url: "https://fixture.test/ticket", title: "Ticket", text: "Status", elements: [el] };
-  assert.equal((await runtime.checkActionGuards(page, contract, { tool: "select", el, value: "open" }, [])).violates, 0.05);
+  assert.equal(await runtime.checkConstraint(page, contract, { tool: "select", el, value: "open" }, []), 0.05);
   assert.deepEqual(seen.selected_option, { text: "Open", value: "open" });
-  await runtime.checkActionGuards(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
+  await runtime.checkConstraint(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
   assert.equal(seen.selected_option, undefined);
 });
 
-test("one guard request answers effect and constraint questions; a missing constraint answer blocks", async () => {
+test("effect and constraint guards are separate requests; the constraint one sees page text only and blocks when unanswered", async () => {
   const asked = [];
   let reply = {};
-  const runtime = memoryRuntime(new MemoryKapture(), async (_state, questions) => {
-    asked.push(Object.keys(questions).sort());
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked.push({ questions: Object.keys(questions).sort(), page: Object.keys(state.page).sort() });
     return { answers: reply, ms: 1, tokens: 1 };
   });
   const el = { i: 0, selector: "#save", tag: "button", role: "button", label: "Save" };
   const page = { url: "https://fixture.test/form", title: "Form", text: "Form", elements: [el] };
-  const free = { goal: "Save", success_criteria: [], constraints: [], guidance: [] };
-  const constrained = { ...free, constraints: ["Do not save"] };
+  const contract = { goal: "Save", success_criteria: [], constraints: ["Do not save"], guidance: [] };
   reply = { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 } };
-  assert.deepEqual(await runtime.checkActionGuards(page, free, { tool: "click", el }, []), { sideEffect: 0.9, irreversible: 0.1 });
-  reply = { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 }, violates: { noul: 0.2 } };
-  assert.deepEqual(await runtime.checkActionGuards(page, constrained, { tool: "click", el }, []), { sideEffect: 0.9, irreversible: 0.1, violates: 0.2 });
+  assert.deepEqual(await runtime.checkActionEffects(page, contract, { tool: "click", el }, []), { sideEffect: 0.9, irreversible: 0.1 });
+  reply = { violates: { noul: 0.2 } };
+  assert.equal(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), 0.2);
   reply = {};
-  assert.deepEqual(await runtime.checkActionGuards(page, constrained, { tool: "click", el }, [], 0.3, 0.4), { sideEffect: 0.3, irreversible: 0.4, violates: 1 });
-  assert.deepEqual(asked, [["action_irreversible", "action_side_effect"], ...Array(2).fill(["action_irreversible", "action_side_effect", "violates"])]);
+  assert.deepEqual(await runtime.checkActionEffects(page, contract, { tool: "click", el }, [], 0.3, 0.4), { sideEffect: 0.3, irreversible: 0.4 });
+  assert.equal(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), 1);
+  assert.deepEqual(asked.map((a) => a.questions), [["action_irreversible", "action_side_effect"], ["violates"], ["action_irreversible", "action_side_effect"], ["violates"]]);
+  assert.deepEqual(asked[1].page, ["text", "title", "url"]);
+});
+
+test("a constraint block says allow_irreversible does not lift it and how to settle it", async () => {
+  const k = new MemoryKapture({ elements: [button] });
+  const decider = async (state, questions) => {
+    if (questions.violates) return { answers: { violates: { noul: 0.74 } }, ms: 1, tokens: 1 };
+    if (questions.action_side_effect) return { answers: { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 } }, ms: 1, tokens: 1 };
+    return { answers: decision(), ms: 1, tokens: 1 };
+  };
+  const result = await memoryRuntime(k, decider).run("Create customer Acme", { constraints: ["Do not create duplicates"], allowIrreversible: true, maxActions: 3, evidenceLevel: "none" });
+  assert.equal(result.status, "constraint_blocked");
+  assert.match(result.info, /allow_irreversible does not lift this check/);
+  assert.equal(result.pending.p_constraint_risk, 0.74);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
 });
 
 test("Playwright rounds wait on full observations, not the URL/title metadata poll", async () => {

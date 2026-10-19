@@ -39,6 +39,7 @@ export const config = {
   navigationSettleMs: num("JEVSTEER_NAVIGATION_SETTLE_MS", 15000),
   observationQuietMs: num("JEVSTEER_OBSERVATION_QUIET_MS", 250),
   maxWaits: num("JEVSTEER_MAX_WAITS", 12),
+  maxIdleWaits: num("JEVSTEER_MAX_IDLE_WAITS", 3),
 };
 
 export function requireTypesafeKey() {

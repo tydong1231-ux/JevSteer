@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { config } from '../config.mjs';
 import { sameIdentity } from '../element-identity.mjs';
 import { FIELDISH, SELECTISH } from '../page-model.mjs';
+import { isDateText } from '../date-text.mjs';
 import { observeUntilReady } from '../observation.mjs';
 import { captureSnapshot, readDOM } from './snapshot.mjs';
 import { PageEvents } from './events.mjs';
@@ -166,39 +167,57 @@ export class PlaywrightDriver {
           const options = current.options.filter((o) => o.value === String(action.value));
           if (action.value == null || options.length !== 1 || options[0].disabled) throw new Error('INVALID_INPUT: native option must be unique and enabled');
         }
-        if (['click', 'hover'].includes(action.tool)) await handle[action.tool]({ trial: true, timeout });
+        if (forced(action, current)) await handle.hover({ trial: true, timeout });
+        else if (['click', 'hover'].includes(action.tool)) await handle[action.tool]({ trial: true, timeout });
         return handle;
       } catch (error) { await handle.dispose(); throw error; }
     }, beforeDispatch, async (handle, mark) => {
       // fsync can take time. Recheck the pinned node after the durable hook,
       // still before input; detachment/record recycling is a proven rejection.
+      let force = false;
+      let current;
       if (handle) {
         const state = await handle.evaluate(readDOM);
-        const current = state.elements[0];
+        current = state.elements[0];
         const entry = record.refs.get(action.el.selector);
         const doc = entry && `${this.frameInfo(entry.frame).id}:${this.frameInfo(entry.frame).revision}:${state.documentKey}`;
         if (!current || !sameIdentity(action.el, current, state.url) || current.disabled
             || doc !== action.el.document_id
             || ['type', 'select'].includes(action.tool) && !sensitiveFieldValueEqual(action.el, current)) throw new Error('STALE_TARGET: target changed while persisting intent');
+        force = forced(action, current);
+        if (force) await handle.hover({ trial: true, timeout });
       }
       switch (action.tool) {
-        case 'click': mark(); await handle.click({ timeout }); break;
+        case 'click': mark(); await handle.click({ timeout, force }); break;
         case 'hover': mark(); await handle.hover({ timeout }); break;
         case 'type': {
           const value = String(action.value);
           mark();
           if (inputMode === 'realistic') {
-            await handle.click({ timeout });
+            await handle.click({ timeout, force });
             await handle.press('ControlOrMeta+A', { timeout });
             await handle.press('Backspace', { timeout });
             await handle.type(value, { timeout });
-          } else await handle.fill(value, { timeout });
+          } else {
+            await handle.fill(value, { timeout, force });
+            // fill() sends input/change events but no key events. Widgets such
+            // as jQuery date pickers parse the field on keyup and rewrite it
+            // from their own state on blur, emptying it. A Shift press delivers
+            // the key events without changing the text.
+            await record.page.keyboard.press('Shift').catch(() => {});
+          }
+          // Date pickers commit a typed date only when focus leaves the field;
+          // antd commits a frame after that. A click on Generate or Save right
+          // after typing still reads the old date. Leaving the field now lets
+          // the effect check see the committed value. A combobox keeps focus
+          // for its option list.
+          if (isDateText(value) && current?.role !== 'combobox') await handle.evaluate((e) => e.blur()).catch(() => {});
           return { input_mode: inputMode };
         }
         case 'select':
           mark();
-          if (action.el.tag === 'select') await handle.selectOption({ value: String(action.value) }, { timeout });
-          else await handle.click({ timeout });
+          if (action.el.tag === 'select') await handle.selectOption({ value: String(action.value) }, { timeout, force });
+          else await handle.click({ timeout, force });
           return { input_mode: action.el.tag === 'select' ? 'native_select' : 'pointer' };
         case 'press_enter':
         case 'press_key': {
@@ -245,6 +264,16 @@ export class PlaywrightDriver {
       else await this.context?.close();
     }
   }
+}
+
+// Playwright counts everything inside an aria-disabled button or row as
+// disabled, so click, fill and selectOption wait on it until they time out. A
+// dnd-kit item's aria-disabled only turns dragging off (see snapshot.mjs). For
+// a target inside one, input skips Playwright's checks. Playwright's trial
+// hover, which has no enabled check, first proves the target is visible,
+// stable and not covered.
+function forced(action, current) {
+  return current.drag_disabled === true && ['click', 'type', 'select'].includes(action.tool);
 }
 
 function sensitiveFieldValueEqual(target, current) {

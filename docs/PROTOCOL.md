@@ -41,9 +41,15 @@ constraints before binding, then permits only those validated TYPE/SELECT inputs
 Every guarded explore input also gets an exact remote/irreversible effect check,
 regardless of its rough score. Read-only excludes remote preference writes such
 as favorite/star/bookmark/subscription toggles, not just financial record saves.
-The effect and constraint questions go to Jev in one request. A missing
-constraint answer counts as a violation, and the constraint verdict is applied
-after the replay and journal gates, as before.
+The effect and constraint questions are separate Jev requests sent at once; the
+constraint request sees the page text only. A missing constraint answer counts
+as a violation, and the constraint verdict is applied after the replay and
+journal gates. `allow_irreversible` does not lift a `constraint_blocked` stop:
+settle the doubt with a guidance fact the host has checked (for example, that no
+duplicate record exists) or change the constraint. The effect request treats
+`guidance` and `constraints` as host facts about what a control does, so a fact
+such as "Generate only calculates the report" keeps a read-only button out of
+the remote-write journal.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session. The
@@ -64,6 +70,13 @@ redacted; financial evidence remains private. Limits/truncation are explicit.
 Visible virtual rows are not evidence of the entire dataset, and this reader
 does not assert server persistence or create an acceptance receipt. Tab discovery
 does not install event collectors on unrelated pages.
+
+An `aria-disabled=true` ancestor disables every control inside it, except a
+dnd-kit sortable or draggable item (`aria-roledescription` sortable/draggable, or
+a `DndDescribedBy-N` description), whose `aria-disabled` only turns dragging off.
+Input to a target inside one skips Playwright's enabled check once a trial hover
+shows the target is visible, stable and not covered. `browser_inspect` marks such
+an ancestor `drag_only`.
 
 ## Milestone contract
 
@@ -214,6 +227,15 @@ than guessing. With no applicable assertion the model uses the selected field's
 explicit label/name first. Range pickers can still reorder coupled date endpoints;
 keep intermediate ranges valid and verify both controls plus the generated heading.
 
+Typing a value that reads as a calendar date (`2026/1/1`, `10/20/2026`,
+`2026年1月1日`, `Oct 20, 2026`) ends by leaving the field, unless it is a
+combobox. Date pickers such as antd's commit a typed date only then, so a
+Generate or Save click right after typing would otherwise read the old date.
+The effect check then sees the committed value and accepts the same date
+rewritten with other padding or separators (`2026/01/01`). Fast input also
+sends a Shift key press after filling, for widgets that parse fields on key
+events.
+
 ## Runtime limits
 
 `max_actions` bounds decision rounds; `max_duration_ms` bounds starting more
@@ -227,6 +249,10 @@ observation. Link navigation, the submit button of an explicit GET search form
 and search Enter wait for route progress within `JEVSTEER_NAVIGATION_SETTLE_MS`;
 no browser input is replayed by this wait. Checkboxes, radios and fields inside
 that form, and same-page `#` links, are judged in place without that wait.
+A `wait` after which the page did not change and nothing on it is loading is
+marked `page_changed: false` in history. `JEVSTEER_MAX_IDLE_WAITS` (default 3)
+such waits in a row stop the milestone as `stuck`; `JEVSTEER_MAX_WAITS`
+(default 12) bounds all waits.
 `browser_open` can return `navigation_unconfirmed` with a `tab_id` when its
 acknowledgement is lost and fresh DOM metadata cannot confirm the exact requested
 URL. Inspect that tab before another navigation. Redirects to a different URL

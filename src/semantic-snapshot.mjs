@@ -31,6 +31,13 @@ export const INTERACTIVE_SELECTOR = [
   "[tabindex]:not([tabindex=\"-1\"])"
 ].join(",");
 
+// dnd-kit marks a sortable/draggable item aria-disabled when dragging is off;
+// the item itself still works. Same rule as the Playwright snapshot.
+function dragOnly(node) {
+  return /\b(sortable|draggable)\b/i.test(node.attr("aria-roledescription") || "")
+    || /(^|\s)DndDescribedBy-\d+(\s|$)/.test(node.attr("aria-describedby") || "");
+}
+
 function inferRole(tag, type, explicit) {
   if (explicit) return explicit;
   if (tag === "a") return "link";
@@ -373,7 +380,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       ...(formAction ? { form_action: formAction } : {}),
       value: password ? "[REDACTED]" : (raw.value != null ? String(raw.value) : undefined),
       checked: raw.checked != null ? !!raw.checked : (["true", "false"].includes(node?.attr("aria-checked")) ? node.attr("aria-checked") === "true" : (node?.attr("checked") != null ? true : undefined)),
-      disabled: node?.attr("disabled") != null || node?.attr("aria-disabled") === "true",
+      disabled: node?.attr("disabled") != null || (node?.attr("aria-disabled") === "true" && !dragOnly(node)),
       readonly: node?.attr("readonly") != null || node?.attr("aria-readonly") === "true",
       contenteditable: node?.attr("contenteditable") === "true",
       options,

@@ -40,6 +40,36 @@ test('cursor-marked cards are discoverable but aria-disabled ancestry is never b
   } finally { await driver.close(); }
 });
 
+test('a dnd-kit row with dragging off still takes clicks and typing; covered rows and other aria-disabled ancestors still block', async ({ page }) => {
+  // dnd-kit's useSortable item attributes, as on ccMonet's Vendor Bills rows.
+  const row = (key, text, cell = '<td>USD 120.00</td>') => `<tr role="button" tabindex="0" aria-disabled="true" aria-roledescription="sortable" aria-describedby="DndDescribedBy-0" data-row-key="${key}"><td class="cursor-pointer" onclick="window.opened = '${key}'">${text}</td>${cell}</tr>`;
+  await page.setContent(`<table>${row('bill-1', 'Acme Supplies')}${row('line-1', 'Paper', '<td><label>Memo <input name="memo"></label></td>')}</table><div aria-disabled="true"><table>${row('bill-2', 'Locked Supplier')}</table></div><span id="DndDescribedBy-0" hidden>To pick up a draggable item, press the space bar.</span>`);
+  const { driver, id } = await driverFor(page);
+  try {
+    const snapshot = await driver.observe(id);
+    expect(snapshot.elements.find((e) => e.text === 'Acme Supplies')?.disabled).toBe(false);
+    expect(snapshot.elements.find((e) => e.tag === 'tr' && e.record_key === 'bill-1')?.disabled).toBe(false);
+    expect(snapshot.elements.find((e) => e.text === 'Locked Supplier')?.disabled).toBe(true);
+    const open = await choose(driver, id, 'click', (e) => e.text === 'Acme Supplies');
+    expect((await send(driver, id, open)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => window.opened)).toBe('bill-1');
+    for (const inputMode of ['fast', 'realistic']) {
+      const memo = await choose(driver, id, 'type', (e) => e.name === 'memo', `Rush ${inputMode}`);
+      expect((await send(driver, id, { ...memo, inputMode })).state).toBe('dispatched_ack');
+      await expect(page.locator('[name=memo]')).toHaveValue(`Rush ${inputMode}`);
+    }
+    const locked = await choose(driver, id, 'click', (e) => e.text === 'Locked Supplier');
+    await expect(driver.assertTargetFresh(id, locked)).rejects.toThrow(/STALE_TARGET/);
+    const blockers = (await driver.inspect(id)).controls.find((c) => c.label === 'Acme Supplies').disabled_ancestry;
+    expect(blockers).toEqual([expect.objectContaining({ tag: 'tr', aria_disabled: 'true', drag_only: true })]);
+    // Skipping Playwright's checks never clicks through an overlay.
+    await page.evaluate(() => { window.opened = undefined; document.body.insertAdjacentHTML('beforeend', '<div style="position:fixed;inset:0;background:#fff8"></div>'); });
+    const covered = await choose(driver, id, 'click', (e) => e.text === 'Acme Supplies');
+    expect((await send(driver, id, covered)).state).toBe('predispatch_rejected');
+    expect(await page.evaluate(() => window.opened)).toBeUndefined();
+  } finally { await driver.close(); }
+});
+
 test('named descendant icons distinguish view and delete in the same record', async ({ page }) => {
   await page.setContent('<table><tr data-row-key="statement-1"><td>Demo statement</td><td><button onclick="window.viewed=true"><span role="img" aria-label="View statement"><svg></svg></span></button><button onclick="window.deleted=true"><span role="img" aria-label="Delete statement"><svg></svg></span></button></td></tr></table>');
   const { driver, id } = await driverFor(page);
@@ -123,7 +153,9 @@ test('managed profile reopens with storage intact; CDP aliases share physical pa
   // Chromium's Windows storage paths can exceed MAX_PATH below long report
   // slugs. Keep this disposable synthetic profile in a short temp directory.
   const profile = await mkdtemp(join(tmpdir(), 'jev-pw-'));
-  const driver = new PlaywrightDriver({ userDataDir: profile, headless: true, timeoutMs: 5000, launchOptions: { args: ['--remote-debugging-port=0'] } });
+  // The same browser as the other tests: CI's bundled one, or a local Chrome.
+  const executablePath = process.env.JEVSTEER_TEST_EXECUTABLE_PATH || undefined;
+  const driver = new PlaywrightDriver({ userDataDir: profile, headless: true, executablePath, timeoutMs: 5000, launchOptions: { args: ['--remote-debugging-port=0'] } });
   let attached;
   let alias;
   let reopened;
@@ -141,7 +173,7 @@ test('managed profile reopens with storage intact; CDP aliases share physical pa
     await alias.close();
     expect(page.isClosed()).toBe(false);
     await driver.close();
-    reopened = new PlaywrightDriver({ userDataDir: profile, headless: true, timeoutMs: 5000 });
+    reopened = new PlaywrightDriver({ userDataDir: profile, headless: true, executablePath, timeoutMs: 5000 });
     expect(reopened.sessionId).toBe(driver.sessionId);
     const next = await reopened.createPage();
     await reopened.open(fixture.base + '/controls', { pageRef: next.pageId });
