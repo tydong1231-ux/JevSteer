@@ -776,7 +776,7 @@ export class JevSteerRuntime {
     const payloadSize = JSON.stringify({ page: modelPage, task, questions }).length;
     if (modelPage.elements.length <= config.maxSingleElements && payloadSize <= config.maxStateChars) {
       const result = await this.call({ page: modelPage, task }, questions);
-      return { ...result.answers, stages: 1 };
+      return { ...result.answers, stages: 1, target_elements: targetElements };
     }
 
     // Large pages: select a semantic group first, then ask only for the
@@ -806,7 +806,7 @@ export class JevSteerRuntime {
       },
     });
     const selectedTool = first.answers.tool.choice;
-    if (!TARGETED.has(selectedTool)) return { ...first.answers, stages: 1 };
+    if (!TARGETED.has(selectedTool)) return { ...first.answers, stages: 1, target_elements: targetElements };
 
     const ranked = Object.entries(first.answers.group.probabilities).sort((a, b) => b[1] - a[1]);
     const picks = [];
@@ -823,7 +823,7 @@ export class JevSteerRuntime {
       subset = targetElements.filter(e => eligibleFor(e, selectedTool) || selectedTool === "select" && listedOptions(e, targetElements).length).slice(0, config.maxSingleElements);
       head = buildTargetSpace(subset, targetElements).questions[key];
     }
-    if (!head) return { ...first.answers, stages: 1, groups_considered: picks };
+    if (!head) return { ...first.answers, stages: 1, groups_considered: picks, target_elements: targetElements };
     const second = await this.call({
       page: { ...modelPage, text: modelPage.text.slice(0, 1600), elements: toModelPage({ ...page, elements: subset }).elements },
       task,
@@ -833,12 +833,17 @@ export class JevSteerRuntime {
       [key]: second.answers[key],
       stages: 2,
       groups_considered: picks,
+      target_elements: targetElements,
     };
   }
 
   resolve(page, answer, values) {
     const tool = answer.tool.choice;
-    const space = buildTargetSpace(page.elements);
+    // The targets Jev was offered: decide() gives a typed field the hint it
+    // showed then and offers it no more for TYPE. Built from the page as
+    // observed, a typed search box known only by its hint would not take
+    // the Enter Jev chose for it.
+    const space = buildTargetSpace(answer.target_elements || page.elements);
     // A Jev choice head can only address the operation it was built for.
     const targetAnswer = answer[`${tool}_target`] || answer.target;
     const candidates = space.candidates[tool] || [];

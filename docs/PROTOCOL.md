@@ -206,7 +206,8 @@ decision on a large page. The floating parts of the next line item (an antd
 select's search box, a remove button at the row's end), a fixed bar above the
 field and a footer far below it are not popups. A field this run typed keeps
 the `hint` it showed then, so the search box still reads as "Search contacts,
-..." after its hint layer goes. When the contract has success criteria, Jev's
+..." after its hint layer goes, and an Enter Jev chooses for it goes to it.
+When the contract has success criteria, Jev's
 done question tells it to check each of them against the page as it is now,
 `page.popup` included.
 

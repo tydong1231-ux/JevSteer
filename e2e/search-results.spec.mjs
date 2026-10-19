@@ -89,6 +89,30 @@ test('Jev reads the results as the search box\'s, and judges done by the success
   } finally { await mcp.close(); }
 });
 
+test('Enter that Jev chose for the box it typed in goes to that box, though its hint has gone', async ({ page }, testInfo) => {
+  await page.setContent(bills);
+  await page.evaluate(() => document.querySelector('.group input').addEventListener('keydown', (e) => { if (e.key === 'Enter') window.entered = e.target.value; }));
+  const seen = {};
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'type', target: state.page.elements.find((e) => e.hint?.startsWith('Search contacts')).i }),
+    (state, questions) => {
+      const box = state.page.elements.find((e) => e.value === 'CP-MEIJI');
+      seen.offered = questions.press_enter_target?.criteria?.[String(box.i)]?.control;
+      return decision({ tool: 'press_enter', target: box.i });
+    },
+    () => decision({ tool: 'none', done: 0.99 }),
+  ]));
+  try {
+    const result = await mcp.call('browser_run', {
+      tab_id: mcp.id, goal: 'Search for vendor CP-MEIJI with the global search', success_criteria: ['Search results list CP-MEIJI CO.,LTD.'],
+      values: { vendor: 'CP-MEIJI' }, verification_mode: 'host', max_actions: 4, evidence_level: 'none',
+    });
+    expect(seen.offered).toBe('[1] textbox "Search contacts, vendor bills, sales invoices, payrolls..."');
+    expect(await page.evaluate(() => window.entered)).toBe('CP-MEIJI');
+    expect(result.status).toBe('host_review_required');
+  } finally { await mcp.close(); }
+});
+
 // An invoice's line items: antd draws each Product select's search input in an
 // absolute box, and a row can carry a floating remove button. Neither is a
 // popup of the Description field typed in the row above.

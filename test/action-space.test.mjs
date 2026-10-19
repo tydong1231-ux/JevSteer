@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildTargetSpace, availableTools } from "../src/decision-space.mjs";
-import { FIELDISH } from "../src/page-model.mjs";
+import { FIELDISH, brief } from "../src/page-model.mjs";
+import { rememberField } from "../src/element-identity.mjs";
 import { OfflineRuntime as JevSteerRuntime } from "./helpers/runtime.mjs";
 import { normalizeTaskContract } from "../src/task-contract.mjs";
 
@@ -155,6 +156,31 @@ test("a head with one target can turn it down", () => {
     type_target: choice(space.questions.type_target.criteria, "__none__"),
   }, { vendor: "CP-MEIJI" });
   assert.deepEqual([action.declined, action.target, action.el, action.candidates[0].element], [true, null, undefined, "none of the targets"]);
+});
+
+// ccMonet's global search box is known only by the hint drawn over it, which
+// goes once it holds a value. Jev is offered the box with that hint for
+// Enter; the choice must resolve to the same box, not to nothing.
+test("Enter chosen for a typed box known only by its hint goes to that box", async () => {
+  const box = { i: 0, selector: "#search", tag: "input", type: "text", role: "textbox", hint: "Search contacts, vendor bills...", value: "" };
+  const before = { url: "https://erp.test/bills", title: "Bills", text: "Vendor Bills", metrics: {}, elements: [box, { i: 1, selector: "#size", tag: "input", role: "combobox", label: "Page Size", value: "20" }] };
+  const typed = [{ field: rememberField(box, before), url: before.url, value: "CP-MEIJI" }];
+  const typedBox = { ...box, value: "CP-MEIJI" };
+  delete typedBox.hint;
+  const page = { ...before, elements: [typedBox, before.elements[1]] };
+  let offered;
+  const runtime = new JevSteerRuntime({ decider: async (_state, questions) => {
+    offered = questions;
+    return { answers: { tool: { choice: "press_enter", probabilities: { press_enter: 0.9 } }, press_enter_target: choice(questions.press_enter_target.criteria, "0") }, ms: 1, tokens: 1 };
+  } });
+  const values = { vendor: "CP-MEIJI" };
+  const answer = await runtime.decide(page, normalizeTaskContract({ goal: "Search for vendor CP-MEIJI" }), values, [], null, null, typed);
+  assert.equal(offered.press_enter_target.criteria["0"].control, '[0] textbox "Search contacts, vendor bills..."');
+  assert.deepEqual(Object.keys(offered.type_target.criteria), ["1", "__none__"]);
+  const action = runtime.resolve(page, answer, values);
+  assert.deepEqual([action.tool, action.target, action.el?.selector, action.p_target], ["press_enter", 0, "#search", 1]);
+  // Described as Jev saw it, in history and to the guards.
+  assert.equal(brief(action.el), 'textbox "Search contacts, vendor bills..."');
 });
 
 test("DONE is judged by the success criteria when the host gives them", async () => {
