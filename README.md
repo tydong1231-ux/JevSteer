@@ -281,6 +281,10 @@ advanced search or the Selenium web form). Through `scripts/live-host.mjs`, call
 Review each ticket independently. Never auto-accept a ticket in a test runner.
 The ccMonet read-only/report examples also use explicit host verification; reuse
 the user's intended authenticated tab and organization, without editing records.
+`examples/ccmonet-customer.json` creates one synthetic customer in the demo
+company. It starts on the Customers list, fills the form (a contact's Add
+included) in one milestone and clicks Create in the next, so the fill review
+settles any doubt about Add before anything is saved.
 
 Traces are stored in ignored `.test-artifacts/`; `.env` and raw customer data
 must stay local. No tests run during normal MCP startup.
