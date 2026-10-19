@@ -456,6 +456,57 @@ test('before input, an option of an unlinked list must still be drawn against it
   } finally { await driver.close(); }
 });
 
+// Web components keep their parts in an open shadow root, which the snapshot
+// reads through. A combobox inside one with its list drawn on the page, and a
+// combobox on the page with its list inside a floating component.
+const shadowWidgets = {
+  'a combobox inside a web component': `<style>.menu { position: absolute; width: 240px; background: #fff; border: 1px solid #ccc; } .menu div { padding: 5px 12px; }</style>
+    <h1>Order</h1><div>Fruit</div><x-combo></x-combo>
+    <div class="menu" id="list">${['Apple', 'Pear'].map((n) => `<div role="option" aria-selected="false">${n}</div>`).join('')}</div>
+    <script>
+      customElements.define('x-combo', class extends HTMLElement {
+        connectedCallback() { this.attachShadow({ mode: 'open' }).innerHTML = '<div style="width:240px;height:28px;border:1px solid #ccc"><input role="combobox" aria-expanded="true" style="width:100%;height:26px;border:0"></div>'; }
+      });
+      window.clicks = [];
+      const box = document.querySelector('x-combo').getBoundingClientRect();
+      Object.assign(document.querySelector('#list').style, { top: box.bottom + 4 + 'px', left: box.left + 'px' });
+      for (const o of document.querySelectorAll('[role=option]')) o.addEventListener('click', () => window.clicks.push(o.textContent));
+    </script>`,
+  'a list inside a floating web component': `<h1>Order</h1><div>Fruit</div>
+    <div style="width:240px;height:28px;border:1px solid #ccc"><input role="combobox" aria-expanded="true" style="width:100%;height:26px;border:0"></div>
+    <x-menu style="position:absolute;width:240px;background:#fff;border:1px solid #ccc"></x-menu>
+    <script>
+      window.clicks = [];
+      customElements.define('x-menu', class extends HTMLElement {
+        connectedCallback() {
+          const root = this.attachShadow({ mode: 'open' });
+          root.innerHTML = ['Apple', 'Pear'].map((n) => '<div role="option" aria-selected="false" style="padding:5px 12px">' + n + '</div>').join('');
+          for (const o of root.querySelectorAll('[role=option]')) o.addEventListener('click', () => window.clicks.push(o.textContent));
+        }
+      });
+      const box = document.querySelector('input').getBoundingClientRect();
+      Object.assign(document.querySelector('x-menu').style, { top: box.bottom + 4 + 'px', left: box.left + 'px' });
+    </script>`,
+};
+
+for (const [what, html] of Object.entries(shadowWidgets)) {
+  test(`with ${what}, the option the snapshot lists under the open combobox is clicked`, async ({ page }) => {
+    await page.setContent(html);
+    const { driver, id } = await driverFor(page);
+    try {
+      const seen = await driver.observe(id);
+      const box = seen.elements.find((e) => e.role === 'combobox');
+      const option = seen.elements.find((e) => e.role === 'option' && e.label === 'Pear');
+      expect(option.popup_of).toBe(box.i);
+      const action = { tool: 'click', chosen_as: 'select', listed_in: box, target: option.i, el: option, observedUrl: seen.url };
+      await driver.assertTargetFresh(id, action);
+      const result = await driver.perform(id, action, action.el);
+      expect([result.state, result.error]).toEqual(['dispatched_ack', undefined]);
+      expect(await page.evaluate(() => window.clicks)).toEqual(['Pear']);
+    } finally { await driver.close(); }
+  });
+}
+
 // ccMonet's invoice form (Mac rerun, 2026-10-19): with the Customer list open,
 // Jev chose SELECT on "Currency :", which that list covers. The click that
 // would open it waited after the journal until it timed out, and left a

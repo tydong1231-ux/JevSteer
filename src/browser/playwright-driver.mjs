@@ -359,8 +359,11 @@ async function assertOwnerHolds(ownerHandle, owner, optionHandle) {
 // aria-owns names, or the floating box that holds that list, holds it; or,
 // with no such list, it is the one open combobox and the option floats
 // outside it in a box drawn for it (see drawnFor there). `field` is FIELD.
+// Like the snapshot, it reads into open shadow roots and up through their
+// hosts: a web component's combobox or list is found here too.
 function listsOption(box, [option, field]) {
   if (!box.isConnected || !option?.isConnected || box.getAttribute('aria-expanded') !== 'true') return false;
+  const parent = (e) => e.parentElement || e.getRootNode()?.host;
   const floating = (p) => ['absolute', 'fixed'].includes(getComputedStyle(p).position);
   const floatOf = (p) => {
     for (let up = 0; p && p !== document.body && up < 5; up++, p = p.parentElement) if (floating(p)) return p;
@@ -370,14 +373,16 @@ function listsOption(box, [option, field]) {
     .map((id) => box.getRootNode().getElementById?.(id) || document.getElementById(id)).filter(Boolean)
     .map((l) => { const f = floatOf(l); return f && !f.contains(box) ? f : l; });
   if (box.contains(option) || roots.some((r) => r.contains(option))) return true;
-  const open = [...document.querySelectorAll('[role=combobox][aria-expanded="true"]')].filter((c) => c.tagName !== 'SELECT' && c.getClientRects().length);
+  const trees = (root) => [root, ...[...root.querySelectorAll('*')].filter((e) => e.shadowRoot).flatMap((e) => trees(e.shadowRoot))];
+  const open = trees(document).flatMap((root) => [...root.querySelectorAll('[role=combobox][aria-expanded="true"]')])
+    .filter((c) => c.tagName !== 'SELECT' && c.getClientRects().length);
   if (open.length !== 1 || open[0] !== box) return false;
-  let p = option.parentElement;
-  while (p && !floating(p)) p = p.parentElement;
+  let p = parent(option);
+  while (p && !floating(p)) p = parent(p);
   if (!p || p.contains(box)) return false;
   let at = box;
   for (let depth = 0; depth < 4; depth++) {
-    const up = at.parentElement || at.getRootNode()?.host;
+    const up = parent(at);
     if (!up || up === document.body || up.querySelectorAll(field).length + (up.matches(field) ? 1 : 0) > 1) break;
     at = up;
   }
