@@ -312,20 +312,29 @@ test('Escape pressed on no element is resolved from what the page did, so it doe
 
 // A page can answer Escape itself: an autosave, now or a moment later, a
 // beacon, or a WebSocket message. Then the key's outcome is the host's to
-// resolve, as for any input.
-async function socketServer(onMessage) {
-  const server = createServer();
+// resolve, as for any input. The page comes from the same loopback server as
+// its socket: Chromium blocks a public page's connections to loopback (local
+// network access), and newer versions block its WebSockets too.
+async function draftServer(answer) {
+  let saves = 0;
+  const server = createServer((req, res) => {
+    if (req.url === '/autosave') { saves++; res.writeHead(204); return res.end(); }
+    res.setHeader('content-type', 'text/html');
+    res.end(`<h1>Draft</h1><script>const socket = new WebSocket('ws://' + location.host + '/live');
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ${answer}; });</script>`);
+  });
   const sockets = new Set();
   server.on('upgrade', (req, socket) => {
     sockets.add(socket);
     const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    socket.on('data', onMessage);
+    socket.on('data', () => { saves++; });
     socket.on('error', () => {});
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   return {
-    url: `ws://127.0.0.1:${server.address().port}/live`,
+    url: `http://127.0.0.1:${server.address().port}/draft`,
+    saves: () => saves,
     close: () => new Promise((resolve) => { for (const socket of sockets) socket.destroy(); server.closeAllConnections(); server.close(resolve); }),
   };
 }
@@ -337,26 +346,21 @@ for (const [what, send] of [
   ['a WebSocket message', "socket.send('cancel draft')"],
 ]) {
   test(`an Escape the page answers with ${what} stays unconfirmed and blocks input on other tabs`, async ({ page }, testInfo) => {
-    let saves = 0;
-    const live = await socketServer(() => { saves++; });
-    await page.route('http://fixture.invalid/**', (route) => {
-      if (route.request().url().endsWith('/autosave')) saves++;
-      return route.fulfill({ contentType: 'text/html', body: `<h1>Draft</h1><script>const socket = new WebSocket('${live.url}');
-        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ${send}; });</script>` });
-    });
-    // JevSteer watches a page's traffic from its first use of the page. It
-    // sees messages on a socket the page opened after that.
+    const draft = await draftServer(send);
     const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]), { driver: { sessionId: 'escape-answered-fixture' } });
-    await mcp.driver.observe(mcp.id);
-    await page.goto('http://fixture.invalid/draft');
-    await page.waitForFunction(() => socket.readyState === WebSocket.OPEN);
     try {
+      // JevSteer watches a page's traffic from its first use of the page. It
+      // sees messages on a socket the page opened after that.
+      await mcp.driver.observe(mcp.id);
+      await page.goto(draft.url);
+      await page.waitForFunction(() => socket.readyState !== WebSocket.CONNECTING);
+      expect(await page.evaluate(() => socket.readyState)).toBe(1);
       const escape = await mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Escape' });
       expect(escape.status).toBe('action_unconfirmed');
       expect((await mcp.runtime.journal.pending(mcp.id)).map((r) => r.id)).toEqual([escape.action_id]);
-      await expect.poll(() => saves).toBeGreaterThan(0);
+      await expect.poll(draft.saves).toBeGreaterThan(0);
       const next = await mcp.call('browser_open', { url: 'about:blank' });
       await expect(mcp.call('browser_act', { tab_id: next.tab_id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
-    } finally { await mcp.close(); await live.close(); }
+    } finally { await mcp.close(); await draft.close(); }
   });
 }
