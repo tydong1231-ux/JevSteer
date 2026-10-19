@@ -96,6 +96,21 @@ for (const [score, status] of [[{ blocked: 0.99 }, "blocked"], [{ needs_vision: 
   });
 }
 
+test("a sign-in page returns needs_login even when Jev also asks for vision", async () => {
+  // Jev scores both: the page wants a login and its next step looks visual,
+  // as with a QR code beside the form.
+  const both = new MemoryKapture({ elements: [button] });
+  assert.equal((await memoryRuntime(both, scriptedDecider([{ needs_vision: 0.99, login: 0.99 }])).run("Open the report", { evidenceLevel: "none" })).status, "needs_login");
+  // A password field with a sign-in button settles it, whatever Jev's login score.
+  const form = new MemoryKapture({ url: "https://erp.test/login?next=%2Freports", elements: [
+    { i: 0, selector: "#password", tag: "input", role: "textbox", type: "password", label: "Password", value: "" },
+    { i: 1, selector: "#signin", tag: "button", role: "button", label: "Log in" },
+  ] });
+  const result = await memoryRuntime(form, scriptedDecider([{ needs_vision: 0.99, login: 0.2 }])).run("Open the report", { evidenceLevel: "none" });
+  assert.equal(result.status, "needs_login");
+  assert.equal(form.commands.length + both.commands.length, 0);
+});
+
 test("low target confidence returns ambiguous without a click", async () => {
   const k = new MemoryKapture({ elements: [button] });
   const result = await memoryRuntime(k, scriptedDecider([() => {

@@ -1105,11 +1105,9 @@ export class JevSteerRuntime {
           info = "The page is blocked by something the DOM executor cannot safely handle (for example CAPTCHA or access denial).";
           break;
         }
-        if (answer.needs_vision.noul >= 0.75) {
-          status = "needs_vision";
-          info = "The next step appears to require pixel/canvas/image understanding. Hand this step to host vision/computer use, then resume the same task contract.";
-          break;
-        }
+        // A sign-in page comes first: no step, visual or not, gets past it
+        // without the user. A login form next to a QR code or a logo still
+        // asks for a login, not for vision.
         const hasPassword = page.elements.some((e) => e.type === "password");
         const signInControl = page.elements.some((e) => ["button", "link"].includes(e.role) && /\b(sign\s*in|log\s*in)\b|登录|登入/i.test(e.label || e.text || ""));
         const authRoute = /\/(login|sign-?in|auth)(\/|\?|$)/i.test(page.url || "");
@@ -1117,6 +1115,11 @@ export class JevSteerRuntime {
         if ((answer.login.noul >= 0.7 || hasPassword && (signInControl || authRoute)) && !hasCredentials) {
           status = "needs_login";
           info = "The page requires sign-in. Log in manually in this Chrome tab or call again with named values.";
+          break;
+        }
+        if (answer.needs_vision.noul >= 0.75) {
+          status = "needs_vision";
+          info = "The next step appears to require pixel/canvas/image understanding. Hand this step to host vision/computer use, then resume the same task contract.";
           break;
         }
         if (round > 0 && answer.error.noul >= 0.7) {
