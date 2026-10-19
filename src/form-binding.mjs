@@ -1,5 +1,5 @@
 import { FIELDISH, brief, toModelPage } from './page-model.mjs';
-import { sameIdentity } from './element-identity.mjs';
+import { rememberField, findRemembered } from './element-identity.mjs';
 import { matchingControls } from './verification.mjs';
 import { sensitiveName, sensitiveField } from './sensitive.mjs';
 import { buildTargetSpace } from './decision-space.mjs';
@@ -52,7 +52,7 @@ export async function bindForm(page, contract, values, call) {
     const asserted = contract.assertions.filter((a) => a.type === 'field_equals' && matchingControls(page, a).some((e) => e.selector === target.selector));
     if (asserted.some((a) => matchingControls(page, a).length !== 1 || String(a.value) !== String(value))) fail(`binding conflicts with host field assertion for ${key}`);
     if (target.tag === 'select' && target.options.filter((o) => o.value === String(value) && !o.disabled).length !== 1) fail(`native select ${key} requires an exact unique option value`);
-    return { key, expected: String(value), target, probability };
+    return { key, expected: String(value), target, field: rememberField(target, page), probability };
   });
   const first = bindings[0].target;
   if (!first.form_key || bindings.some(({ target: e }) => e.form_key !== first.form_key || e.record_key !== first.record_key || e.frame_id !== first.frame_id || e.document_id !== first.document_id)) fail('fields must belong to one observed form, record and document');
@@ -61,10 +61,12 @@ export async function bindForm(page, contract, values, call) {
 
 export function nextFormDecision(plan, page) {
   if (page.url !== plan.url || page.page_id !== plan.pageId) fail('page changed after binding');
+  // Filling one field can rewrite text around the others (live totals,
+  // previews, counters). A field unique without that text still matches.
   const current = plan.bindings.map((binding) => {
-    const matches = page.elements.filter((e) => sameIdentity(binding.target, e, page.url));
-    if (matches.length !== 1 || matches[0].disabled || matches[0].readonly) fail('a field changed, disappeared or became ambiguous');
-    return matches[0];
+    const match = findRemembered(binding.field || { el: binding.target, loose: false }, page);
+    if (!match || match.disabled || match.readonly) fail('a field changed, disappeared or became ambiguous');
+    return match;
   });
   for (let i = 0; i < plan.index; i++) if (valueOf(current[i]) !== plan.bindings[i].expected || current[i].invalid) fail('a previous field was reset or rejected by a dependency');
   while (plan.index < plan.bindings.length && valueOf(current[plan.index]) === plan.bindings[plan.index].expected && !current[plan.index].invalid) plan.index++;

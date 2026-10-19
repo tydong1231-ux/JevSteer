@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { toVerificationPage } from "../src/verification.mjs";
 import { buildTargetSpace } from "../src/decision-space.mjs";
 import { relevantRequest, sanitizeNetworkBody } from "../src/evidence.mjs";
-import { actionIdentity } from "../src/element-identity.mjs";
+import { rememberField } from "../src/element-identity.mjs";
 
 test("Kapture HTTP visibility enum survives boolean query coercion", async () => {
   const server = createServer((req, res) => {
@@ -116,7 +116,7 @@ test("confirmed correct inputs stay available for Enter but are removed from TYP
   const runtime = new JevSteerRuntime({ decider: async (_state, questions) => { observed = questions; return { answers: { tool: { choice: "press_enter", probabilities: { press_enter: 1 } } }, ms: 1, tokens: 1 }; } });
   const page = { url: "https://demo.test", title: "Search", text: "", metrics: {}, elements: [{ i: 0, selector: "#search", tag: "input", role: "textbox", label: "Search", value: "JevSteer QA" }] };
   const contract = { goal: "Find JevSteer QA", success_criteria: [], constraints: [], guidance: [] };
-  await runtime.decide(page, contract, { search: "JevSteer QA" }, [], null, null, new Map([[actionIdentity({ tool: "type", el: page.elements[0] }, page.url), "JevSteer QA"]]));
+  await runtime.decide(page, contract, { search: "JevSteer QA" }, [], null, null, [{ field: rememberField(page.elements[0], page), url: page.url, value: "JevSteer QA" }]);
   assert.equal(observed.type_target, undefined);
   assert(observed.press_enter_target.criteria["0"]);
 });

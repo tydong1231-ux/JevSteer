@@ -41,6 +41,9 @@ constraints before binding, then permits only those validated TYPE/SELECT inputs
 Every guarded explore input also gets an exact remote/irreversible effect check,
 regardless of its rough score. Read-only excludes remote preference writes such
 as favorite/star/bookmark/subscription toggles, not just financial record saves.
+The effect and constraint questions go to Jev in one request. A missing
+constraint answer counts as a violation, and the constraint verdict is applied
+after the replay and journal gates, as before.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session. The
@@ -90,6 +93,14 @@ Guidance must be just-in-time workflow knowledge, not selectors or click sequenc
 `observe -> decide -> act -> verify effect -> observe`
 
 JevSteer never assumes an action succeeded only because the command returned. The next observation records a mechanical effect check; final milestone completion still requires strict semantic/assertion verification.
+
+Pages often rewrite text next to a field as it is filled: live totals, formatted
+previews, character counters, validation messages. The effect check, the
+"already typed" filter and form-mode bindings first look for the exact control.
+If only its surrounding text changed, they accept the one control with the same
+label, name, form, record, frame and document, provided it was the only such
+control before. Equal controls in unkeyed rows still need their record text.
+Pre-input target checks and journal fingerprints stay exact.
 
 If workflow knowledge is missing, return `needs_guidance` instead of guessing. The host patches the current milestone and resumes.
 

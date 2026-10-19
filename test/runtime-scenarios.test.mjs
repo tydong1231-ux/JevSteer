@@ -180,8 +180,45 @@ test("exact constraint guard sees the chosen native option, never a secret one",
   const el = { i: 0, selector: "#status", tag: "select", role: "combobox", label: "Status", options: [{ text: "Open", value: "open" }, { text: "Closed", value: "closed" }] };
   const contract = { goal: "Reopen the ticket", success_criteria: [], constraints: ["Do not set Status to Closed"], guidance: [] };
   const page = { url: "https://fixture.test/ticket", title: "Ticket", text: "Status", elements: [el] };
-  assert.equal(await runtime.checkConstraintForAction(page, contract, { tool: "select", el, value: "open" }, []), 0.05);
+  assert.equal((await runtime.checkActionGuards(page, contract, { tool: "select", el, value: "open" }, [])).violates, 0.05);
   assert.deepEqual(seen.selected_option, { text: "Open", value: "open" });
-  await runtime.checkConstraintForAction(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
+  await runtime.checkActionGuards(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
   assert.equal(seen.selected_option, undefined);
+});
+
+test("one guard request answers effect and constraint questions; a missing constraint answer blocks", async () => {
+  const asked = [];
+  let reply = {};
+  const runtime = memoryRuntime(new MemoryKapture(), async (_state, questions) => {
+    asked.push(Object.keys(questions).sort());
+    return { answers: reply, ms: 1, tokens: 1 };
+  });
+  const el = { i: 0, selector: "#save", tag: "button", role: "button", label: "Save" };
+  const page = { url: "https://fixture.test/form", title: "Form", text: "Form", elements: [el] };
+  const free = { goal: "Save", success_criteria: [], constraints: [], guidance: [] };
+  const constrained = { ...free, constraints: ["Do not save"] };
+  reply = { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 } };
+  assert.deepEqual(await runtime.checkActionGuards(page, free, { tool: "click", el }, []), { sideEffect: 0.9, irreversible: 0.1 });
+  reply = { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 }, violates: { noul: 0.2 } };
+  assert.deepEqual(await runtime.checkActionGuards(page, constrained, { tool: "click", el }, []), { sideEffect: 0.9, irreversible: 0.1, violates: 0.2 });
+  reply = {};
+  assert.deepEqual(await runtime.checkActionGuards(page, constrained, { tool: "click", el }, [], 0.3, 0.4), { sideEffect: 0.3, irreversible: 0.4, violates: 1 });
+  assert.deepEqual(asked, [["action_irreversible", "action_side_effect"], ...Array(2).fill(["action_irreversible", "action_side_effect", "violates"])]);
+});
+
+test("Playwright rounds wait on full observations, not the URL/title metadata poll", async () => {
+  const { JevSteerRuntime } = await import("../src/runtime.mjs");
+  const { ActionJournal } = await import("../src/action-journal.mjs");
+  let details = 0;
+  let reads = 0;
+  const driver = {
+    kind: "playwright",
+    detail: async () => { details++; return { url: "https://fixture.test", title: "T" }; },
+    observe: async () => { reads++; return { url: "https://fixture.test", title: "T", text: "", elements: [], loading: { busy: reads < 2 } }; },
+  };
+  const runtime = new JevSteerRuntime({ driver, journal: new ActionJournal({ dir: null }), observation: { maxMs: 1000, quietMs: 0, pollMs: 1 } });
+  assert.equal(await runtime.settle("tab"), 0);
+  assert.equal((await runtime.settledPage("tab")).loading.busy, false);
+  assert.equal(details, 0);
+  assert.equal(reads, 2);
 });

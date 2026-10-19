@@ -26,6 +26,7 @@ function describe(candidate) {
     control: `[${e.i}] ${brief(e)}`,
   };
   if (e.near) result.near = squash(e.near, 130);
+  if (e.record_key) result.record = squash(e.record_key, 80);
   if (e.context) result.record_context = squash(e.context, 180);
   if (e.scope) result.scope = squash(e.scope, 180);
   if (e.value != null && !sensitiveField(e)) result.current_value = squash(e.value, 80);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { elementFingerprint, pageDiff, squash } from "./page-model.mjs";
-import { locateSameElement } from "./element-identity.mjs";
+import { locateAfterAction } from "./element-identity.mjs";
 
 // Kapture snapshots give rich-text editors and custom textboxes no value; their
 // content is element text, whitespace-collapsed and cut to this many chars.
@@ -8,9 +8,9 @@ const TEXT_CHARS = 180;
 
 const digest = (value) => createHash("sha256").update(String(value ?? "")).digest("hex");
 
-function findAfter(after, action) {
+function findAfter(after, action, before) {
   if (!action?.el) return undefined;
-  if (action.el.identity_version) return locateSameElement(action.el, after);
+  if (action.el.identity_version) return locateAfterAction(action.el, after, before);
   const bySelector = after.elements?.find((e) => e.selector && e.selector === action.el.selector);
   if (bySelector) return bySelector;
   const fingerprint = elementFingerprint(action.el);
@@ -21,7 +21,7 @@ function findAfter(after, action) {
 export function verifyActionEffect(before, after, action) {
   if (!before || !after || !action) return undefined;
   const changed = pageDiff(before, after) !== "no obvious visible change";
-  const current = findAfter(after, action);
+  const current = findAfter(after, action, before);
 
   if (action.tool === "type") {
     const secret = action.el?.type === "password" || current?.value === "[REDACTED]";

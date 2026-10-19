@@ -43,7 +43,51 @@ export function elementFingerprint(e) {
   ].join("|");
 }
 
+const CHECKABLE_TYPES = new Set(["checkbox", "radio"]);
+const CHECKABLE_ROLES = new Set(["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"]);
+const FORM_TAGS = new Set(["input", "textarea", "select"]);
+
+// Jev reads every element of every decision. Leave out what carries no
+// information: empty strings, default-false flags, text that repeats the
+// label, a "checked" state on controls that cannot be checked, and frame ids
+// when the page has one frame. Explicit ARIA states keep false values.
+function modelElement(e, multiFrame) {
+  const secret = sensitiveField(e);
+  const out = { i: e.i, tag: e.tag };
+  const put = (key, value) => { if (value != null && value !== "") out[key] = value; };
+  put("role", e.role);
+  put("label", e.label);
+  if (!secret && squash(e.text) !== squash(e.label)) put("text", e.text);
+  put("placeholder", e.placeholder);
+  put("name", e.name);
+  put("type", e.type);
+  put("href", e.href);
+  if (secret) out.value = "[REDACTED]";
+  else if (e.value != null && (e.value !== "" || FORM_TAGS.has(e.tag) || e.contenteditable)) out.value = squash(e.value, 160);
+  if (typeof e.checked === "boolean" && (e.checked || CHECKABLE_TYPES.has(String(e.type || "").toLowerCase()) || CHECKABLE_ROLES.has(e.role))) out.checked = e.checked;
+  for (const flag of ["disabled", "readonly", "contenteditable", "invalid"]) if (e[flag]) out[flag] = true;
+  if (e.options) out.options = e.options.map((o) => {
+    const option = { text: o.text };
+    if (o.value !== o.text) option.value = o.value;
+    if (o.selected) option.selected = true;
+    if (o.disabled) option.disabled = true;
+    return option;
+  });
+  if (!secret) put("near", e.near);
+  put("context", e.context);
+  put("scope", e.scope);
+  if (multiFrame) put("frame_id", e.frame_id);
+  put("form_key", e.form_key);
+  put("record_key", e.record_key);
+  if (typeof e.expanded === "boolean") out.expanded = e.expanded;
+  if (typeof e.selected === "boolean") out.selected = e.selected;
+  put("validation_message", e.validation_message);
+  return out;
+}
+
 export function toModelPage(page) {
+  const multiFrame = new Set(page.elements.map((e) => e.frame_id).filter(Boolean)).size > 1
+    || Number(page.metrics?.frame_count) > 1;
   return {
     url: page.url,
     title: page.title,
@@ -51,31 +95,7 @@ export function toModelPage(page) {
     text: squash(page.text, config.modelPageTextChars),
     metrics: page.metrics,
     loading: page.loading,
-    elements: page.elements.map((e) => ({
-      i: e.i,
-      tag: e.tag,
-      role: e.role,
-      label: e.label,
-      text: sensitiveField(e) ? undefined : e.text,
-      placeholder: e.placeholder,
-      name: e.name,
-      type: e.type,
-      href: e.href,
-      value: sensitiveField(e) ? "[REDACTED]" : (e.value != null ? squash(e.value, 160) : undefined),
-      checked: e.checked,
-      disabled: e.disabled,
-      readonly: e.readonly,
-      contenteditable: e.contenteditable,
-      options: e.options?.map((o) => ({ text: o.text, value: o.value, selected: o.selected, disabled: o.disabled })),
-      near: sensitiveField(e) ? undefined : e.near,
-      context: e.context,
-      scope: e.scope,
-      ...(e.frame_id ? { frame_id: e.frame_id, form_key: e.form_key, record_key: e.record_key } : {}),
-      invalid: e.invalid,
-      expanded: e.expanded,
-      selected: e.selected,
-      validation_message: e.validation_message,
-    })),
+    elements: page.elements.map((e) => modelElement(e, multiFrame)),
   };
 }
 
