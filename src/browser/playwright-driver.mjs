@@ -380,9 +380,29 @@ function listsOption(box, [option, field]) {
     .map((id) => box.getRootNode().getElementById?.(id) || document.getElementById(id)).filter(Boolean)
     .map((l) => { const f = floatOf(l); return f && !f.contains(box) ? f : l; });
   if (box.contains(option) || roots.some((r) => r.contains(option))) return true;
+  // The snapshot's visible() and clipsAll(), mirrored: page code cannot
+  // share them. An open combobox that is hidden, inert, aria-hidden (a
+  // dialog's background) or clipped away is not counted here, as the
+  // snapshot does not count it when it links the option.
+  const clipsAll = (p, style) => {
+    if (style.display === 'inline' || style.display === 'contents') return false;
+    const tiny = () => { const r = p.getBoundingClientRect(); return r.width <= 1 || r.height <= 1; };
+    if (/hidden|clip/.test(`${style.overflowX} ${style.overflowY}`) && tiny()) return true;
+    if (style.clipPath === 'inset(50%)') return true;
+    const rect = style.clip.match(/^rect\(([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px\)$/);
+    return !!rect && ['absolute', 'fixed'].includes(style.position) && (rect[2] - rect[4] <= 1 || rect[3] - rect[1] <= 1);
+  };
+  const visible = (e) => {
+    if (!e.isConnected || !e.getClientRects().length) return false;
+    for (let p = e; p; p = parent(p)) {
+      const style = getComputedStyle(p);
+      if (p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || clipsAll(p, style)) return false;
+    }
+    return true;
+  };
   const trees = (root) => [root, ...[...root.querySelectorAll('*')].filter((e) => e.shadowRoot).flatMap((e) => trees(e.shadowRoot))];
   const open = trees(document).flatMap((root) => [...root.querySelectorAll('[role=combobox][aria-expanded="true"]')])
-    .filter((c) => c.tagName !== 'SELECT' && c.getClientRects().length);
+    .filter((c) => c.tagName !== 'SELECT' && visible(c));
   if (open.length !== 1 || open[0] !== box) return false;
   let p = parent(option);
   while (p && !floating(p)) p = parent(p);

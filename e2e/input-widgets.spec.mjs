@@ -655,6 +655,33 @@ test('before input, an option of an unlinked list must still be drawn against it
   } finally { await driver.close(); }
 });
 
+// Codex on b228cae: a second combobox that is open but hidden from view is
+// not one the snapshot counts as open, so it still links the unlinked list
+// to the visible one. The check before the click does not count it either.
+const hiddenOpenBox = {
+  'aria-hidden, as a dialog hides its background': '<div aria-hidden="true"><input role="combobox" aria-expanded="true" aria-label="Region"></div>',
+  'inert': '<div inert><input role="combobox" aria-expanded="true" aria-label="Region"></div>',
+  'visibility: hidden': '<div style="visibility: hidden"><input role="combobox" aria-expanded="true" aria-label="Region"></div>',
+  'clipped to 1px': '<div style="position: absolute; width: 1px; height: 1px; overflow: hidden"><input role="combobox" aria-expanded="true" aria-label="Region"></div>',
+};
+for (const [how, html] of Object.entries(hiddenOpenBox)) {
+  test(`an option of an unlinked list is clicked though another open combobox is hidden (${how})`, async ({ page }) => {
+    await page.setContent(inHouseCombo + html);
+    const { driver, id } = await driverFor(page);
+    try {
+      const seen = await driver.observe(id);
+      const box = seen.elements.find((e) => e.role === 'combobox');
+      const option = seen.elements.find((e) => e.role === 'option' && e.label === 'France');
+      expect(seen.elements.filter((e) => e.role === 'combobox').map((e) => e.label)).toEqual(['Country']);
+      expect(option.popup_of).toBe(box.i);
+      const action = { tool: 'click', chosen_as: 'select', listed_in: box, target: option.i, el: option, observedUrl: seen.url };
+      await driver.assertTargetFresh(id, action);
+      expect((await driver.perform(id, action, action.el)).state).toBe('dispatched_ack');
+      expect(await page.evaluate(() => window.clicks)).toEqual(['France']);
+    } finally { await driver.close(); }
+  });
+}
+
 // Web components keep their parts in an open shadow root, which the snapshot
 // reads through. A combobox inside one with its list drawn on the page, and a
 // combobox on the page with its list inside a floating component.

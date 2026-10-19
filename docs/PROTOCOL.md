@@ -173,7 +173,9 @@ floating box that holds that list (antd's visible copy), or, with no such link,
 options floating on their own while it is the one open combobox, in a box
 drawn for it: across from the box the combobox is drawn in and at most 64px
 under or over it. A menu or another widget floating elsewhere on the page is
-not its list. Each such
+not its list. An open combobox hidden from view (hidden, inert, aria-hidden
+like a dialog's background, or clipped away) does not count as open, neither
+here nor in the check before the click. Each such
 option carries `popup_of`, the `[i]` of its combobox, and choosing one is a
 click on that option (the run log shows `tool: "click"`, `chosen_as: "select"`).
 The effect and constraint guards see that click as what it does: a SELECT of
