@@ -172,7 +172,7 @@ export class JevSteerRuntime {
     this.textGenerator = textGenerator;
     this.journal = journal;
     this.reviews = reviews || new HostReviewStore(journal.dir === null ? { dir: null } : {});
-    this.observation = { maxMs: config.actionSettleMs, navigationMs: observation.maxMs ?? config.navigationSettleMs, quietMs: config.observationQuietMs, ...observation };
+    this.observation = { maxMs: config.actionSettleMs, navigationMs: observation.maxMs ?? config.navigationSettleMs, quietMs: config.observationQuietMs, reviewQuietMs: config.reviewQuietMs, ...observation };
     this.activeTabId = null;
     this.shown = null;
     this.stats = { calls: 0, jev_ms: 0, tokens: 0, text_calls: 0 };
@@ -416,12 +416,14 @@ export class JevSteerRuntime {
     return (await observeUntilReady(() => this.readPage(tabId), { ...this.observation, maxMs: Math.min(this.observation.maxMs, 3500) })).page;
   }
 
+  // A page that redirects (an SPA sending a new tab to its sign-in or home
+  // route) replaces its document while it is read. Reading is safe to repeat.
   async readPage(tabId) {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       try { return await (this.snapshotter ? this.snapshotter(this.kapture, tabId) : this.driver.observe(tabId)); }
       catch (error) {
-        if (!transientNavigationError(error) || attempt === 2) throw error;
-        await sleep(100);
+        if (!transientNavigationError(error) || attempt === 4) throw error;
+        await sleep(100 * 2 ** attempt);
       }
     }
   }
@@ -543,7 +545,10 @@ export class JevSteerRuntime {
     // inspection environment for ticket creation and acceptance, without input.
     const capture = captureEnabled ? await this.startNetworkCapture(tabId, `review-${randomUUID()}`, "inspection", "summary") : null;
     if (captureEnabled && !capture?.available) throw new Error("HOST_REVIEW_INSPECTION_UNAVAILABLE: cannot reproduce the ticket's capture environment");
-    try { return (await this.observe(tabId, null, null)).page; }
+    // A ticket binds the page's digest. Fields that load after the record
+    // (a type or status select filled by a later request) would make it stale
+    // before the host accepts, so wait for a longer quiet first.
+    try { return (await observeUntilReady(() => this.readPage(tabId), { ...this.observation, quietMs: Math.max(this.observation.quietMs ?? 0, this.observation.reviewQuietMs ?? 0) })).page; }
     finally { if (capture) await this.finishNetworkCapture(tabId, capture, "host-review", "inspection", "summary"); }
   }
 
@@ -918,12 +923,15 @@ export class JevSteerRuntime {
         if (lastEffect) {
           const prior = [...history].reverse().find((x) => x.action);
           if (prior && (!prior.effect || prior.effect.status === "unknown")) prior.effect = lastEffect;
+          // How many data requests the page sent after this input. A click
+          // that changed nothing and sent none did not reach its handler.
+          if (prior && lastAction.tool !== "wait" && page.requests_since_input != null) prior.requests = page.requests_since_input;
           if (lastEffect.status === "confirmed" && lastAction?.tool === "type") confirmedTypes.push({ field: rememberField(lastAction.el, previous), url: previous.url, value: lastAction.expected_value, entry: prior });
         }
         // A wait after which nothing changed and nothing is loading means the
         // page is settled: the result Jev waits for is not coming, as when a
         // report was generated for the old period. Jev sees that in history.
-        const idleWait = lastAction?.tool === "wait" && lastChange === "no obvious visible change" && !page.loading?.busy;
+        const idleWait = lastAction?.tool === "wait" && lastChange === "no obvious visible change" && !page.loading?.busy && !page.pending_requests;
         if (idleWait) {
           const lastWait = history.findLast((h) => h.action === "wait");
           if (lastWait) lastWait.page_changed = false;
@@ -1149,6 +1157,25 @@ export class JevSteerRuntime {
           status = "ambiguous";
           info = "Target confidence is too low. Let the host inspect the DOM snapshot and choose one surgical action.";
           break;
+        }
+        // A write this milestone sent (a Create or Save) may already have
+        // reached task.goal; Jev then sees no clear next step because none is
+        // left. Check the contract before asking the host for guidance.
+        if (action.tool !== "none" && nextStepClear < config.nextStepClearAt && !row.verification && !page.loading?.busy
+            && journalRecords.some((r) => r.run_id === runId && r.milestone_id === milestoneId)) {
+          verification = await this.verify(page, contract, history, values, verificationMode);
+          row.verification = verification.status;
+          if (verification.status === "host_review_required") {
+            status = "host_review_required";
+            info = "A write this milestone sent may have reached the goal. The host must independently review this result before it is accepted or the next milestone starts.";
+            break;
+          }
+          if (verification.status === "completed_verified") {
+            await this.journal.verified(tab.tabId, runId, milestoneId, contractDigest);
+            journalRecords = await this.journal.pending(tab.tabId);
+            status = "completed_verified";
+            break;
+          }
         }
         if (action.tool !== "none" && nextStepClear < config.nextStepClearAt) {
           status = "needs_guidance";

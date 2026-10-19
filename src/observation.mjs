@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { verifyActionEffect } from "./action-effect.mjs";
+import { FIELDISH } from "./page-model.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function transientNavigationError(error) {
-  return /timed? out|timeout|receiving end does not exist|could not establish connection|SNAPSHOT_CHANGED:|Kapture GET .*\/dom\b.*Cannot read properties of null \(reading 'outerHTML'\)/i.test(String(error?.message || error));
+  return /timed? out|timeout|receiving end does not exist|could not establish connection|execution context was destroyed|SNAPSHOT_CHANGED:|Kapture GET .*\/dom\b.*Cannot read properties of null \(reading 'outerHTML'\)/i.test(String(error?.message || error));
 }
 
 function expectsNavigation(before, action) {
@@ -26,7 +27,13 @@ export function observationSignature(page) {
   return createHash("sha256").update(JSON.stringify(state)).digest("hex");
 }
 
-export async function observeUntilReady(read, { before, action, ready, maxMs = 8000, navigationMs = maxMs, quietMs = 250, pollMs = 150, effectGraceMs = 1500, now = Date.now, pause = sleep } = {}) {
+// A click that changes nothing at first may still be at work: a handler can
+// wait before sending its request. Watch a little longer before reporting it.
+// Clicking into a text field or a native select only focuses or opens it.
+const DELAYED = new Set(["click", "press_enter", "press_key"]);
+const mayBeDelayed = (action) => DELAYED.has(action?.tool) && !FIELDISH(action.el) && action.el?.tag !== "select";
+
+export async function observeUntilReady(read, { before, action, ready, maxMs = 8000, navigationMs = maxMs, quietMs = 250, pollMs = 150, effectGraceMs = 1500, clickGraceMs = 1000, now = Date.now, pause = sleep } = {}) {
   const started = now();
   let page, previous, stableSince = started, effect;
   const navigation = expectsNavigation(before, action);
@@ -41,15 +48,19 @@ export async function observeUntilReady(read, { before, action, ready, maxMs = 8
       await pause(Math.min(pollMs, Math.max(1, limit - (now() - started))));
       continue;
     }
-    const signature = observationSignature(page);
+    // The driver counts the page's data requests the last input started that
+    // are still open; their result is not on the page yet. One that just
+    // finished is rendered a moment later, so it restarts the quiet period.
+    const signature = `${observationSignature(page)}:${page.pending_requests || 0}`;
     if (previous !== signature) { previous = signature; stableSince = now(); }
     effect = verifyActionEffect(before, page, action);
-    const busy = page.loading?.busy;
+    const busy = page.loading?.busy || page.pending_requests > 0;
     const waitingForEffect = (exact || navigation) && effect?.status !== "confirmed";
-    const pendingAsync = action && action.side_effect >= 0.25 && effect?.status === "unknown" && now() - started < effectGraceMs;
+    const grace = action?.side_effect >= 0.25 ? effectGraceMs : mayBeDelayed(action) ? clickGraceMs : 0;
+    const pendingAsync = effect?.status === "unknown" && now() - started < grace;
     if (!busy && !waitingForEffect && !pendingAsync && (!ready || ready(page)) && now() - stableSince >= quietMs) break;
     if (now() - started >= limit) break;
     await pause(Math.min(pollMs, Math.max(1, limit - (now() - started))));
   } while (true);
-  return { page, effect, ms: now() - started, timed_out: !!page.loading?.busy || ((exact || navigation) && effect?.status !== "confirmed") || !!(ready && (!ready(page) || now() - stableSince < quietMs)) };
+  return { page, effect, ms: now() - started, timed_out: !!(page.loading?.busy || page.pending_requests > 0) || ((exact || navigation) && effect?.status !== "confirmed") || !!(ready && (!ready(page) || now() - stableSince < quietMs)) };
 }

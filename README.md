@@ -357,9 +357,11 @@ exact, including whitespace and empty strings. For example:
 `max_duration_ms` defaults to 300000 per milestone. The budget is cooperative: no
 new input begins after exhaustion, while an already dispatched command retains
 its transport timeout. `JEVSTEER_ACTION_SETTLE_MS` defaults to 8000 and
-`JEVSTEER_OBSERVATION_QUIET_MS` to 250. With the Playwright driver each round
-waits for quiet full snapshots only; the Kapture DOM-metadata settle poll is
-skipped because Playwright metadata carries no DOM size. Link navigation, explicit GET search-form
+`JEVSTEER_OBSERVATION_QUIET_MS` to 250, and `JEVSTEER_REVIEW_QUIET_MS`, the
+quiet period before a host review ticket binds the page, to 1000. With the
+Playwright driver each round waits for quiet full snapshots only, and for open
+XHR/fetch requests the last input started; the Kapture DOM-metadata settle poll
+is skipped because Playwright metadata carries no DOM size. Link navigation, explicit GET search-form
 submissions and search Enter can wait up to `JEVSTEER_NAVIGATION_SETTLE_MS`
 (default 15000) for an observed route change. Checkboxes, radios and fields in
 such a form, and same-page `#` links, do not wait for one;

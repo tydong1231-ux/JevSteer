@@ -120,6 +120,12 @@ export class PlaywrightDriver {
     if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
     const result = await captureSnapshot(record.page, { pageId: record.pageId, sessionId: this.sessionId, frameInfo: (f) => this.frameInfo(f), scope });
     record.refs = result.refs;
+    // A report or record the last input asked for shows nothing until its
+    // response arrives, often with no spinner. Observation waits while such
+    // a request is open (see observeUntilReady).
+    const requests = record.events.requests(record.inputAt ?? 0);
+    if (requests.pending) result.observation.pending_requests = requests.pending;
+    if (record.inputAt != null) result.observation.requests_since_input = requests.started;
     return result.observation;
   }
   waitFor(ref, condition, budget = {}) { return observeUntilReady(() => this.observe(ref), { ...budget, ready: condition }); }
@@ -187,6 +193,9 @@ export class PlaywrightDriver {
         force = forced(action, current);
         if (force) await handle.hover({ trial: true, timeout });
       }
+      // Requests the page starts from here on belong to this input; the next
+      // observation waits for them (see observe).
+      if (!['wait', 'none'].includes(action.tool)) record.inputAt = Date.now();
       switch (action.tool) {
         case 'click': mark(); await handle.click({ timeout, force }); break;
         case 'hover': mark(); await handle.hover({ timeout }); break;
@@ -208,10 +217,13 @@ export class PlaywrightDriver {
           }
           // Date pickers commit a typed date only when focus leaves the field;
           // antd commits a frame after that. A click on Generate or Save right
-          // after typing still reads the old date. Leaving the field now lets
-          // the effect check see the committed value. A combobox keeps focus
-          // for its option list.
-          if (isDateText(value) && current?.role !== 'combobox') await handle.evaluate((e) => e.blur()).catch(() => {});
+          // after typing still reads the old date. Leaving the field now, and
+          // waiting for that frame, lets the effect check see the committed
+          // value. A combobox keeps focus for its option list.
+          if (isDateText(value) && current?.role !== 'combobox') {
+            await handle.evaluate((e) => e.blur()).catch(() => {});
+            await nextFrames(handle);
+          }
           return { input_mode: inputMode };
         }
         case 'select':
@@ -274,6 +286,13 @@ export class PlaywrightDriver {
 // stable and not covered.
 function forced(action, current) {
   return current.drag_disabled === true && ['click', 'type', 'select'].includes(action.tool);
+}
+
+// Resolves after the page has drawn two more frames. A hidden tab draws none,
+// so give up after a short time instead of waiting for it.
+function nextFrames(handle, ms = 250) {
+  const frames = handle.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
+  return Promise.race([frames.catch(() => false), new Promise((resolve) => setTimeout(() => resolve(false), ms))]);
 }
 
 function sensitiveFieldValueEqual(target, current) {

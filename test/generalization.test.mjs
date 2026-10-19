@@ -96,6 +96,45 @@ test("busy report widgets delay settling; permanently busy widgets have a bounde
   assert.equal(stuck.ms, 300);
 });
 
+test("an open data request holds observation until it returns, then the quiet period restarts", async () => {
+  let time = 0, reads = 0;
+  const before = page();
+  // Reads 1-3: the report request is open. Read 4: it returned. Read 5: the
+  // report is on the page.
+  const result = await observeUntilReady(async () => {
+    reads++;
+    return { ...page([button], reads >= 5 ? "Editor For the period 2026/1/1 - 2026/12/31" : "Editor"), ...(reads < 4 ? { pending_requests: 1 } : {}) };
+  }, { before, action: { tool: "click", el: button, side_effect: 0 }, maxMs: 5000, quietMs: 150, pollMs: 100, clickGraceMs: 0, now: () => time, pause: async (ms) => { time += ms; } });
+  assert.equal(result.effect.status, "changed");
+  assert.match(result.page.text, /For the period/);
+  assert.equal(result.timed_out, false);
+  // A request still open when the budget runs out leaves the page not settled.
+  const open = await observeUntilReady(async () => ({ ...page(), pending_requests: 1 }), { maxMs: 300, quietMs: 0, pollMs: 100, now: () => time, pause: async (ms) => { time += ms; } });
+  assert.equal(open.timed_out, true);
+});
+
+test("a click that changes nothing is watched briefly; one that changes the page is not", async () => {
+  let time = 0, reads = 0;
+  const before = page();
+  const delayed = await observeUntilReady(async () => page([button], ++reads >= 6 ? "Editor Report ready" : "Editor"), {
+    before, action: { tool: "click", el: button, side_effect: 0 }, maxMs: 5000, quietMs: 0, pollMs: 100, clickGraceMs: 1000, now: () => time, pause: async (ms) => { time += ms; },
+  });
+  assert.equal(delayed.effect.status, "changed");
+  assert.equal(reads, 6);
+  reads = 0;
+  const nothing = await observeUntilReady(async () => { reads++; return page(); }, {
+    before, action: { tool: "click", el: button, side_effect: 0 }, maxMs: 5000, quietMs: 0, pollMs: 100, clickGraceMs: 1000, now: () => time, pause: async (ms) => { time += ms; },
+  });
+  assert.equal(nothing.effect.status, "unknown");
+  assert.equal(nothing.ms, 1000);
+  reads = 0;
+  const changed = await observeUntilReady(async () => { reads++; return page([button], "Editor Saved"); }, {
+    before, action: { tool: "click", el: button, side_effect: 0 }, maxMs: 5000, quietMs: 0, pollMs: 100, clickGraceMs: 1000, now: () => time, pause: async (ms) => { time += ms; },
+  });
+  assert.equal(changed.effect.status, "changed");
+  assert.equal(reads, 1);
+});
+
 test("observation recognizes values and toggle state but ignores generated selectors", () => {
   const a = page([{ ...field, value: "a", checked: false }]);
   assert.equal(observationSignature(a), observationSignature(page([{ ...a.elements[0], selector: "#random" }])));

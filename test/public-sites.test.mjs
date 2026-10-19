@@ -165,7 +165,20 @@ test("page reads retry content-script teardown a bounded number of times and sur
   calls = 0;
   runtime.snapshotter = async () => { calls++; throw new Error("Could not establish connection. Receiving end does not exist."); };
   await assert.rejects(runtime.readPage("test"), /Receiving end/);
-  assert.equal(calls, 3);
+  assert.equal(calls, 5);
+});
+
+test("a page read retries while a redirect replaces the document, and never retries other errors", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  let calls = 0;
+  runtime.snapshotter = async () => { if (++calls < 4) throw new Error("locator.evaluateAll: Execution context was destroyed, most likely because of a navigation"); return page(); };
+  assert.equal((await runtime.readPage("test")).url, k.page.url);
+  assert.equal(calls, 4);
+  calls = 0;
+  runtime.snapshotter = async () => { calls++; throw new Error("TAB_NOT_FOUND: pw:gone"); };
+  await assert.rejects(runtime.readPage("test"), /TAB_NOT_FOUND/);
+  assert.equal(calls, 1);
 });
 
 test("explicit GET search forms retain navigation evidence but ordinary buttons and POST forms do not", () => {

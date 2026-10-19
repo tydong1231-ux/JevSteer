@@ -150,12 +150,23 @@ When network capture is enabled, a short inspection capture reproduces Chrome's
 debugger-notice viewport so attach/detach does not create a false stale result.
 Assertions are checked again on the stable ticket observation after evidence
 cleanup. Inspection capture is always released and performs no browser input.
+That observation waits for the page to stay unchanged for
+`JEVSTEER_REVIEW_QUIET_MS` (default 1000), so a field filled by a later request,
+such as a bill's file type, is part of the ticket rather than making it stale
+before the host accepts.
 
 If Jev returns no next action while an originating remote request is still pending,
 host mode can passively wait up to the remaining action-settling/time budget for a
 nonempty assertion set to pass on a stable, non-busy page. This only observes; it
 never replays the request, resolves the journal or accepts the result automatically.
 Missing/busy outcomes time out and remain unconfirmed.
+
+After a remote write this milestone sent, such as Create or Save, Jev may see no
+clear next step because the goal is already reached. Before returning
+`needs_guidance`, the runtime then checks the contract on the current page. A
+pass completes the milestone (`completed_verified`, or `host_review_required` in
+host mode or when hybrid verification is unsure); otherwise the milestone still
+stops with `needs_guidance`. No input is sent for this check.
 
 Multiple remote writes need separately reviewable outcomes. If an earlier write is
 unconfirmed, independently inspect and resolve it before the next mutation; do not
@@ -231,10 +242,11 @@ Typing a value that reads as a calendar date (`2026/1/1`, `10/20/2026`,
 `2026年1月1日`, `Oct 20, 2026`) ends by leaving the field, unless it is a
 combobox. Date pickers such as antd's commit a typed date only then, so a
 Generate or Save click right after typing would otherwise read the old date.
-The effect check then sees the committed value and accepts the same date
-rewritten with other padding or separators (`2026/01/01`). Fast input also
-sends a Shift key press after filling, for widgets that parse fields on key
-events.
+The driver then waits for the page to draw two frames (at most 250 ms), the
+frame in which such a picker writes its value back. The effect check then sees
+the committed value and accepts the same date rewritten with other padding or
+separators (`2026/01/01`). Fast input also sends a Shift key press after
+filling, for widgets that parse fields on key events.
 
 ## Runtime limits
 
@@ -245,7 +257,20 @@ stable directory for short-lived MCP processes. Host acceptance, login, CAPTCHA,
 irreversible confirmation and visual fallback remain explicit protocol outcomes.
 
 Transient content-script teardown is retried a bounded number of times during
-observation. Link navigation, the submit button of an explicit GET search form
+observation, as is a page read that a redirect interrupts ("Execution context was
+destroyed"); up to five reads, 1.5 s in all.
+
+With the Playwright driver, observation after an input also waits while XHR or
+fetch requests the page started after that input are still open, up to the
+action settle budget (`JEVSTEER_ACTION_SETTLE_MS`). A report whose Generate
+button shows nothing until its request returns is then seen in the same round,
+without waits or a second click. A request open for 8 s or more counts as a long
+poll or stream; it and later requests to its endpoint are not waited on. A click
+that has changed nothing yet is watched for 1 s more, since handlers can wait
+before sending a request; clicks into text fields and native selects are not.
+Each action in the result carries `requests`: how many data requests the page
+sent after it. A click with an `unknown` effect and `requests: 0` did not reach
+a handler that does anything visible or remote. Link navigation, the submit button of an explicit GET search form
 and search Enter wait for route progress within `JEVSTEER_NAVIGATION_SETTLE_MS`;
 no browser input is replayed by this wait. Checkboxes, radios and fields inside
 that form, and same-page `#` links, are judged in place without that wait.

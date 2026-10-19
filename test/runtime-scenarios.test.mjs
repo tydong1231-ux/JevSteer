@@ -148,6 +148,38 @@ test("waits while the page changes or loads are not idle", async () => {
   assert.ok(result.actions.every((a) => a.page_changed === undefined));
 });
 
+function customerForm() {
+  const create = { i: 0, selector: "#create", tag: "button", role: "button", label: "Create" };
+  const row = { i: 0, selector: "#row", tag: "tr", role: "button", label: "JevSteer QA P1019B THB 0.00" };
+  const k = new MemoryKapture({ text: "Add Customer Name", elements: [create] });
+  k.onCommand = (command) => { if (command === "click") { k.page.text = "Customers JevSteer QA P1019B THB 0.00"; k.page.elements = [row]; } };
+  return k;
+}
+const saveCustomer = { successCriteria: ["A saved customer row shows the exact name JevSteer QA P1019B"], maxActions: 4, evidenceLevel: "none" };
+
+test("after a sent Create, an unclear next step checks the contract before asking for guidance", async () => {
+  const k = customerForm();
+  // Jev does not mark the task done after Create and is unsure what comes next.
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1 }]));
+  const result = await runtime.run("Save customer JevSteer QA P1019B", saveCustomer);
+  assert.equal(result.status, "completed_verified");
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  assert.deepEqual(await runtime.journal.pending("test"), []);
+});
+
+test("after a sent Create, an uncertain check goes to the host; without a write the host is asked for guidance", async () => {
+  const k = customerForm();
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1 }], { verifyScore: 0.6 }));
+  const result = await runtime.run("Save customer JevSteer QA P1019B", { ...saveCustomer, verificationMode: "hybrid" });
+  assert.equal(result.status, "host_review_required");
+  assert.ok(result.host_review?.review_id);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  // A read-only click leaves no write to check; an unclear step still asks.
+  const read = customerForm();
+  const unclear = await memoryRuntime(read, scriptedDecider([{ side_effect: 0.01 }, { next_step_clear: 0.1 }])).run("Save customer JevSteer QA P1019B", saveCustomer);
+  assert.equal(unclear.status, "needs_guidance");
+});
+
 test("navigation during a decision reobserves without replaying the click", async () => {
   const k = new MemoryKapture({ elements: [button] });
   const decider = scriptedDecider([{}, () => { k.page.url = "https://fixture.test/final"; k.page.text = "Saved detail"; return decision(); }, { tool: "none", done: 0.99 }]);
