@@ -125,8 +125,12 @@ function showsTyped({ typed, current }) {
 // one is open: a page can move its open list to a twin.
 function observedFor(page, el, listedIn) {
   if (!el) return {};
-  const owner = listedIn && page.elements.find((e) => e.i === listedIn.i);
-  return { twins: twinsOf(el, page), ...(owner ? { owner_twins: twinsOf(owner, page, { ignore: ["expanded"] }) } : {}) };
+  // Jev's target can be a copy of the page's element with what a typed field
+  // showed then (see decide). What tells it from identical controls is read
+  // from the element as observed, as the check before input reads it.
+  const observed = (e) => page.elements.find((x) => x.i === e.i);
+  const owner = listedIn && observed(listedIn);
+  return { twins: twinsOf(observed(el) || el, page), ...(owner ? { owner_twins: twinsOf(owner, page, { ignore: ["expanded"] }) } : {}) };
 }
 
 // Names those fields when a run stops without verifying its goal.
