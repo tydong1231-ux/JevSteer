@@ -155,7 +155,11 @@ test('managed profile reopens with storage intact; CDP aliases share physical pa
   const profile = await mkdtemp(join(tmpdir(), 'jev-pw-'));
   // The same browser as the other tests: CI's bundled one, or a local Chrome.
   const executablePath = process.env.JEVSTEER_TEST_EXECUTABLE_PATH || undefined;
-  const driver = new PlaywrightDriver({ userDataDir: profile, headless: true, executablePath, timeoutMs: 5000, launchOptions: { args: ['--remote-debugging-port=0'] } });
+  // A brand-new profile's first navigation can take over 5 s on CI's Windows
+  // runners (twice on Node 20, 2026-10-19), though this whole test usually
+  // takes about 2 s. The managed drivers get the driver's default timeout.
+  const timeoutMs = 15000;
+  const driver = new PlaywrightDriver({ userDataDir: profile, headless: true, executablePath, timeoutMs, launchOptions: { args: ['--remote-debugging-port=0'] } });
   let attached;
   let alias;
   let reopened;
@@ -173,7 +177,7 @@ test('managed profile reopens with storage intact; CDP aliases share physical pa
     await alias.close();
     expect(page.isClosed()).toBe(false);
     await driver.close();
-    reopened = new PlaywrightDriver({ userDataDir: profile, headless: true, executablePath, timeoutMs: 5000 });
+    reopened = new PlaywrightDriver({ userDataDir: profile, headless: true, executablePath, timeoutMs });
     expect(reopened.sessionId).toBe(driver.sessionId);
     const next = await reopened.createPage();
     await reopened.open(fixture.base + '/controls', { pageRef: next.pageId });
