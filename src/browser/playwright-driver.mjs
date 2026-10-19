@@ -11,6 +11,16 @@ import { dispatchInput } from './driver.mjs';
 import { inspectBusinessDOM } from './inspect.mjs';
 import { SENSITIVE_PATTERNS } from '../sensitive.mjs';
 
+// A frozen or discarded background tab in an attached Chrome never settles
+// page.title(). Tab listing must not wait on it, or browser_doctor and
+// browser_tabs hang for as long as that tab sleeps.
+const LIST_TITLE_WAIT_MS = 1000;
+function boundedTitle(page) {
+  let timer;
+  const fallback = new Promise((done) => { timer = setTimeout(() => done(''), LIST_TITLE_WAIT_MS); });
+  return Promise.race([page.title().catch(() => ''), fallback]).finally(() => clearTimeout(timer));
+}
+
 export class PlaywrightDriver {
   constructor(options = {}) {
     this.kind = 'playwright';
@@ -96,7 +106,7 @@ export class PlaywrightDriver {
   }
 
   async pageRef(record) {
-    return { pageId: record.pageId, tabId: record.pageId, sessionId: this.sessionId, url: record.page.url(), title: await record.page.title().catch(() => ''), browser: 'chromium' };
+    return { pageId: record.pageId, tabId: record.pageId, sessionId: this.sessionId, url: record.page.url(), title: await boundedTitle(record.page), browser: 'chromium' };
   }
   async pages() {
     await this.ready();
