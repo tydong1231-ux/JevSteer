@@ -84,13 +84,14 @@ export class KaptureClient {
   }
 
   async close() {
-    if (this.startedByUs && this.child && this.child.exitCode == null) {
-      this.child.kill("SIGTERM");
-      await Promise.race([
-        new Promise((resolve) => this.child.once("exit", resolve)),
-        sleep(1500),
-      ]).catch(() => {});
-      if (this.child?.exitCode == null) this.child.kill("SIGKILL");
+    // Keep a local reference: the "exit" listener registered in ensureServer
+    // clears this.child as soon as the process exits.
+    const child = this.child;
+    if (this.startedByUs && child && child.exitCode == null && child.signalCode == null) {
+      const exited = new Promise((resolve) => child.once("exit", resolve));
+      child.kill("SIGTERM");
+      await Promise.race([exited, sleep(1500)]);
+      if (child.exitCode == null && child.signalCode == null) child.kill("SIGKILL");
     }
     this.child = null;
   }

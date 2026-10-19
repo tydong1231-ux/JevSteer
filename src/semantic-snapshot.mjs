@@ -38,17 +38,44 @@ function inferRole(tag, type, explicit) {
   return undefined;
 }
 
-function safeQuery($, selector) {
-  try { return $(selector).first(); } catch { return null; }
+// Per-snapshot lookup tables. Querying the whole DOM once per element (and
+// again per label/aria-labelledby reference) is quadratic and took seconds
+// on pages with a few thousand controls; these maps make each lookup O(1).
+function buildIndex($) {
+  let ids;
+  let labelsFor;
+  return {
+    byId(id) {
+      if (!ids) {
+        ids = new Map();
+        $("[id]").each((_, el) => {
+          const value = $(el).attr("id");
+          if (!ids.has(value)) ids.set(value, el);
+        });
+      }
+      const el = ids.get(id);
+      return el ? $(el) : null;
+    },
+    labelTextFor(id) {
+      if (!labelsFor) {
+        labelsFor = new Map();
+        $("label[for]").each((_, el) => {
+          const value = $(el).attr("for");
+          if (!labelsFor.has(value)) labelsFor.set(value, squash($(el).text(), 180));
+        });
+      }
+      return labelsFor.get(id) || "";
+    },
+  };
 }
 
-function findById($, id) {
-  if (!id) return null;
-  try {
-    return $("[id]").filter((_, el) => $(el).attr("id") === id).first();
-  } catch {
-    return null;
-  }
+// Kapture usually returns simple id selectors; resolve those from the index.
+const SIMPLE_ID_SELECTOR = /^#(-?[A-Za-z_][A-Za-z0-9_-]*)$/;
+
+function safeQuery($, index, selector) {
+  const simple = SIMPLE_ID_SELECTOR.exec(String(selector));
+  if (simple) return index.byId(simple[1]) || $([]);
+  try { return $(selector).first(); } catch { return null; }
 }
 
 function elementText(node) {
@@ -65,13 +92,13 @@ function nearbyText(node) {
   return squash(parent.replace(own, " "), 180);
 }
 
-function labelFor($, node, raw, tag, type) {
+function labelFor($, index, node, raw, tag, type) {
   const aria = squash(node?.attr("aria-label"), 180);
   if (aria) return aria;
 
   const labelledBy = node?.attr("aria-labelledby");
   if (labelledBy) {
-    const parts = labelledBy.split(/\s+/).map((id) => squash(findById($, id)?.text(), 120)).filter(Boolean);
+    const parts = labelledBy.split(/\s+/).map((id) => squash(index.byId(id)?.text(), 120)).filter(Boolean);
     if (parts.length) return squash(parts.join(" "), 180);
   }
 
@@ -82,10 +109,7 @@ function labelFor($, node, raw, tag, type) {
 
   const id = node?.attr("id") || raw.id;
   if (id) {
-    let explicit = "";
-    try {
-      explicit = squash($("label[for]").filter((_, el) => $(el).attr("for") === id).first().text(), 180);
-    } catch {}
+    const explicit = index.labelTextFor(id);
     if (explicit) return explicit;
   }
 
@@ -113,15 +137,16 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
   textRoot.find("script,style,noscript,template").remove();
   const pageText = squash(textRoot.text(), 10000);
   const elements = [];
+  const index = buildIndex($);
 
   for (const raw of rawElements || []) {
     if (!raw?.visible || !raw.selector) continue;
-    const node = safeQuery($, raw.selector);
+    const node = safeQuery($, index, raw.selector);
     const tag = String(raw.tagName || node?.prop("tagName") || "element").toLowerCase();
     const type = squash(node?.attr("type") || "", 40).toLowerCase() || undefined;
     const role = inferRole(tag, type, squash(node?.attr("role"), 60) || undefined);
     const password = type === "password";
-    const label = labelFor($, node, raw, tag, type);
+    const label = labelFor($, index, node, raw, tag, type);
     const text = elementText(node);
     const options = Array.isArray(raw.options) ? raw.options.map((o) => ({
       text: squash(o.text, 100),

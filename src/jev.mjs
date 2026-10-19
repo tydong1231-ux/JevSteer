@@ -10,7 +10,9 @@ function validateAnswers(answers, questions) {
   for (const [name, question] of Object.entries(questions)) {
     // Speculative operation-specific heads are independent. If the chosen
     // action is CLICK, an unused TYPE head must not invalidate that action.
-    if (name.endsWith("_target") && name !== selectedTarget) continue;
+    // A request without a tool question (the second stage on large pages)
+    // asks for a target head only, so that head must still be validated.
+    if (questions.tool && name.endsWith("_target") && name !== selectedTarget) continue;
     const answer = answers[name];
     if (!answer || typeof answer !== "object") {
       throw new Error(`Jev response missing answer: ${name}`);

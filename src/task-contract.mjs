@@ -27,7 +27,11 @@ export function normalizeAssertions(assertions = []) {
   const out = [];
   for (const raw of assertions || []) {
     if (!raw || !ASSERTION_TYPES.has(raw.type)) continue;
-    const value = cleanString(raw.value, raw.type === "url_matches" ? 220 : 300);
+    // Regexes are kept verbatim: collapsing whitespace or truncating would
+    // silently change (or break) the pattern. Other values are plain text.
+    const value = raw.type === "url_matches"
+      ? String(raw.value ?? "").trim().slice(0, 300)
+      : cleanString(raw.value, 300);
     if (!value) continue;
     out.push({
       type: raw.type,

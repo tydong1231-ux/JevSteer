@@ -3,7 +3,7 @@ import { KaptureClient } from "./kapture-client.mjs";
 import { TabLeaseManager } from "./lease.mjs";
 import { jev } from "./jev.mjs";
 import { config } from "./config.mjs";
-import { FIELDISH, SELECTISH, brief, elementFingerprint, formatPage, pageDiff, repeatsBlock, toModelPage } from "./page-model.mjs";
+import { FIELDISH, SELECTISH, brief, elementFingerprint, formatPage, pageDiff, repeatsBlock, squash, toModelPage } from "./page-model.mjs";
 import { log } from "./log.mjs";
 import { normalizeTaskContract, contractForModel } from "./task-contract.mjs";
 import { evaluateAssertions, verificationQuestions, summarizeVerification } from "./verification.mjs";
@@ -13,6 +13,7 @@ import { verifyActionEffect } from "./action-effect.mjs";
 import { buildEvidencePacket, evidenceRef, relevantRequest, sanitizeNetworkBody, summarizeRequest } from "./evidence.mjs";
 import { buildTargetSpace, availableTools, eligibleFor, TARGETED_TOOLS } from "./decision-space.mjs";
 import { generateFieldText } from "./text-helper.mjs";
+import { isSensitiveName } from "./sensitive.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -36,12 +37,11 @@ const TOOLS = {
 const KEYS = ["Escape", "Tab", "Space", "Backspace", "Delete", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End"];
 const TARGETED = TARGETED_TOOLS;
 const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"]);
-const SECRET_KEY = /(pass(word)?|secret|token|api[-_]?key|otp|2fa|pin|cvv|cvc|security[-_]?code)/i;
 
 function sanitizedValues(values) {
   return Object.fromEntries(Object.entries(values || {}).map(([key, value]) => [
     key,
-    SECRET_KEY.test(key) ? "[secret value available locally; contents hidden from Jev]" : String(value).slice(0, 160),
+    isSensitiveName(key) ? "[secret value available locally; contents hidden from Jev]" : String(value).slice(0, 160),
   ]));
 }
 
@@ -517,8 +517,11 @@ export class JevSteerRuntime {
     if (original.name && current.name && original.name !== current.name) {
       throw new Error("STALE_TARGET: target field changed");
     }
+    // Snapshot values are redacted for passwords and whitespace-collapsed and
+    // truncated otherwise; compare the live value the same way.
     if (["type", "select"].includes(action.tool) && current.value != null
-        && String(original.value ?? "") !== String(current.value)) {
+        && original.type !== "password"
+        && squash(original.value, 160) !== squash(current.value, 160)) {
       throw new Error("STALE_TARGET: field value changed after decision");
     }
   }
@@ -827,7 +830,7 @@ export class JevSteerRuntime {
         if (action.tool === "type" && action.value == null && action.el
             && Object.keys(values).length === 0
             && action.el.type !== "password"
-            && !SECRET_KEY.test([action.el.label, action.el.name, action.el.placeholder].join(" "))) {
+            && ![action.el.label, action.el.name, action.el.placeholder].some(isSensitiveName)) {
           try {
             await this.assertTargetFresh(tab.tabId, { ...action, observedUrl: page.url });
             const result = await this.textGenerator({
