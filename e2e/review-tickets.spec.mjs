@@ -198,16 +198,24 @@ const shop = `<nav><a href="#cart">Cart <span class="badge" id="cart">1</span></
   <h1>The Grand Design</h1><button>Add to cart</button>
   <script>document.querySelector('button').onclick = () => { cart.textContent = '2'; };</script>`;
 
-test('a count the contract names is bound into the ticket', async ({ page }, testInfo) => {
-  await page.setContent(shop);
-  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
-    (state) => decision({ tool: 'click', target: state.page.elements.find((e) => e.label === 'Add to cart').i, side_effect: 0.9 }),
-    { tool: 'none', done: 0.99 },
-  ]));
-  try {
-    const ticket = await run(mcp, { goal: 'Add The Grand Design to the cart once' });
-    expect(ticket.status).toBe('host_review_required');
-    await page.evaluate(() => { document.querySelector('#cart').textContent = '3'; });
-    expect((await review(mcp, ticket, 'accept')).status).toBe('host_review_stale');
-  } finally { await mcp.close(); }
-});
+// antd's Badge draws each digit of a count in its own element: the page text
+// reads 12 as "1 2". The counts after it in the text are still found, here
+// a cart count that no control's label holds.
+const antdInbox = `<nav><a href="#inbox"><span class="ant-badge"><span>Inbox</span><sup class="ant-scroll-number ant-badge-count" title="12"><bdi><span class="ant-scroll-number-only"><span class="ant-scroll-number-only-unit current">1</span></span><span class="ant-scroll-number-only"><span class="ant-scroll-number-only-unit current">2</span></span></bdi></sup></span></a></nav>`;
+const cartText = shop.replace('<nav><a href="#cart">Cart <span class="badge" id="cart">1</span></a></nav>', '<p>Cart <span class="badge" id="cart">1</span></p>');
+
+for (const [after, html] of [['', shop], [' after a count whose digits antd draws apart', antdInbox + cartText]]) {
+  test(`a count the contract names is bound into the ticket${after}`, async ({ page }, testInfo) => {
+    await page.setContent(html);
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+      (state) => decision({ tool: 'click', target: state.page.elements.find((e) => e.label === 'Add to cart').i, side_effect: 0.9 }),
+      { tool: 'none', done: 0.99 },
+    ]));
+    try {
+      const ticket = await run(mcp, { goal: 'Add The Grand Design to the cart once' });
+      expect(ticket.status).toBe('host_review_required');
+      await page.evaluate(() => { document.querySelector('#cart').textContent = '3'; });
+      expect((await review(mcp, ticket, 'accept')).status).toBe('host_review_stale');
+    } finally { await mcp.close(); }
+  });
+}

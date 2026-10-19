@@ -86,6 +86,23 @@ test("a ticket binds what a focused field's popup says, unless the field is secr
   assert.equal(reviewedState(bills("4321 is too short", pin)).digest, reviewedState(bills("4321 is fine", pin)).digest);
 });
 
+// antd's Badge draws each digit in its own element: the snapshot reads 41 as
+// "4 1", and the review copy shows one "#" for it.
+test("a badge count whose digits the page draws apart is one count", () => {
+  const page = { text: "Inbox 4 1 Todo 7 Customers 2026", review_text: "Inbox # Todo # Customers 2026", elements: [] };
+  const about = (goal, more = {}) => countsReferenced(page, { goal, success_criteria: [], constraints: [], assertions: [], ...more });
+  assert.equal(about("Open Todo and check the newest item"), true);
+  assert.equal(about("Confirm 41 messages are waiting"), true);
+  assert.equal(about("Open the Customers list for 2026"), false);
+  // The page shows "1" only in that count.
+  assert.equal(about("Open the Customers list", { assertions: [{ type: "text_contains", value: "1" }] }), true);
+  const inbox = { tag: "a", role: "link", label: "Inbox 4 1", review_label: "Inbox #", context: "" };
+  assert.equal(countsReferenced({ text: "Mail", elements: [inbox] }, { goal: "Confirm 41 messages are waiting" }), true);
+  // Each frame's text is a line of its own.
+  const frames = { text: "Todo 41\nCustomers", review_text: "Todo #\nCustomers", elements: [] };
+  assert.equal(countsReferenced(frames, { goal: "Confirm 41 tasks are open" }), true);
+});
+
 test("a text assertion that rests on a badge count binds the counts", () => {
   const page = (text, review_text) => ({ url: "https://shop.test/cart", title: "Cart", text, review_text, elements: [] });
   const cart = page("REF-42 Cart 2", "REF-42 Cart #");

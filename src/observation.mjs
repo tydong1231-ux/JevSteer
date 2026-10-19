@@ -89,16 +89,26 @@ export function sameReviewedState(page, record) {
 // The counts a "#" stands for in the review copy of a text, each with the
 // words next to it. A count follows what it counts ("Todo 41"): in a page's
 // text the word after it already belongs to the next thing on the page, so
-// only a control's own label also gives the word after ("2 items").
+// only a control's own label also gives the word after ("2 items"). A count
+// can read as several words: antd's Badge draws each digit apart ("4 1").
 function badgeCounts(text, copy, { after = false } = {}) {
-  const raw = String(text ?? "").split(" "), marked = String(copy ?? "").split(" ");
+  // A page's frames read one after another, each on a line of its own.
+  const raw = String(text ?? "").split(/\s/), marked = String(copy ?? "").split(/\s/);
   const word = (token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  const named = (token) => token !== "#" && /\p{L}/u.test(word(token));
   const found = [];
-  for (let i = 0; i < raw.length && i < marked.length; i++) {
-    if (marked[i] !== "#" || raw[i] === "#") { if (raw[i] !== marked[i]) break; continue; }
-    const named = (token) => token !== "#" && /\p{L}/u.test(word(token));
-    const words = [marked.slice(0, i).findLast(named), after && marked.slice(i + 1).find(named)];
-    found.push({ count: raw[i].replace(/\+$/, ""), words: words.filter(Boolean).map(word) });
+  for (let i = 0, j = 0; i < raw.length && j < marked.length; j++) {
+    if (marked[j] !== "#" || raw[i] === "#") { if (raw[i] !== marked[j]) break; i++; continue; }
+    // The longest run of digit words that reads as one count, after which
+    // the text and its copy agree again, or that ends either of them.
+    let max = i;
+    while (max < raw.length && max - i < 7 && /^[\d+]+$/.test(raw[max])) max++;
+    const runs = Array.from({ length: max - i }, (_, n) => max - n).filter((end) => /^\d{1,6}\+?$/.test(raw.slice(i, end).join("")));
+    const end = runs.find((e) => e < raw.length && raw[e] === marked[j + 1]) ?? runs.find((e) => e === raw.length || j + 1 === marked.length);
+    if (end === undefined) break;
+    const words = [marked.slice(0, j).findLast(named), after && marked.slice(j + 1).find(named)];
+    found.push({ count: raw.slice(i, end).join("").replace(/\+$/, ""), words: words.filter(Boolean).map(word) });
+    i = end;
   }
   return found;
 }
@@ -109,27 +119,23 @@ const said = (text, token) => {
   return new RegExp(`(^|[^\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}\\p{N}])`, "u").test(text);
 };
 
-// The page text with each badge count its review copy shows as "#" taken
-// out (as "\0", which no assertion holds), and whether it had one.
-function textWithoutCounts(page) {
-  const raw = String(page.text ?? "").split(/(\s+)/), marked = String(page.review_text ?? page.text ?? "").split(/(\s+)/);
-  let counts = false;
-  for (let i = 0; i < raw.length && i < marked.length; i += 2) {
-    if (marked[i] === "#" && /^\d{1,6}\+?$/.test(raw[i])) { raw[i] = "\0"; counts = true; }
-    else if (raw[i] !== marked[i]) break;
-  }
-  return { text: raw.join(""), counts };
+// The page text as a ticket binds it, when it has a badge count: its review
+// copy, with each count it shows as "#" unknown ("\0", which no assertion
+// holds). A "#" the page shows itself reads as unknown too.
+function boundText(page) {
+  if (page.review_text == null || page.review_text === page.text) return undefined;
+  return String(page.review_text).split(/(\s+)/).map((token) => (token === "#" ? "\0" : token)).join("");
 }
 
 // Whether a text assertion rests on a badge count in the page text. One that
 // must hold does when the page holds its text only in a count ("2" in
 // "Todo 12"). One whose text the page must not show does when a count could
 // turn into it, which takes a word of it that a count could be ("3" while
-// "Cart 2" shows): a count is a word of its own.
+// "Cart 2" shows): a count never shares a word with letters.
 function assertionsRestOnCounts(page, assertions) {
-  const { text, counts } = textWithoutCounts(page);
-  if (!counts) return false;
-  const kept = toastText(page).without(text);
+  const bound = boundText(page);
+  if (bound === undefined) return false;
+  const kept = toastText(page).without(bound);
   return (assertions || []).some((a) => {
     if (typeof a?.value !== "string" || !a.value.trim()) return false;
     const fold = (v) => (a.case_sensitive ? v : v.toLowerCase());

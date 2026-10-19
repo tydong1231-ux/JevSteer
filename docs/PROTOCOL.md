@@ -279,6 +279,8 @@ showed, and any other toast at acceptance, such as a late error, makes the
 ticket stale. A count in a badge (a sidebar "Todo 41" that becomes 42 when the
 saved record adds a to-do) is left out of the bound state too: a badge has a
 class hook (badge, unread, antd's scroll-number) or is a small filled pill.
+antd draws each digit of a count apart, so the page text reads 41 as "4 1";
+that is still one count.
 When the milestone's contract speaks of a badge (it names the badge, such as
 "Cart" or "Todo", states its number, or asks about counts, unread items or
 notifications), its counts stay in the bound state, so "Cart 2" turning into
@@ -286,7 +288,7 @@ notifications), its counts stay in the bound state, so "Cart 2" turning into
 count in the page text: a `text_contains` the page meets only inside a count
 ("2" in "Todo 12"), or a `text_not_contains` a count could turn into, one with
 a word a count could be ("3", "3 items" or "99+" while "Cart 2" shows; a
-count is a word of its own, so never "INV-0003"). A toast over an open drawer or modal is part of
+count never shares a word with letters, so never "INV-0003"). A toast over an open drawer or modal is part of
 the page text too. A new ticket waits while a toast shows, up to
 `JEVSTEER_REVIEW_TOAST_WAIT_MS` (default 4000), because the app may still be
 closing a drawer and reloading its list behind it. Acceptance does not wait: a
