@@ -44,13 +44,13 @@ const TOOLS = {
 const KEYS = ["Escape", "Tab", "Space", "Backspace", "Delete", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End"];
 const TARGETED = TARGETED_TOOLS;
 const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"]);
-// Escape pressed on no element usually only closes a menu, popup or dialog.
-// A page can also answer it (cancel an edit, autosave) on a channel the
-// runtime cannot see, so it is journaled like any other key and its outcome
-// is the host's to resolve: not_applied when nothing changed on the site,
-// which lets it be pressed again; applied when something did, which guards
-// it against replay like any applied input.
-const bareEscape = (action) => action.tool === "press_key" && action.key === "Escape" && action.target == null;
+// Escape, on an element or on none, usually only closes a menu, popup or
+// dialog. A page can also answer it (cancel an edit, autosave) on a channel
+// the runtime cannot see, so it is journaled like any other key and its
+// outcome is the host's to resolve: not_applied when nothing changed on the
+// site, which lets it be pressed again; applied when something did, which
+// guards it against replay like any applied input.
+const escapeKey = (action) => action.tool === "press_key" && action.key === "Escape";
 
 const pendingLine = (r) => `${r.tool} on tab_id ${r.page_id} (action_id ${r.id}, ${r.created_at})`;
 
@@ -1962,7 +1962,7 @@ export class JevSteerRuntime {
           action, element: brief(currentElement),
           ...(effect ? { effect } : {}),
           ...(observationError ? { observation_error: observationError } : {}),
-          info: bareEscape(normalized)
+          info: escapeKey(normalized)
             ? "Escape was sent. A page can answer it (an autosave, a cancel), so it is journaled like any key. Check the page. If it only closed a menu, popup or dialog and nothing changed on the site, resolve it as not_applied with that evidence; Escape can then be pressed again. If it saved or cancelled something on the site, resolve it as applied; the same Escape on this page is then refused as a replay."
             : "Manual action was dispatched. Its business outcome needs independent verification; resolve applied/not_applied with evidence before resuming.",
         };

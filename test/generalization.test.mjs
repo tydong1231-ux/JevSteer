@@ -540,6 +540,19 @@ test("manual Escape on no element is journaled like any key; resolved not_applie
   assert.equal(k.commands.filter(c=>c.command==="keypress").length, 2);
 });
 
+test("manual Escape on an element gets the same guidance; resolved applied it is not replayed", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const escape = await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape", element: 0 });
+  assert.equal(escape.status, "action_unconfirmed");
+  assert.match(escape.info, /resolve it as not_applied/);
+  const resolved = await runtime.resolveAction({ tabId: "test", actionId: escape.action_id, resolution: "applied", evidence: "The edit was cancelled on the server" });
+  assert.equal(resolved.replay_protected, true);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape", element: 0 }), /ACTION_ALREADY_APPLIED/);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
+});
+
 test("manual Enter is journaled and is not repeated before it is resolved", async () => {
   const k = new MemoryKapture(page());
   const runtime = memoryRuntime(k, scriptedDecider([{}]));

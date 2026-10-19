@@ -325,10 +325,10 @@ even when the HTTP command acknowledged success, because text fields may
 autosave and a Save click may commit asynchronously. The host must inspect the
 actual outcome and call `browser_resolve_action` before relying on a retry.
 An error after browser dispatch likewise returns the journal ID rather than
-hiding the uncertain mutation. `press_key` Escape with no element is journaled
-the same way. It usually only closes a menu, popup or dialog, but a page can
-answer it (an autosave, a cancel) on channels the runtime cannot fully see: a
-WebSocket opened before JevSteer attached, a service worker, a save it
+hiding the uncertain mutation. `press_key` Escape, on an element or on none, is
+journaled the same way. It usually only closes a menu, popup or dialog, but a
+page can answer it (an autosave, a cancel) on channels the runtime cannot fully
+see: a WebSocket opened before JevSteer attached, a service worker, a save it
 debounces. So the runtime never infers its outcome from quiet traffic; the host
 checks the page and resolves it. `not_applied` says nothing changed on the site
 (a menu, popup or dialog only closed), and Escape can be pressed again.
