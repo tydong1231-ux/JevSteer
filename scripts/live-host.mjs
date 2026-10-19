@@ -1,5 +1,6 @@
 // Local host bridge for a persistent, real stdio MCP session. Business actions
 // still go through the shipped browser_run entry point, never a click script.
+// browser_open lets the host start a contract on its start_url in a new tab.
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -14,7 +15,7 @@ await mkdir(output, { recursive: true });
 const transport = new StdioClientTransport({ command: process.execPath, args: ['bin/jevsteer.mjs'], cwd: process.cwd(), env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)), stderr: 'pipe' });
 const client = new Client({ name: 'jevsteer-live-host', version: '1.0.0' });
 await client.connect(transport);
-const allowed = new Set(['browser_doctor', 'browser_tabs', 'browser_snapshot', 'browser_inspect', 'browser_screenshot', 'browser_run', 'browser_review', 'browser_evidence', 'browser_resolve_action', 'browser_act']);
+const allowed = new Set(['browser_doctor', 'browser_tabs', 'browser_open', 'browser_snapshot', 'browser_inspect', 'browser_screenshot', 'browser_run', 'browser_review', 'browser_evidence', 'browser_resolve_action', 'browser_act']);
 // Prefix each session so restarts cannot overwrite previous financial evidence.
 const session = randomUUID();
 let sequence = 0;

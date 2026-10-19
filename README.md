@@ -266,16 +266,19 @@ Its fixtures adapt the search/filter and guard-testing ideas from
 `run-contract.mjs` calls this project's actual `browser_run` MCP tool with
 host-defined semantic milestones. Use `browser_tabs` to select the intended
 demo tab and add its `tab_id` to the JSON contract when multiple tabs are
-connected. Review each returned Evidence Packet before resuming at
-`next_milestone_index` with the same `run_id`. A result that requires guidance
-or is uncertain is not an automatic pass. The examples are workflow contracts,
-not selector scripts. Use a unique customer name for creation runs and inspect
-existing records before creating another one.
+connected. A contract without `tab_id` may name a `start_url` instead: the
+script opens it in a new tab with `browser_open` and runs there. `start_url`
+belongs to the scripts; `browser_run` ignores it. Review each returned Evidence
+Packet before resuming at `next_milestone_index` with the same `run_id`. A
+result that requires guidance or is uncertain is not an automatic pass. The
+examples are workflow contracts, not selector scripts. Use a unique customer
+name for creation runs and inspect existing records before creating another one.
 
 Complex public-site contracts are in `examples/arxiv-advanced-readonly.json`
-and `examples/selenium-public-form.json`. Open the corresponding arXiv advanced
-search or Selenium public web form in a dedicated tab, supply its `tab_id`, and
-review each ticket independently. Never auto-accept a ticket in a test runner.
+and `examples/selenium-public-form.json`. Each names its `start_url` (the arXiv
+advanced search or the Selenium web form). Through `scripts/live-host.mjs`, call
+`browser_open` with that URL and pass the returned `tab_id` to `browser_run`.
+Review each ticket independently. Never auto-accept a ticket in a test runner.
 The ccMonet read-only/report examples also use explicit host verification; reuse
 the user's intended authenticated tab and organization, without editing records.
 
