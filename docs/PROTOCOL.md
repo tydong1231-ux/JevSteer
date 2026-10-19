@@ -53,15 +53,16 @@ the remote-write journal.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session.
-`browser_snapshot` still reads any page. Opening a page sends it no input, but
-its address is a request to the site, which can change something (a GET that
-saves, a logout) or wipe what the action left. So while the action is
-unresolved, `browser_open` opens only `about:blank` or the address the action
-was chosen on (kept as a digest in its journal record), such as the record
-list in a new tab, to check on the site what the action did. Any other
-address, and any navigation of a page whose own input is unresolved, is
-refused with `UNCONFIRMED_SESSION_ACTION` before a request is made. The host
-can resolve the original `tab_id` and action ID after independent readback,
+`browser_snapshot` and `browser_inspect` still read any page. Opening a page
+sends it no input, but its address is a request to the site, which can change
+something (a GET that saves, a logout) or wipe what the action left. That
+holds for the address the action was chosen on too, since a page can be the
+answer to such a GET. So while the action is unresolved, `browser_open` opens
+only `about:blank` in a new tab. Any other address, and any navigation of a
+page whose own input is unresolved, is refused with
+`UNCONFIRMED_SESSION_ACTION` before a request is made. The host reads what
+the action did from the open pages and the run's request evidence, and can
+resolve the original `tab_id` and action ID after that independent readback,
 even when the physical Page no longer exists. Changing profile/driver is not an
 automatic journal migration: finish/reconcile old workflows before switching.
 

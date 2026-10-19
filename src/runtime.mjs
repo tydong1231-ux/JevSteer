@@ -16,7 +16,7 @@ import { buildEvidencePacket, evidenceRef, relevantRequest, safeUrl, sanitizeNet
 import { buildTargetSpace, availableTools, eligibleFor, listedOptions, NO_TARGET, TARGETED_TOOLS } from "./decision-space.mjs";
 import { generateFieldText } from "./text-helper.mjs";
 import { locateSameElement, equivalentLink, sameIdentity, rememberField, findRemembered, twinsOf, pickTwin } from "./element-identity.mjs";
-import { ActionJournal, addressHash } from "./action-journal.mjs";
+import { ActionJournal } from "./action-journal.mjs";
 import { countsReferenced, observeUntilReady, observationSignature, observationLimitError, reviewedState, sameReviewedState, transientNavigationError, withoutToasts } from "./observation.mjs";
 import { HostReviewStore, reviewDigest, reviewReceipt } from "./host-review.mjs";
 import { sensitiveName, sensitiveField } from "./sensitive.mjs";
@@ -53,6 +53,9 @@ const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"])
 const escapeKey = (action) => action.tool === "press_key" && action.key === "Escape";
 
 const pendingLine = (r) => `${r.tool} on tab_id ${r.page_id} (action_id ${r.id}, ${r.created_at})`;
+// What unconfirmed input did is read from what is already open, never by
+// asking the site for another page (see assertOpenClear).
+const CHECK_UNCONFIRMED = "Check what it did on the site from the open pages (browser_snapshot, browser_inspect) and the run's request evidence (browser_evidence), then call browser_resolve_action with that tab_id and action_id";
 
 function sanitizedValues(values) {
   return Object.fromEntries(Object.entries(values || {}).map(([key, value]) => [
@@ -411,25 +414,25 @@ export class JevSteerRuntime {
     const foreign = (await this.journal.pendingSession(sessionId)).filter((r) => r.page_id !== tabId);
     // The page may be closed by now; its record still blocks this session and
     // browser_resolve_action still accepts its tab_id.
-    if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so input on another page is blocked: ${foreign.map(pendingLine).join("; ")}. Inspect what it did on the site (browser_snapshot works, and browser_open opens about:blank or the address that input was chosen on in a new tab), then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
+    if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so input on another page is blocked: ${foreign.map(pendingLine).join("; ")}. ${CHECK_UNCONFIRMED}, even if that page was closed.`);
   }
 
   // Opening a page sends it no input, but its address is a request to the
   // site, which can change something (a GET that saves, a logout) or wipe
-  // what an unconfirmed input left. While input in this session has no
-  // confirmed outcome, a tab opens only about:blank or the address such an
-  // input was chosen on: that shows the site's state without asking it for
-  // anything new. A page with unconfirmed input of its own is not navigated.
+  // what an unconfirmed input left. That holds for the address the input was
+  // chosen on too: a page can be the answer to such a GET. While input in
+  // this session has no confirmed outcome, a new tab opens only about:blank,
+  // and a page with unconfirmed input of its own is not navigated.
   async assertOpenClear(tabId, url) {
     const sessionId = this.driver.sessionId;
     if (!sessionId) return;
     const pending = await this.journal.pendingSession(sessionId);
     if (!pending.length) return;
     const own = pending.some((r) => r.page_id === tabId);
-    if (!own && (url === "about:blank" || pending.some((r) => r.url_hash && r.url_hash === addressHash(url)))) return;
+    if (!own && url === "about:blank") return;
     throw new Error(own
-      ? `UNCONFIRMED_SESSION_ACTION: input on this page has no confirmed outcome, so it is not navigated: ${pending.map(pendingLine).join("; ")}. Open a new tab to check the site, then call browser_resolve_action with that tab_id and action_id.`
-      : `UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so browser_open opens only about:blank or the address that input was chosen on, not ${safeUrl(url)}: ${pending.map(pendingLine).join("; ")}. Inspect what it did on the site, then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
+      ? `UNCONFIRMED_SESSION_ACTION: input on this page has no confirmed outcome, so it is not navigated: ${pending.map(pendingLine).join("; ")}. ${CHECK_UNCONFIRMED}.`
+      : `UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so browser_open opens only about:blank, not ${safeUrl(url)}: any address is a request that can change the site. ${pending.map(pendingLine).join("; ")}. ${CHECK_UNCONFIRMED}, even if that page was closed.`);
   }
 
   async open(url, { tabId, newTab = true } = {}) {

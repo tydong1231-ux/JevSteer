@@ -171,7 +171,7 @@ test('lost Save ACK persists across driver/runtime restart and new run ID withou
   } finally { await mcp.close(); await fixture.close(); }
 });
 
-test('replacement pages cannot bypass an unknown session write but can show what it did, and old records remain resolvable', async ({ page }, testInfo) => {
+test('replacement pages cannot bypass an unknown session write, and old records remain resolvable', async ({ page }, testInfo) => {
   await page.setContent('<button>Save</button>');
   const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]), { driver: { sessionId: 'replacement-fixture' } });
   try {
@@ -181,11 +181,11 @@ test('replacement pages cannot bypass an unknown session write but can show what
     const newRef = (await mcp.driver.pages()).find((p) => p.pageId !== mcp.id);
     await expect(mcp.call('browser_run', { tab_id: newRef.pageId, goal: 'Continue with another run', evidence_level: 'none' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
     await page.close();
-    // Opening a page sends it no input: a new tab is where the host checks the site.
-    const check = await mcp.call('browser_open', { url: 'about:blank' });
-    expect(check.url).toBe('about:blank');
+    // A blank tab asks the site for nothing, so it opens.
+    const blank = await mcp.call('browser_open', { url: 'about:blank' });
+    expect(blank.url).toBe('about:blank');
     // Input there is still blocked. After the page is gone the error still names its tab_id, action_id and the way out.
-    await expect(mcp.call('browser_run', { tab_id: check.tab_id, goal: 'Continue with another run', evidence_level: 'none' })).rejects.toThrow(`click on tab_id ${mcp.id} (action_id ${record.id}, ${record.created_at}). Inspect what it did on the site (browser_snapshot works, and browser_open opens about:blank or the address that input was chosen on in a new tab), then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
+    await expect(mcp.call('browser_run', { tab_id: blank.tab_id, goal: 'Continue with another run', evidence_level: 'none' })).rejects.toThrow(`click on tab_id ${mcp.id} (action_id ${record.id}, ${record.created_at}). Check what it did on the site from the open pages (browser_snapshot, browser_inspect) and the run's request evidence (browser_evidence), then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
     const resolution = await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: record.id, resolution: 'not_applied', evidence: 'Independent fixture oracle confirms no request reached the server' });
     expect(resolution.resolution).toBe('not_applied');
     await replacement.close();
@@ -258,11 +258,11 @@ test('identical selects told apart by their placeholders are found by them after
   } finally { await mcp.close(); }
 });
 
-// While a write has no confirmed outcome, browser_open opens a blank tab or
-// the address the write was chosen on, which shows the site's state without
-// asking it for anything new. Any other address, or the page the write was
-// sent on, is refused before a request is made.
-test('while a write is unconfirmed, a new tab opens only a blank page or the address it was chosen on', async ({ page }, testInfo) => {
+// While a write has no confirmed outcome, browser_open opens only a blank tab.
+// Any address is a request that can change the site: a logout, or a GET like
+// the one the write's own page answered. Each is refused before a request is
+// made, as is any navigation of the page the write was sent on.
+test('while a write is unconfirmed, a new tab opens only a blank page, not even the address the write was chosen on', async ({ page }, testInfo) => {
   const visits = [];
   await page.context().route('https://fixture.invalid/**', (route) => {
     visits.push(new URL(route.request().url()).pathname);
@@ -275,18 +275,22 @@ test('while a write is unconfirmed, a new tab opens only a blank page or the add
     const record = await mcp.runtime.journal.begin(mcp.id, { runId: 'previous', milestoneId: 'save', action: { tool: 'click', el: snapshot.elements.find((e) => e.label === 'Save') }, page: snapshot, remoteRisk: 0.9 });
     visits.length = 0;
     const tabs = page.context().pages().length;
-    await expect(mcp.call('browser_open', { url: 'https://fixture.invalid/logout' })).rejects.toThrow('UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so browser_open opens only about:blank or the address that input was chosen on, not https://fixture.invalid/logout');
+    for (const url of ['https://fixture.invalid/invoices?status=draft', 'https://fixture.invalid/logout']) {
+      await expect(mcp.call('browser_open', { url })).rejects.toThrow(`UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so browser_open opens only about:blank, not ${url}: any address is a request that can change the site.`);
+    }
     await expect(mcp.call('browser_open', { url: 'https://fixture.invalid/invoices?status=draft', tab_id: mcp.id, new_tab: false })).rejects.toThrow('UNCONFIRMED_SESSION_ACTION: input on this page has no confirmed outcome, so it is not navigated');
     expect(visits).toEqual([]);
     expect(page.context().pages()).toHaveLength(tabs);
-    const check = await mcp.call('browser_open', { url: 'https://fixture.invalid/invoices?status=draft' });
-    expect(check.url).toBe('https://fixture.invalid/invoices?status=draft');
-    expect(visits).toEqual(['/invoices']);
-    expect((await mcp.call('browser_open', { url: 'about:blank' })).url).toBe('about:blank');
+    const blank = await mcp.call('browser_open', { url: 'about:blank' });
+    expect(blank.url).toBe('about:blank');
     // Input on the new tab stays blocked until the write is resolved.
-    await expect(mcp.call('browser_run', { tab_id: check.tab_id, goal: 'Continue', evidence_level: 'none' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
-    await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: record.id, resolution: 'not_applied', evidence: 'The invoice list in a new tab shows no new draft' });
-    expect((await mcp.call('browser_open', { url: 'https://fixture.invalid/logout' })).url).toBe('https://fixture.invalid/logout');
+    await expect(mcp.call('browser_run', { tab_id: blank.tab_id, goal: 'Continue', evidence_level: 'none' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
+    // The page the write was sent on is still read (what browser_snapshot returns).
+    expect(await mcp.runtime.snapshotText(mcp.id)).toContain('Invoices');
+    await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: record.id, resolution: 'not_applied', evidence: 'The invoice list on the page shows no new draft' });
+    expect(visits).toEqual([]);
+    for (const url of ['https://fixture.invalid/invoices?status=draft', 'https://fixture.invalid/logout']) expect((await mcp.call('browser_open', { url })).url).toBe(url);
+    expect(visits).toEqual(['/invoices', '/logout']);
   } finally { await mcp.close(); }
 });
 

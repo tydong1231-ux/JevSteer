@@ -64,7 +64,7 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
 
   server.registerTool("browser_open", {
     title: "Open URL",
-    description: "Open an absolute URL in the user's real Chrome session. Lost navigation acknowledgements are reconciled by observing the exact requested destination without replay. navigation_unconfirmed returns the tab_id for inspection; do not blindly retry. While input in this browser session has no confirmed outcome, it opens only about:blank or the address that input was chosen on, and never navigates the tab that holds that input; resolve it first with browser_resolve_action.",
+    description: "Open an absolute URL in the user's real Chrome session. Lost navigation acknowledgements are reconciled by observing the exact requested destination without replay. navigation_unconfirmed returns the tab_id for inspection; do not blindly retry. While input in this browser session has no confirmed outcome, it opens only about:blank, because any address is a request that can change the site, even the one that input was chosen on, and it never navigates the tab that holds that input. Read what that input did from the open pages (browser_snapshot, browser_inspect) and resolve it first with browser_resolve_action.",
     inputSchema: z.object({
       url: z.string().url(),
       tab_id: z.string().optional(),
