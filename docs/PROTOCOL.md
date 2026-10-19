@@ -176,6 +176,11 @@ under or over it. A menu or another widget floating elsewhere on the page is
 not its list. Each such
 option carries `popup_of`, the `[i]` of its combobox, and choosing one is a
 click on that option (the run log shows `tool: "click"`, `chosen_as: "select"`).
+The effect and constraint guards see that click as what it does: a SELECT of
+that option (`selected_option`) on its combobox, with the combobox's section,
+context, field name and record, because the same option ("Closed", "Delete")
+can sit under different fields. A CLICK Jev chooses on such an option shows
+them its combobox as `option_of`, and whether the option is chosen now.
 An option already chosen is not offered, because a click on a chosen option of
 a multi-select takes it out again. Before the journal write, the option must
 still be unchosen and still listed under the same combobox, which is still
@@ -450,7 +455,10 @@ bounds all waits.
 With `JEVSTEER_LOG=1`, stderr gets one row per round: Jev's scores, the chosen
 action, `observe_ms` (watching the previous input or wait), `decide_ms` and
 `requests`. A guarded input adds a `guards` row with the effect and constraint
-verdicts and the target's scope and context. `explain: true` returns the round
+verdicts and the action as the guards judged it: `judged_as`, the element (for
+an option chosen from an open list, its combobox), the chosen `option`,
+`option_of` for a click on an open combobox's option, and the element's scope
+and context. `explain: true` returns the round
 rows, guard verdicts included, in the result.
 Playwright observations read at most 2000 interactive elements
 (`JEVSTEER_MAX_ELEMENTS`; Wikipedia's history at 100 revisions holds about

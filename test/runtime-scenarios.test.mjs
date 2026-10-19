@@ -324,6 +324,41 @@ test("exact constraint guard sees the chosen native option, never a secret one",
   assert.equal(seen.selected_option, undefined);
 });
 
+// Status and Resolution list the same "Closed". Status is open; its list
+// floats apart from it, so the option's own section and context say nothing
+// about which field it sets.
+test("the exact guards see an option chosen from an open list as a SELECT on its combobox", async () => {
+  const seen = {};
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    seen[Object.keys(questions).sort().join()] = JSON.parse(JSON.stringify(state.proposed_action));
+    return { answers: {}, ms: 1, tokens: 1 };
+  });
+  const status = { i: 0, selector: "#status", tag: "input", role: "combobox", label: "Status", value: "", display: "Open", expanded: true, scope: "Ticket 42", context: "Status Open", record_key: "Ticket 42" };
+  const resolution = { i: 1, selector: "#resolution", tag: "input", role: "combobox", label: "Resolution", value: "", display: "Fixed", expanded: false, scope: "Ticket 42", context: "Resolution Fixed", record_key: "Ticket 42" };
+  const open = { i: 2, selector: "#open", tag: "div", role: "option", label: "Open", popup_of: 0, selected: true, context: "Open Closed" };
+  const closed = { i: 3, selector: "#closed", tag: "div", role: "option", label: "Closed", popup_of: 0, selected: false, context: "Open Closed" };
+  const page = { url: "https://fixture.test/ticket", title: "Ticket 42", text: "Ticket 42 Status Open Resolution Fixed", elements: [status, resolution, open, closed] };
+  const contract = { goal: "Set the resolution to Closed", success_criteria: [], constraints: ["Do not change the ticket's Status"], guidance: [] };
+  const action = runtime.resolve(page, { ...decision({ tool: "select", target: null }), select_target: { choice: "0>3", probabilities: { "0>3": 0.99 } } }, {});
+  assert.deepEqual([action.tool, action.chosen_as, action.el.selector], ["click", "select", "#closed"]);
+  await runtime.checkActionEffects(page, contract, action, []);
+  await runtime.checkConstraint(page, contract, action, []);
+  const asSelect = { tool: "select", element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", selected_option: { text: "Closed" } };
+  assert.deepEqual(seen, { "action_irreversible,action_side_effect": asSelect, violates: asSelect });
+  // A click on an option names its combobox, and whether the option is chosen
+  // now: a click on a chosen one of a multi-select takes it out.
+  for (const [option, selected] of [[closed, false], [open, true]]) {
+    await runtime.checkConstraint(page, contract, { tool: "click", el: option }, []);
+    assert.deepEqual(seen.violates, {
+      tool: "click", element: `option "${option.label}"`, context: "Open Closed",
+      option_of: { element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42" }, selected,
+    });
+  }
+  // A secret field's option is not named.
+  await runtime.checkConstraint(page, contract, { ...action, listed_in: { ...status, label: "Security PIN" } }, []);
+  assert.deepEqual(seen.violates, { tool: "select", element: 'combobox "Security PIN"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42" });
+});
+
 test("effect and constraint guards are separate requests; the constraint one sees page text only and blocks when unanswered", async () => {
   const asked = [];
   let reply = {};

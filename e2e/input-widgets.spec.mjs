@@ -268,6 +268,44 @@ test('an option the page chooses on its own after Jev looked is not clicked, so 
   } finally { await mcp.close(); }
 });
 
+// Tags and Labels list the same names, and the open list floats apart from
+// Tags. The guards must see which field a choice changes: a rule about Tags
+// stops "Beta" chosen under Tags, whether Jev chose it with SELECT or a click.
+for (const how of ['select', 'click']) {
+  test(`the guards see which combobox an option from its open list changes, so a rule about that field stops it (${how})`, async ({ page }, testInfo) => {
+    await page.setContent(multiSelect);
+    const judged = {};
+    const steps = scriptedDecider([(state) => {
+      const beta = pick((e) => e.role === 'option' && e.label === 'Beta')(state);
+      return decision(how === 'select' ? { tool: 'select', target: `${pick((e) => e.label === 'Tags')(state)}>${beta}` } : { tool: 'click', target: beta });
+    }]);
+    const decider = async (state, questions) => {
+      if (questions.action_side_effect) {
+        judged.effects = state.proposed_action;
+        return { answers: { action_side_effect: { noul: 0.01 }, action_irreversible: { noul: 0.01 } }, ms: 1, tokens: 1 };
+      }
+      if (questions.violates) {
+        const p = judged.constraint = state.proposed_action;
+        const field = p.tool === 'select' ? p.element : p.option_of?.element;
+        return { answers: { violates: { noul: field === 'combobox "Tags"' ? 0.99 : 0.01 } }, ms: 1, tokens: 1 };
+      }
+      return steps(state, questions);
+    };
+    const mcp = await mcpFixture(page, testInfo, decider);
+    try {
+      const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Label the contact Beta', constraints: ["Do not change the contact's Tags"], verification_mode: 'host', max_actions: 2, evidence_level: 'none' });
+      expect(await page.evaluate(() => window.clicks)).toEqual([]);
+      expect(result.status).toBe('constraint_blocked');
+      expect(result.pending_actions).toBeUndefined();
+      const seen = how === 'select'
+        ? { tool: 'select', element: 'combobox "Tags"', selected_option: { text: 'Beta' } }
+        : { tool: 'click', element: 'option "Beta"', option_of: expect.objectContaining({ element: 'combobox "Tags"' }), selected: false };
+      expect(judged.effects).toMatchObject(seen);
+      expect(judged.constraint).toMatchObject(seen);
+    } finally { await mcp.close(); }
+  });
+}
+
 test('before input, an option from an open list must still be unchosen and listed under the same open combobox', async ({ page }) => {
   await page.setContent(multiSelect);
   const { driver, id } = await driverFor(page);
