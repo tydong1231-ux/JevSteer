@@ -5,7 +5,7 @@ import { sameIdentity, equivalentLink, pickTwin } from '../element-identity.mjs'
 import { FIELDISH, SELECTISH } from '../page-model.mjs';
 import { isDateText } from '../date-text.mjs';
 import { observeUntilReady, observationSignature } from '../observation.mjs';
-import { captureSnapshot, readDOM } from './snapshot.mjs';
+import { captureSnapshot, readDOM, FIELD } from './snapshot.mjs';
 import { PageEvents } from './events.mjs';
 import { sessionIdentity, physicalPageId } from './sessions.mjs';
 import { dispatchInput } from './driver.mjs';
@@ -351,15 +351,15 @@ async function assertOwnerHolds(ownerHandle, owner, optionHandle) {
   const state = await ownerHandle.evaluate(readDOM);
   const current = state.elements[0];
   if (!current || !sameIdentity(owner, current, state.url) || current.expanded !== true
-      || !await ownerHandle.evaluate(listsOption, optionHandle)) throw new Error(NOT_LISTED);
+      || !await ownerHandle.evaluate(listsOption, [optionHandle, FIELD])) throw new Error(NOT_LISTED);
 }
 
 // Page code: whether the open combobox `box` lists `option`, linked as the
 // snapshot links them (see popupOwner there): the list its aria-controls or
 // aria-owns names, or the floating box that holds that list, holds it; or,
 // with no such list, it is the one open combobox and the option floats
-// outside it.
-function listsOption(box, option) {
+// outside it in a box drawn for it (see drawnFor there). `field` is FIELD.
+function listsOption(box, [option, field]) {
   if (!box.isConnected || !option?.isConnected || box.getAttribute('aria-expanded') !== 'true') return false;
   const floating = (p) => ['absolute', 'fixed'].includes(getComputedStyle(p).position);
   const floatOf = (p) => {
@@ -374,7 +374,15 @@ function listsOption(box, option) {
   if (open.length !== 1 || open[0] !== box) return false;
   let p = option.parentElement;
   while (p && !floating(p)) p = p.parentElement;
-  return !!p && !p.contains(box);
+  if (!p || p.contains(box)) return false;
+  let at = box;
+  for (let depth = 0; depth < 4; depth++) {
+    const up = at.parentElement || at.getRootNode()?.host;
+    if (!up || up === document.body || up.querySelectorAll(field).length + (up.matches(field) ? 1 : 0) > 1) break;
+    at = up;
+  }
+  const r = p.getBoundingClientRect(), f = at.getBoundingClientRect();
+  return r.width * r.height > 0 && r.left < f.right && r.right > f.left && Math.max(r.top - f.bottom, f.top - r.bottom) <= 64;
 }
 
 // Resolves after the page has drawn two more frames. A hidden tab draws none,

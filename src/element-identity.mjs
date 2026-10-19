@@ -32,17 +32,20 @@ export function locateSameElement(original, page) {
 }
 
 // Links with the same text, context and address load the same page: Wikipedia
-// shows its "20 | 50 | 100 | 250 | 500" pager above and below a list. A click
-// on either is the same click; the one observed is preferred. Any other
-// control that matches twice stays ambiguous, as do in-page and script links.
+// shows its "20 | 50 | 100 | 250 | 500" pager above and below a list, so Jev
+// choosing either is one choice. The click still goes to the node Jev saw
+// (`node`, Playwright driver), wherever the page has moved it: equal links
+// can differ in what a script does on a click. Links the page has rebuilt
+// since are not told apart, nor is any other control that matches twice, or
+// an in-page or script link.
 export function equivalentLink(original, matches, base) {
-  if (matches.length < 2 || !original?.href || /^\s*(#|javascript:)/i.test(original.href)) return undefined;
+  if (original?.node == null || !original.href || /^\s*(#|javascript:)/i.test(original.href)) return undefined;
   try {
     if (!["http:", "https:"].includes(new URL(original.href, base).protocol)) return undefined;
   } catch { return undefined; }
   const same = (e) => (e.tag === "a" || e.role === "link") && (e.link_target || "") === (original.link_target || "") && !!e.download === !!original.download;
   if (!same(original) || !matches.every(same)) return undefined;
-  return matches.find((e) => e.ordinal != null && e.ordinal === original.ordinal) || matches[0];
+  return matches.find((e) => e.node === original.node);
 }
 
 // What can tell identical controls apart once their identity matches: what

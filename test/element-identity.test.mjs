@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findRemembered, locateAfterAction, pickTwin, rememberField, twinsOf } from "../src/element-identity.mjs";
+import { equivalentLink, findRemembered, locateAfterAction, pickTwin, rememberField, twinsOf } from "../src/element-identity.mjs";
 
 const doc = { frame_id: "f1", document_id: "f1:0:1", identity_version: 2 };
 const field = (i, context, extra = {}) => ({ i, ...doc, tag: "input", role: "textbox", label: "Credit limit", name: "credit", context, ...extra });
@@ -71,4 +71,19 @@ test("a combobox's twins can be told apart leaving out which one is open, as an 
   const open = page(box(0, { expanded: true }), box(1, { expanded: false }));
   assert.equal(twinsOf(open.elements[0], open).distinct, true);
   assert.equal(twinsOf(open.elements[0], open, { ignore: ["expanded"] }).distinct, false);
+});
+
+test("of two links to one address, the one clicked is the node Jev saw; links rebuilt since are not told apart", () => {
+  const link = (i, node, extra = {}) => ({ i, ...doc, node, tag: "a", role: "link", label: "100", text: "100", href: "/w/index.php?limit=100", context: "(20 | 50 | 100)", ...extra });
+  const base = "https://en.wikipedia.org/w/index.php?action=history";
+  // The page moved the bottom pager above the top one: still the node seen.
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "t:2"), link(1, "t:1")], base).i, 0);
+  // The only one left is the node seen.
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "t:2")], base).i, 0);
+  // Rebuilt: neither is the node seen.
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "u:1"), link(1, "u:2")], base), undefined);
+  // Without node numbers (Kapture), or for other links, nothing is picked.
+  assert.equal(equivalentLink(link(1, undefined), [link(0, undefined), link(1, undefined)], base), undefined);
+  assert.equal(equivalentLink(link(1, "t:2", { href: "#more" }), [link(0, "t:1", { href: "#more" }), link(1, "t:2", { href: "#more" })], base), undefined);
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "t:1", { link_target: "_blank" }), link(1, "t:2")], base), undefined);
 });

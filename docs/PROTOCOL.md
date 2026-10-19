@@ -123,8 +123,11 @@ label, name, form, record, frame and document, provided it was the only such
 control before. Equal controls in unkeyed rows still need their record text.
 Pre-input target checks and journal fingerprints stay exact. Two links with the
 same text, context and address (Wikipedia's "20 | 50 | 100" pager above and
-below a list) load the same page, so a click on either is the same click; any
-other target that matches two identical controls is told apart from them only
+below a list) load the same page, so Jev choosing either is one choice. The
+click still goes to the node Jev saw, wherever the page has moved it
+(Playwright driver), because equal links can differ in what a script does on a
+click; links the page has rebuilt since are refused like other identical
+controls. Any other target that matches two identical controls is told apart from them only
 by what it shows or holds and what is next to it: its hint, the value it shows,
 its value, options and state, and the text and table column beside it (two
 unnamed selects in one filter row, "Status" and "Vendor"). The control that
@@ -162,7 +165,10 @@ until it times out). An open combobox is not offered for SELECT itself, which
 would only close its list again. SELECT offers the options its list shows
 instead: those in the list its `aria-controls` or `aria-owns` names, or in the
 floating box that holds that list (antd's visible copy), or, with no such link,
-options floating on their own while it is the one open combobox. Each such
+options floating on their own while it is the one open combobox, in a box
+drawn for it: across from the box the combobox is drawn in and at most 64px
+under or over it. A menu or another widget floating elsewhere on the page is
+not its list. Each such
 option carries `popup_of`, the `[i]` of its combobox, and choosing one is a
 click on that option (the run log shows `tool: "click"`, `chosen_as: "select"`).
 An option already chosen is not offered, because a click on a chosen option of
@@ -174,7 +180,8 @@ can move its open list to a twin. When only which one is open tells them
 apart, the option is refused as ambiguous (`STALE_TARGET: ambiguous: the
 option's combobox has identical twins`). The option and its combobox are then
 pinned; after the write, just before the click, the option must still be
-unchosen, and the combobox still open with its list holding the option.
+unchosen, and the combobox still open with its list holding the option (an
+unlinked list still drawn for it).
 Otherwise the click is refused before any input as a stale target
 (`STALE_TARGET: the option is already chosen`, or `... no longer listed under
 the combobox it was chosen from`), and Jev looks again.

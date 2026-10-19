@@ -6,9 +6,14 @@ import { sensitiveField } from '../sensitive.mjs';
 // role=option copies sit in a hidden 0×0 listbox): those are options too.
 export const INTERACTIVE = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option],[role=combobox],[role=listbox],[role=textbox],[role=searchbox],[role=spinbutton],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"]),.cursor-pointer,[aria-selected]:not([role]):not(td):not(th):not(tr)';
 
+// Form fields. The box a field is drawn in holds no other of them. readDOM
+// keeps its own copy, as page code cannot reach this module.
+export const FIELD = 'input:not([type=hidden]),textarea,select,[role=textbox],[role=searchbox],[role=combobox],[role=spinbutton],[role=checkbox],[role=radio],[role=switch],[role=slider],[contenteditable=true]';
+
 // Runs in the browser exclusively to READ state. No attributes, handlers,
 // hidden nodes, DOM values or application state are changed by observation.
-export function readDOM(elements) {
+// `nodes` is the frame's node registry (see nodeRegistry), when given.
+export function readDOM(elements, nodes) {
   elements = Array.isArray(elements) ? elements : [elements];
   const clean = (s, max = 500) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const parent = (e) => e.parentElement || e.getRootNode()?.host;
@@ -329,7 +334,9 @@ export function readDOM(elements) {
   // in aria-controls or aria-owns. antd names a hidden copy and draws the
   // options beside it, so a list reaches out to the floating box that holds
   // it, unless that box also holds the combobox. Without such a link, an
-  // option in a floating box of its own belongs to the one open combobox.
+  // option in a floating box of its own belongs to the one open combobox
+  // only when that box is drawn for it (see drawnFor); a menu or another
+  // widget floating elsewhere on the page is not its list.
   // A focused text field that holds text can draw a floating box under or
   // over itself with no link at all: suggestions, or the results of a global
   // search box ("Vendor 1 CP-MEIJI CO.,LTD." on ccMonet).
@@ -337,6 +344,20 @@ export function readDOM(elements) {
   const floatOf = (p) => {
     for (let up = 0; p && p !== document.body && up < 5; up++, p = p.parentElement) if (floating(p)) return p;
     return undefined;
+  };
+  // A list drawn for a combobox sits against the box the combobox is drawn
+  // in (up to 4 levels out, while it holds no other field), or over it:
+  // across from it, and at most 64px under or over it. The driver checks the
+  // same before it clicks such an option (see listsOption there).
+  const drawnFor = (list, c) => {
+    let box = c;
+    for (let depth = 0; depth < 4; depth++) {
+      const up = parent(box);
+      if (!up || up === document.body || fieldsIn(up) > 1) break;
+      box = up;
+    }
+    const r = list.getBoundingClientRect(), f = box.getBoundingClientRect();
+    return r.width * r.height > 0 && r.left < f.right && r.right > f.left && Math.max(r.top - f.bottom, f.top - r.bottom) <= 64;
   };
   const openBoxes = all.filter((c) => role(c) === 'combobox' && c.tagName !== 'SELECT' && c.getAttribute('aria-expanded') === 'true' && visible(c));
   const lists = openBoxes.map((c) => [c, `${c.getAttribute('aria-controls') || ''} ${c.getAttribute('aria-owns') || ''}`.split(/\s+/).filter(Boolean)
@@ -377,7 +398,7 @@ export function readDOM(elements) {
     const linked = lists.find(([c, roots]) => option && c.contains(e) || roots.some((r) => r.contains(e)));
     if (linked) return linked[0];
     const box = option && openBoxes.length === 1 && ancestors(e).slice(1).find(floating);
-    if (box && !box.contains(openBoxes[0])) return openBoxes[0];
+    if (box && !box.contains(openBoxes[0]) && drawnFor(box, openBoxes[0])) return openBoxes[0];
     return popupBoxes.some((b) => b.contains(e)) ? focused : undefined;
   };
   // What the focused field's popup says, for Jev to read as that field's.
@@ -417,6 +438,14 @@ export function readDOM(elements) {
       return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined;
     } catch { return undefined; }
   };
+  // The number the registry gave this node when it first saw it: the same
+  // node has the same number in every observation of its document.
+  const nodeOf = (e) => {
+    if (!nodes) return undefined;
+    let n = nodes.ids.get(e);
+    if (n == null) nodes.ids.set(e, n = nodes.next++);
+    return `${nodes.token}:${n}`;
+  };
   const describe = (e, index) => {
     const form = e.form || closest(e, 'form,[role=form]');
     const section = closest(e, 'fieldset,[role=group],[role=dialog],dialog');
@@ -429,10 +458,10 @@ export function readDOM(elements) {
     const label = name(e);
     const ariaOff = ancestors(e).filter((p) => p.getAttribute('aria-disabled') === 'true');
     const descriptor = {
-      ordinal: index, tag: e.tagName.toLowerCase(), role: role(e), type: e.getAttribute('type') || (e.tagName === 'INPUT' ? e.type : undefined),
+      ordinal: index, node: nodeOf(e), tag: e.tagName.toLowerCase(), role: role(e), type: e.getAttribute('type') || (e.tagName === 'INPUT' ? e.type : undefined),
       label, text: own, name: e.getAttribute('name') || '', placeholder: e.getAttribute('placeholder') || '',
       href: e.getAttribute('href') || undefined,
-      // Where a link opens: two same-address links are one click only when both match.
+      // Where a link opens: two same-address links are one choice only when both match.
       link_target: e.matches('a[href]') && e.getAttribute('target') || undefined,
       download: e.matches('a[href]') && e.hasAttribute('download') || undefined,
       value: 'value' in e ? String(e.value) : e.isContentEditable ? e.innerText : undefined,
@@ -488,9 +517,25 @@ export function readDOM(elements) {
 // Prototype.js adds Array.prototype.toJSON) gets the object sent as before.
 // The function is built here from readDOM's own source, so the page runs no
 // eval of its own.
-const readDOMJson = new Function('elements', `const data = (${readDOM.toString()})(elements);
+const readDOMJson = new Function('elements', 'nodes', `const data = (${readDOM.toString()})(elements, nodes);
   try { if (JSON.stringify({ a: [1, 'x', true, null], b: { c: 2 } }) === '{"a":[1,"x",true,null],"b":{"c":2}}') return JSON.stringify(data); } catch {}
   return data;`);
+
+// Numbers for the nodes readDOM sees in a frame's document, so that two
+// observations can tell whether a control is the same node. The registry
+// lives in the page's heap, but only this handle reaches it: no global or
+// node of the page refers to it, so the page sees no change. Each document
+// gets its own registry, with a token that keeps its numbers apart from an
+// earlier registry's.
+async function nodeRegistry(frame, info) {
+  if (!info.nodes?.handle || info.nodes.revision !== info.revision) {
+    const old = info.nodes;
+    const handle = await frame.evaluateHandle((token) => ({ token, next: 1, ids: new WeakMap() }), randomUUID().slice(0, 8)).catch(() => undefined);
+    info.nodes = { revision: info.revision, handle };
+    old?.handle?.dispose().catch(() => {});
+  }
+  return info.nodes.handle;
+}
 
 export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scope, maxElements = 2000 }) {
   const snapshotId = randomUUID();
@@ -507,7 +552,15 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
     if (scope && !await frame.locator(scope).count()) continue;
     let data;
     try {
-      const raw = await query.evaluateAll(readDOMJson);
+      let raw;
+      try { raw = await query.evaluateAll(readDOMJson, await nodeRegistry(frame, info)); }
+      catch (error) {
+        // The registry may belong to a document the frame left before its
+        // navigation was seen: start a new one and read once more.
+        if (!info.nodes?.handle || frame.isDetached()) throw error;
+        info.nodes = undefined;
+        raw = await query.evaluateAll(readDOMJson, await nodeRegistry(frame, info));
+      }
       data = typeof raw === 'string' ? JSON.parse(raw) : raw;
     }
     catch (error) { if (frame.isDetached()) continue; throw error; }

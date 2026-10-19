@@ -301,6 +301,42 @@ test('two links to the same page are one click; links that open elsewhere and id
   } finally { await driver.close(); }
 });
 
+// Codex on b417c55: equal links to one address can differ in what a script
+// does on a click. The click goes to the node Jev saw, wherever the page has
+// moved it; links the page has rebuilt since are refused.
+test('of two same-address links, the click goes to the node Jev saw, wherever it moved; rebuilt links are refused', async ({ page }) => {
+  const pager = (where) => `<div id="${where}">(<a href="/list?limit=20">20</a> | <a href="/list?limit=100">100</a>)</div>`;
+  await page.route('https://fixture.invalid/**', (route) => route.fulfill({ contentType: 'text/html', body: `<h1>Results</h1>${pager('top')}<ul><li>One</li></ul>${pager('bottom')}
+    <script>
+      window.clicks = [];
+      for (const where of ['top', 'bottom']) document.querySelector('#' + where + ' a[href$="100"]').addEventListener('click', (e) => { e.preventDefault(); window.clicks.push(where); });
+    </script>` }));
+  await page.goto('https://fixture.invalid/list');
+  const { driver, id } = await driverFor(page);
+  const hundred = async () => {
+    const seen = await driver.observe(id);
+    const links = seen.elements.filter((e) => e.label === '100');
+    expect(links).toHaveLength(2);
+    expect(links[0].node).not.toBe(links[1].node);
+    return { seen, links };
+  };
+  try {
+    // Jev chose the bottom one; the page then moved the bottom pager to the top.
+    let { seen, links } = await hundred();
+    await page.evaluate(() => document.body.insertBefore(document.querySelector('#bottom'), document.querySelector('#top')));
+    let action = { tool: 'click', target: links[1].i, el: links[1], observedUrl: seen.url };
+    expect((await send(driver, id, action)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => window.clicks)).toEqual(['bottom']);
+    // Both pagers rebuilt after Jev looked: nothing shows which copy is the
+    // node Jev saw, so neither is clicked.
+    ({ seen, links } = await hundred());
+    await page.evaluate(() => { for (const where of ['top', 'bottom']) { const div = document.querySelector('#' + where); div.replaceWith(div.cloneNode(true)); } });
+    action = { tool: 'click', target: links[0].i, el: links[0], observedUrl: seen.url };
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow('STALE_TARGET: ambiguous: 2 identical controls');
+    expect(await page.evaluate(() => window.clicks)).toEqual(['bottom']);
+  } finally { await driver.close(); }
+});
+
 // Wikipedia's history with limit=100 holds about 1,100 controls (Mac rerun,
 // 2026-10-19): each revision row has a radio pair, a checkbox and links.
 test('a page of about 1,100 controls is observed whole; the limit is a driver option', async ({ page }) => {

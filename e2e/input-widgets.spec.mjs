@@ -376,6 +376,86 @@ test('an option listed under one of two identical comboboxes nothing tells apart
   } finally { await mcp.close(); }
 });
 
+// A combobox with no ARIA link to its list, as some in-house widgets draw
+// one: the list floats just under it. A bulk-actions menu floats at the
+// bottom right of the page, its entries options too.
+const inHouseCombo = `<style>
+    .combo { width: 240px; height: 28px; border: 1px solid #ccc; }
+    .combo input { width: 100%; height: 26px; border: 0; }
+    .menu { position: absolute; width: 240px; background: #fff; border: 1px solid #ccc; }
+    .menu div { padding: 5px 12px; cursor: pointer; }
+  </style>
+  <h1>Edit contact</h1>
+  <div><div>Country</div><div class="combo"><input role="combobox" aria-expanded="true" value=""></div></div>
+  <label>Notes <input name="notes"></label>
+  <div class="menu" id="country_menu">${['Canada', 'France'].map((n) => `<div role="option" aria-selected="false">${n}</div>`).join('')}</div>
+  <div class="menu" style="position: fixed; right: 16px; bottom: 16px">${['Delete all', 'Archive all'].map((n) => `<div role="option" aria-selected="false">${n}</div>`).join('')}</div>
+  <script>
+    window.clicks = [];
+    window.underCombo = () => { const box = document.querySelector('.combo').getBoundingClientRect(); Object.assign(document.querySelector('#country_menu').style, { top: box.bottom + 4 + 'px', left: box.left + 'px' }); };
+    underCombo();
+    for (const o of document.querySelectorAll('[role=option]')) o.addEventListener('click', () => window.clicks.push(o.textContent));
+  </script>`;
+
+// Codex on b417c55: with no link, an option belonged to the one open
+// combobox wherever it floated, so SELECT could click a menu entry.
+test('an option floating away from the one open combobox is not its option, so SELECT never offers it', async ({ page }, testInfo) => {
+  await page.setContent(inHouseCombo);
+  const seen = {};
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state, questions) => {
+      const box = pick((e) => e.role === 'combobox')(state);
+      seen.owners ??= state.page.elements.filter((e) => e.role === 'option').map((e) => [e.label, e.popup_of === box]);
+      seen.offered ??= Object.values(questions.select_target?.criteria || {}).map((c) => c.choose_option).filter(Boolean);
+      return decision({ tool: 'none', done: 0.99 });
+    },
+  ]));
+  try {
+    await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Set the country to France', verification_mode: 'host', max_actions: 2, evidence_level: 'none' });
+    expect(seen.owners).toEqual([['Canada', true], ['France', true], ['Delete all', false], ['Archive all', false]]);
+    expect(seen.offered).toEqual(['Canada', 'France']);
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+  } finally { await mcp.close(); }
+});
+
+test('before input, an option of an unlinked list must still be drawn against its combobox', async ({ page }) => {
+  await page.setContent(inHouseCombo);
+  const { driver, id } = await driverFor(page);
+  const listed = async (name) => {
+    const seen = await driver.observe(id);
+    const box = seen.elements.find((e) => e.role === 'combobox');
+    const option = seen.elements.find((e) => e.role === 'option' && e.label === name);
+    expect(option.popup_of).toBe(box.i);
+    return { tool: 'click', chosen_as: 'select', listed_in: box, target: option.i, el: option, observedUrl: seen.url };
+  };
+  const away = () => page.evaluate(() => { document.querySelector('#country_menu').style.top = '520px'; });
+  const notListed = 'STALE_TARGET: the option is no longer listed under the combobox it was chosen from';
+  try {
+    // The list moved away after the check: refused before the journal.
+    let action = await listed('France');
+    await driver.assertTargetFresh(id, action);
+    await away();
+    let journaled = 0;
+    let result = await driver.perform(id, action, action.el, { beforeDispatch: async () => { journaled++; } });
+    expect([result.state, result.error, journaled]).toEqual(['predispatch_rejected', notListed, 0]);
+    // Seen there, its options belong to no combobox.
+    expect((await driver.observe(id)).elements.find((e) => e.label === 'France').popup_of).toBeUndefined();
+    // The list moved away while the journal was written: refused before the click.
+    await page.evaluate(() => window.underCombo());
+    action = await listed('France');
+    await driver.assertTargetFresh(id, action);
+    result = await driver.perform(id, action, action.el, { beforeDispatch: away });
+    expect([result.state, result.error]).toEqual(['predispatch_rejected', notListed]);
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+    // Drawn against it: clicked.
+    await page.evaluate(() => window.underCombo());
+    action = await listed('France');
+    await driver.assertTargetFresh(id, action);
+    expect((await driver.perform(id, action, action.el)).state).toBe('dispatched_ack');
+    expect(await page.evaluate(() => window.clicks)).toEqual(['France']);
+  } finally { await driver.close(); }
+});
+
 // ccMonet's invoice form (Mac rerun, 2026-10-19): with the Customer list open,
 // Jev chose SELECT on "Currency :", which that list covers. The click that
 // would open it waited after the journal until it timed out, and left a
