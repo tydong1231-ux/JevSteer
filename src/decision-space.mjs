@@ -8,6 +8,9 @@ export const TARGETED_TOOLS = new Set(["click", "type", "press_enter", "select",
 
 export function eligibleFor(e, tool) {
   if (!e?.selector || e.disabled) return false;
+  // An ARIA listbox is a container, not one specific choice. Clicking its
+  // center can select an unrelated child option at that coordinate.
+  if (e.role === "listbox" && e.tag !== "select") return false;
   const identifiableField = !!squash(e.label || e.placeholder || e.name || e.text);
   if (tool === "type") return FIELDISH(e) && identifiableField && !e.type_completed;
   if (tool === "select") return SELECTISH(e);

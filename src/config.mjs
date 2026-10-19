@@ -20,6 +20,7 @@ export const config = {
   maxStateChars: 70000,
   elementGroupSize: 30,
   actionSettleMs: Number(process.env.JEVSTEER_ACTION_SETTLE_MS || 8000),
+  navigationSettleMs: Number(process.env.JEVSTEER_NAVIGATION_SETTLE_MS || 15000),
   observationQuietMs: Number(process.env.JEVSTEER_OBSERVATION_QUIET_MS || 250),
   maxWaits: Number(process.env.JEVSTEER_MAX_WAITS || 12),
 };
