@@ -51,3 +51,41 @@ Kapture/Playwright A/B result. The controlled report remains under ignored
 Regressions cover six-field input, binding collision, host-assertion conflict,
 different form owners, uncertain effect safety and a dependency resetting an
 earlier field. The baseline 162 offline tests remain in the suite.
+
+## Follow-up after live constraint investigation
+
+The ccMonet investigation exposed that even low-remote-risk explore actions can
+violate a local-selection constraint. Explore now always checks the exact
+state-changing action when explicit constraints exist. Batch retains its
+existing conservative **any offered field/value** safety frontier and can only
+execute its validated bindings; this is not a relaxed constraint threshold.
+The complete updated suite passed 23 cases three times (69 passes, including
+the six provider-backed cases). Updated six-field measurements on the same
+model, fixture, contract and oracle:
+
+| Run | Explore calls / input tokens | Batch calls / input tokens | Explore / batch wall time | Logical-call reduction |
+| --- | --- | --- | --- | --- |
+| 1 | 17 / 40,763 | 1 / 5,000 | 8.906s / 1.056s | 94.1% |
+| 2 | 14 / 34,625 | 1 / 5,000 | 7.248s / 1.027s | 92.9% |
+| 3 | 15 / 36,610 | 1 / 5,000 | 9.722s / 1.055s | 93.3% |
+
+The earlier table remains historical pre-patch evidence. These are still
+synthetic same-contract measurements, not ccMonet or cross-driver A/B savings.
+Raw updated output is private under `.test-artifacts/playwright/report.json`.
+
+## 2026-10-16 exact effect guard follow-up
+
+After the unintended live favorite-preference writes, explore now checks exact
+remote/irreversible effects for **every** guarded input, not only high rough
+scores. Read-only includes preference writes. Form mode still validates the
+same conservative all-offered-field frontier and never executes a favorite,
+Save or navigation control. No threshold was relaxed to regain a pass.
+
+The final 26-case suite passed three repetitions (78 passes). On the same
+six-field fixture and oracle, all three runs used 19 explore calls / 44,466
+provider-reported input tokens versus 1 form call / 5,000 tokens. Explore/form
+wall times were 10.250s/1.104s, 10.593s/1.651s and 12.078s/1.074s. The logical
+call reduction is 94.7% **only for this controlled synthetic contract**. These
+are not ccMonet, separate-Host-model or cross-driver A/B measurements. Earlier
+tables remain historical pre-fix evidence. The final private report is
+`.test-artifacts/validation-20261016-readonly-guards/report.json`.

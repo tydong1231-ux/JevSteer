@@ -33,6 +33,15 @@ disposed immediately after the action, never persisted as business identities.
 driver. Independent observation/verification/Host Review owns that transition.
 Input mode and dispatch state appear in action evidence.
 
+In explore mode, every state-changing input with explicit task constraints gets
+an exact selected-action constraint check, including locally reversible clicks.
+Low remote/irreversible risk does not authorize a forbidden row selection. The
+restricted form frontier instead checks **any** offered control/value against
+constraints before binding, then permits only those validated TYPE/SELECT inputs.
+Every guarded explore input also gets an exact remote/irreversible effect check,
+regardless of its rough score. Read-only excludes remote preference writes such
+as favorite/star/bookmark/subscription toggles, not just financial record saves.
+
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session. The
 host can resolve the original `tab_id` and action ID after independent readback,
@@ -44,6 +53,14 @@ Visual-only controls still return to the host. Network events contain sanitized
 metadata; response body capture is disabled by default. Only test setup and
 independent read-only oracles may use fixture/application APIs; target operations
 remain browser inputs.
+
+`browser_inspect(tab_id)` is a Playwright-only fixed Host reader. It returns
+bounded visible main-frame business table cells, control values and disabled
+ancestry without Jev inference or browser input. Secret-like controls are
+redacted; financial evidence remains private. Limits/truncation are explicit.
+Visible virtual rows are not evidence of the entire dataset, and this reader
+does not assert server persistence or create an acceptance receipt. Tab discovery
+does not install event collectors on unrelated pages.
 
 ## Milestone contract
 
@@ -149,7 +166,11 @@ runs a genuinely different milestone goal may reuse the same UI control, but
 a new `run_id` cannot bypass the same operation. Manual recovery mutations
 have no semantic goal hash and retain a broader same-action guard.
 Then resume the semantic milestone. Successful independent verification resolves
-pending records belonging to that run and milestone only.
+pending records only when the run, milestone **and full originating contract
+digest** match. Goal/criteria changes cannot certify an earlier unknown action.
+Old journal records remain readable, but records without a contract digest need
+explicit evidence-based `browser_resolve_action`; automatic/Host acceptance does
+not silently migrate or clear them. Receipts expose any remaining pending IDs.
 
 Guarded `browser_act` actions return `action_unconfirmed` with an `action_id`
 even when the HTTP command acknowledged success, because text fields may
