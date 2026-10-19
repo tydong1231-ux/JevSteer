@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildTargetSpace, availableTools } from "../src/decision-space.mjs";
 import { FIELDISH } from "../src/page-model.mjs";
-import { JevSteerRuntime } from "../src/runtime.mjs";
+import { OfflineRuntime as JevSteerRuntime } from "./helpers/runtime.mjs";
 import { normalizeTaskContract } from "../src/task-contract.mjs";
 
 function page() {
@@ -101,6 +101,34 @@ test("multiple value mapping is deferred until the selected field is known", asy
   );
   assert.equal(value, "email");
   assert.equal(observed[0].state.selected_field.label, "Email");
+});
+
+test("exact host field assertions bind start and end values without another model choice", async () => {
+  const runtime = new JevSteerRuntime({ decider: async () => { throw new Error("must not guess an explicit binding"); } });
+  const p={elements:[{i:0,selector:"#from",label:"Start date"},{i:1,selector:"#to",label:"End date"}]};
+  const contract=normalizeTaskContract({goal:"Q2",assertions:[{type:"field_equals",label:"Start date",value:"2026/4/1"},{type:"field_equals",label:"End date",value:"2026/6/30"}]});
+  const values={start_date:"2026/4/1",end_date:"2026/6/30"};
+  assert.equal(await runtime.chooseFieldValue(p,contract,values,[],{...p.elements[0]}),"start_date");
+  assert.equal(await runtime.chooseFieldValue(p,contract,values,[],{...p.elements[1]}),"end_date");
+});
+
+test("conflicting, ambiguous and missing host field bindings fail closed", async () => {
+  const runtime = new JevSteerRuntime({ decider: async () => { throw new Error("must not guess an explicit binding"); } });
+  const p={elements:[{selector:"#one",label:"Date"},{selector:"#two",label:"Date"}]};
+  const ambiguous=normalizeTaskContract({goal:"Inspect",assertions:[{type:"field_equals",label:"Date",value:"one"}]});
+  assert.equal(await runtime.chooseFieldValue(p,ambiguous,{a:"one",b:"two"},[],p.elements[0]),undefined);
+  const single={elements:[p.elements[0]]};
+  const conflict=normalizeTaskContract({goal:"Inspect",assertions:[{type:"field_equals",label:"Date",value:"one"},{type:"field_equals",label:"Date",value:"two"}]});
+  assert.equal(await runtime.chooseFieldValue(single,conflict,{a:"one",b:"two"},[],p.elements[0]),undefined);
+  assert.equal(await runtime.chooseFieldValue(single,ambiguous,{a:"missing",b:"other"},[],p.elements[0]),undefined);
+  assert.equal(await runtime.chooseFieldValue(single,ambiguous,{a:"one",b:"one"},[],p.elements[0]),undefined);
+});
+
+test("host field binding uses record context to distinguish equal labels", async () => {
+  const runtime = new JevSteerRuntime({ decider: async () => { throw new Error("must not guess an explicit binding"); } });
+  const p={elements:[{selector:"#one",label:"Name",context:"Customer"},{selector:"#two",label:"Name",context:"Contact"}]};
+  const contract=normalizeTaskContract({goal:"Fill",assertions:[{type:"field_equals",label:"Name",context:"Customer",value:"Acme"},{type:"field_equals",label:"Name",context:"Contact",value:"Morgan"}]});
+  assert.equal(await runtime.chooseFieldValue(p,contract,{company:"Acme",person:"Morgan"},[],p.elements[1]),"person");
 });
 
 test("stale or occluded targets stop before any browser mutation", async () => {

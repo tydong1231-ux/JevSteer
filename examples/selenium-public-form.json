@@ -1,0 +1,11 @@
+{
+  "goal": "Configure and submit Selenium's public test form with synthetic QA values, reviewing controls before submission and the received result afterward",
+  "verification_mode": "host",
+  "review_mode": "strict",
+  "constraints": ["Use only the public Selenium test form and synthetic values. Do not fill Password, upload a file or change disabled/readonly fields."],
+  "values": {"text":"JevSteer public QA","notes":"Multi-control workflow verification","city":"San Francisco","date":"10/20/2026"},
+  "milestones": [
+    {"id":"configure","goal":"Set Text input to JevSteer public QA, Textarea to Multi-control workflow verification, Dropdown (select) to Two, Dropdown (datalist) to San Francisco, Date picker to 10/20/2026. Uncheck Checked checkbox, check Default checkbox and select Default radio. Stop before Submit.","success_criteria":["Text, textarea, dropdown, city and date match exactly.","Requested checkbox/radio states match, readonly remains unchanged and the form is not submitted."],"assertions":[{"type":"field_equals","label":"Text input","value":"JevSteer public QA"},{"type":"field_equals","label":"Textarea","value":"Multi-control workflow verification"},{"type":"field_equals","label":"Dropdown (select)","value":"2"},{"type":"field_equals","label":"Dropdown (datalist)","value":"San Francisco"},{"type":"field_equals","label":"Date picker","value":"10/20/2026"},{"type":"control_checked","label":"Checked checkbox","value":false},{"type":"control_checked","label":"Default checkbox","value":true},{"type":"control_checked","label":"Default radio","value":true},{"type":"field_equals","label":"Readonly input","value":"Readonly input"}],"max_actions":22},
+    {"id":"submit","goal":"Submit the configured public form exactly once, then stop on its Form submitted confirmation.","success_criteria":["Received confirmation is visible and the submitted URL preserves the selected option, city and date."],"assertions":[{"type":"url_contains","value":"submitted-form.html"},{"type":"text_contains","value":"Received!"},{"type":"url_contains","value":"my-select=2"},{"type":"url_contains","value":"my-datalist=San+Francisco"},{"type":"url_contains","value":"my-date=10%2F20%2F2026"}],"max_actions":6}
+  ]
+}

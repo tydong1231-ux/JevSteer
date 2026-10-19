@@ -1,4 +1,4 @@
-import { isSensitiveName } from "./sensitive.mjs";
+import { sensitiveName } from "./sensitive.mjs";
 
 function truncate(value, max = 1200) {
   const s = typeof value === "string" ? value : JSON.stringify(value);
@@ -10,7 +10,7 @@ function truncate(value, max = 1200) {
 export function safeUrl(value) {
   try {
     const url = new URL(String(value));
-    for (const key of [...url.searchParams.keys()]) if (isSensitiveName(key)) url.searchParams.set(key, "[REDACTED]");
+    for (const key of [...url.searchParams.keys()]) if (sensitiveName(key)) url.searchParams.set(key, "[REDACTED]");
     if (url.hash && /(access_token|id_token|secret|session|api_key|authorization)/i.test(url.hash)) url.hash = "#[REDACTED]";
     return url.toString();
   } catch {
@@ -24,7 +24,7 @@ function redact(value, depth = 0) {
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, child] of Object.entries(value)) {
-      out[key] = isSensitiveName(key) ? "[REDACTED]" : redact(child, depth + 1);
+      out[key] = sensitiveName(key) ? "[REDACTED]" : redact(child, depth + 1);
     }
     return out;
   }
@@ -34,10 +34,14 @@ function redact(value, depth = 0) {
 
 function parseMaybeJson(value) {
   if (typeof value !== "string") return redact(value);
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) return "[NON_TEXT_BODY_OMITTED]";
   try { return redact(JSON.parse(value)); } catch { return redact(value); }
 }
 
 export function relevantRequest(request) {
+  try {
+    if (/(^|\.)(clarity\.ms|google-analytics\.com|analytics\.google\.com|segment\.io)$/.test(new URL(request?.url).hostname)) return false;
+  } catch {}
   const method = String(request?.method || "GET").toUpperCase();
   const status = Number(request?.status || 0);
   return !["GET", "HEAD", "OPTIONS"].includes(method) || status >= 400;
@@ -82,6 +86,8 @@ export function buildEvidencePacket({ runId, milestone, result, network }) {
     result: result.status,
     actions: (result.actions || []).map((x) => ({
       ...(x.action ? { action: x.action } : {}),
+      ...(x.dispatch_state ? { dispatch_state: x.dispatch_state } : {}),
+      ...(x.input_mode ? { input_mode: x.input_mode } : {}),
       ...(x.element ? { element: x.element } : {}),
       ...(x.value ? { value_key: x.value } : {}),
       ...(x.key ? { key: x.key } : {}),
@@ -90,6 +96,7 @@ export function buildEvidencePacket({ runId, milestone, result, network }) {
       ...(x.recovery ? { recovery: x.recovery } : {}),
     })),
     verification: result.verification,
+    ...(result.host_review ? { host_review: result.host_review } : {}),
     final_page: { url: result.url, title: result.title },
     network,
   };

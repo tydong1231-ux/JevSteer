@@ -1,5 +1,6 @@
 // Optional OpenAI-compatible text generator. Jev selects actions; this helper
 // only writes ordinary field values when the host did not provide task.values.
+import { sensitiveField } from "./sensitive.mjs";
 const SYSTEM = [
   "Return exactly one JSON object with key text: a string or null.",
   "Only supply the literal text to enter in the selected field, not actions or explanations.",
@@ -44,8 +45,9 @@ export async function generateFieldText({ goal, field, page, history = [] }, {
           goal: String(goal || "").slice(0, 1000),
           field: {
             label: field?.label, role: field?.role, type: field?.type,
+            name: field?.name, scope: field?.scope, context: field?.context,
             near: String(field?.near || "").slice(0, 500),
-            current_value: field?.type === "password" ? "[REDACTED]" : String(field?.value || "").slice(0, 120),
+            current_value: sensitiveField(field) ? "[REDACTED]" : String(field?.value || "").slice(0, 120),
           },
           page: { title: page?.title, text: String(page?.text || "").slice(0, 2800) },
           recent_actions: history.slice(-6).map(x => ({ action: x.action, element: x.element })),

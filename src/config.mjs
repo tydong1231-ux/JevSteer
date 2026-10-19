@@ -7,8 +7,19 @@ function num(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+const provider = process.env.JEV_PROVIDER || (process.env.OPENROUTER_API_KEY && !process.env.TYPESAFE_API_KEY ? "openrouter" : "typesafe");
+if (!["typesafe", "openrouter"].includes(provider)) throw new Error(`Unknown JEV_PROVIDER: ${provider}`);
+
 export const config = {
-  jevApiUrl: process.env.JEV_API_URL || "https://api.typesafe.ai/v1/systemone",
+  browserDriver: process.env.JEVSTEER_BROWSER_DRIVER || "kapture",
+  browserHeadless: process.env.JEVSTEER_HEADLESS === "1",
+  browserProfile: process.env.JEVSTEER_BROWSER_PROFILE || ".jevsteer-state/profiles/default",
+  browserCdpEndpoint: process.env.JEVSTEER_CDP_ENDPOINT || undefined,
+  browserChannel: process.env.JEVSTEER_BROWSER_CHANNEL || undefined,
+  browserInputMode: process.env.JEVSTEER_INPUT_MODE || "fast",
+  browserTimeoutMs: num("JEVSTEER_BROWSER_TIMEOUT_MS", 15000),
+  jevProvider: provider,
+  jevApiUrl: process.env.JEV_API_URL || (provider === "openrouter" ? "https://openrouter.ai/api/v1/systemone" : "https://api.typesafe.ai/v1/systemone"),
   jevModel: process.env.JEV_MODEL || "jev-latest",
   kapturePort: num("KAPTURE_PORT", 61822),
   leaseTtlMs: num("JEVSTEER_LEASE_TTL_MS", 120000),
@@ -24,10 +35,14 @@ export const config = {
   maxSingleElements: 240,
   maxStateChars: 70000,
   elementGroupSize: 30,
+  actionSettleMs: num("JEVSTEER_ACTION_SETTLE_MS", 8000),
+  navigationSettleMs: num("JEVSTEER_NAVIGATION_SETTLE_MS", 15000),
+  observationQuietMs: num("JEVSTEER_OBSERVATION_QUIET_MS", 250),
+  maxWaits: num("JEVSTEER_MAX_WAITS", 12),
 };
 
 export function requireTypesafeKey() {
-  const key = process.env.TYPESAFE_API_KEY;
-  if (!key) throw new Error("TYPESAFE_API_KEY is not set. Get a TypeSafe API key and expose it to the MCP process.");
+  const key = config.jevProvider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.TYPESAFE_API_KEY;
+  if (!key) throw new Error(`${config.jevProvider === "openrouter" ? "OPENROUTER_API_KEY" : "TYPESAFE_API_KEY"} is not set. Expose the API key to the MCP process.`);
   return key;
 }

@@ -1,4 +1,5 @@
 import { FIELDISH, SELECTISH, brief, squash } from "./page-model.mjs";
+import { sensitiveField } from "./sensitive.mjs";
 
 // Same-request speculative action heads, adapted from jev-ultrafast's
 // operation-specific action space. Jev evaluates each question independently:
@@ -7,9 +8,13 @@ export const TARGETED_TOOLS = new Set(["click", "type", "press_enter", "select",
 
 export function eligibleFor(e, tool) {
   if (!e?.selector || e.disabled) return false;
-  if (tool === "type") return FIELDISH(e);
+  // An ARIA listbox is a container, not one specific choice. Clicking its
+  // center can select an unrelated child option at that coordinate.
+  if (e.role === "listbox" && e.tag !== "select") return false;
+  const identifiableField = !!squash(e.label || e.placeholder || e.name || e.text);
+  if (tool === "type") return FIELDISH(e) && identifiableField && !e.type_completed;
   if (tool === "select") return SELECTISH(e);
-  if (tool === "press_enter") return FIELDISH(e) || e.tag === "button" || e.role === "button";
+  if (tool === "press_enter") return (FIELDISH(e) && identifiableField) || e.tag === "button" || e.role === "button";
   if (tool === "hover") return ["button", "a", "summary"].includes(e.tag)
     || ["button", "link", "menuitem", "tab", "option"].includes(e.role);
   return tool === "click";
@@ -21,7 +26,9 @@ function describe(candidate) {
     control: `[${e.i}] ${brief(e)}`,
   };
   if (e.near) result.near = squash(e.near, 130);
-  if (e.value != null && e.type !== "password") result.current_value = squash(e.value, 80);
+  if (e.context) result.record_context = squash(e.context, 180);
+  if (e.scope) result.scope = squash(e.scope, 180);
+  if (e.value != null && !sensitiveField(e)) result.current_value = squash(e.value, 80);
   if (e.checked != null) result.checked = e.checked;
   if (e.options?.length && candidate.option == null) {
     result.selected = e.options.filter(o => o.selected).map(o => squash(o.text, 55)).slice(0, 3);

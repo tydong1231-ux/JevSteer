@@ -84,13 +84,14 @@ export class KaptureClient {
   }
 
   async close() {
-    // Keep a local reference: the "exit" listener registered in ensureServer
-    // clears this.child as soon as the process exits.
     const child = this.child;
     if (this.startedByUs && child && child.exitCode == null && child.signalCode == null) {
       const exited = new Promise((resolve) => child.once("exit", resolve));
       child.kill("SIGTERM");
-      await Promise.race([exited, sleep(1500)]);
+      await Promise.race([
+        exited,
+        sleep(1500),
+      ]).catch(() => {});
       if (child.exitCode == null && child.signalCode == null) child.kill("SIGKILL");
     }
     this.child = null;
@@ -123,11 +124,18 @@ export class KaptureClient {
   }
 
   async elements(tabId, selector, { visible } = {}) {
-    return this.request(`/tab/${encodeURIComponent(tabId)}/elements${encodeQuery({ selector, visible })}`, { timeout: 15000 });
+    // Kapture 2.6.1's HTTP query parser coerces "true"/"false" to booleans,
+    // while its MCP elements schema requires the string enum. Request all
+    // matches and apply the visibility flag locally, preserving freshness checks.
+    const data = await this.request(`/tab/${encodeURIComponent(tabId)}/elements${encodeQuery({ selector, ...(visible != null ? { visible: "all" } : {}) })}`, { timeout: 15000 });
+    if (visible == null || visible === "all") return data;
+    if (![true, false, "true", "false"].includes(visible)) throw new Error(`Invalid visibility filter: ${visible}`);
+    const wanted = visible === true || visible === "true";
+    return { ...data, elements: (data.elements || []).filter((e) => e.visible === wanted) };
   }
 
-  async dom(tabId) {
-    return this.request(`/tab/${encodeURIComponent(tabId)}/dom`, { timeout: 15000 });
+  async dom(tabId, { selector } = {}) {
+    return this.request(`/tab/${encodeURIComponent(tabId)}/dom${encodeQuery({ selector })}`, { timeout: 15000 });
   }
 
   async screenshot(tabId, { scale = 1, format = "png", quality } = {}) {

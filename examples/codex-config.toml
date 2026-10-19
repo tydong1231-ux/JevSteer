@@ -2,3 +2,9 @@
 command = "npx"
 args = ["-y", "jevsteer"]
 env_vars = ["TYPESAFE_API_KEY"]
+
+# Playwright migration (requires installing its Chromium or choosing Chrome).
+# [mcp_servers.jevsteer.env]
+# JEVSTEER_BROWSER_DRIVER = "playwright"
+# JEVSTEER_BROWSER_PROFILE = "C:/jevsteer-profiles/demo"
+# JEVSTEER_INPUT_MODE = "realistic"

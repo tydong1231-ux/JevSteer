@@ -1,17 +1,28 @@
-// Shared detection of secret-like names (form value keys, field labels,
-// JSON keys and query parameters).
+// Shared detection of secret-like names: form value keys, field labels, JSON
+// keys and query parameters. Readers that run inside the page and cannot
+// import this module receive SENSITIVE_PATTERNS instead (see browser/inspect).
 //
 // Long tokens match anywhere. Short tokens ("pass", "pin", "otp", ...) match
 // when they end a word, optionally with a suffix such as "code" or "number":
 // "userpass", "cardPin", "pin1", "totp" and "pin_code" are secrets, while
 // "shipping_address", "mapping", "opinion" and "passed" are not.
 // When in doubt this errs toward hiding: a hidden value can still be typed.
-const LONG = /(pass(word|wd|code|phrase|key|port)|secret|token|api[-_ ]?key|authorization|cookie|security[-_ ]?code)/i;
-const SHORT = /(pass|pin|otp|2fa|cvv|cvc)(code|number|num|no|value|hash)?s?(?![a-z])/i;
+// "secret" excludes "secretary": a company secretary is an ordinary business field.
+const LONG = "pass(word|wd|code|phrase|key|port)|secret(?!ar)|token|authorization|cookie|(api|security|verification|access|private)[-_.\\s]*(key|code)";
+const SHORT = "(pass|pin|otp|2fa|cvv|cvc)(code|number|num|no|value|hash)?s?(?![a-z])";
 
-export function isSensitiveName(value) {
+export const SENSITIVE_PATTERNS = Object.freeze({ long: LONG, short: SHORT });
+
+const long = new RegExp(LONG, "i");
+const short = new RegExp(SHORT, "i");
+
+export function sensitiveName(value) {
   const name = String(value ?? "");
-  if (LONG.test(name)) return true;
   // Split camelCase ("cardPinNumber" -> "card Pin Number") so word ends apply.
-  return SHORT.test(name.replace(/([a-z])([A-Z])/g, "$1 $2"));
+  const words = name.replace(/([a-z])([A-Z])/g, "$1 $2");
+  return long.test(name) || long.test(words) || short.test(words);
+}
+
+export function sensitiveField(element) {
+  return element?.type === "password" || sensitiveName([element?.label, element?.name, element?.placeholder].filter(Boolean).join(" "));
 }
