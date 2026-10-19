@@ -4,3 +4,5 @@ node_modules/
 *.log
 coverage/
 .nyc_output/
+.test-artifacts/
+.jevsteer-state/

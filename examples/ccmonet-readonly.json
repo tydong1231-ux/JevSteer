@@ -1,0 +1,9 @@
+{
+  "goal": "Inspect an existing vendor bill in the ccMonet demo company",
+  "review_mode": "strict",
+  "constraints": ["Demo company only. Read only: search, filter, pagination and opening or closing details are allowed; do not edit, approve, pay or delete records."],
+  "milestones": [
+    {"id":"bill-list","goal":"Open the Vendor Bills list and observe existing rows","success_criteria":["Vendor Bills table is visible with at least one existing bill"],"assertions":[{"type":"url_contains","value":"/protected/expenses/bills"}],"max_actions":16},
+    {"id":"bill-detail","goal":"Open an existing vendor bill and inspect its vendor, identifier, currency, total and status","success_criteria":["An existing bill detail is open and the requested fields are visible"],"guidance":["Bill details open in an editable modal. Opening without edits does not change the record or require saving."],"max_actions":20}
+  ]
+}

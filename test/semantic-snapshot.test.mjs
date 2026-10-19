@@ -11,7 +11,7 @@ test("semantic snapshot enriches Kapture element metadata", () => {
       { visible: true, selector: "#save", tagName: "button", id: "save", bounds: {} },
     ],
   });
-  assert.equal(page.elements[0].label, "you@example.com");
+  assert.equal(page.elements[0].label, "Email address");
   assert.equal(page.elements[1].label, "Save");
   assert.equal(page.elements[1].role, "button");
 });
