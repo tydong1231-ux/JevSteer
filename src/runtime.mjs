@@ -15,9 +15,9 @@ import { sameDateText } from "./date-text.mjs";
 import { buildEvidencePacket, evidenceRef, relevantRequest, safeUrl, sanitizeNetworkBody, summarizeRequest } from "./evidence.mjs";
 import { buildTargetSpace, availableTools, eligibleFor, TARGETED_TOOLS } from "./decision-space.mjs";
 import { generateFieldText } from "./text-helper.mjs";
-import { locateSameElement, rememberField, findRemembered } from "./element-identity.mjs";
+import { locateSameElement, equivalentLink, sameIdentity, rememberField, findRemembered } from "./element-identity.mjs";
 import { ActionJournal } from "./action-journal.mjs";
-import { observeUntilReady, observationSignature, reviewedState, sameReviewedState, transientNavigationError } from "./observation.mjs";
+import { observeUntilReady, observationSignature, observationLimitError, reviewedState, sameReviewedState, transientNavigationError } from "./observation.mjs";
 import { HostReviewStore, reviewDigest, reviewReceipt } from "./host-review.mjs";
 import { sensitiveName, sensitiveField } from "./sensitive.mjs";
 import { bindForm, nextFormDecision } from "./form-binding.mjs";
@@ -44,12 +44,26 @@ const TOOLS = {
 const KEYS = ["Escape", "Tab", "Space", "Backspace", "Delete", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End"];
 const TARGETED = TARGETED_TOOLS;
 const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"]);
+// Escape pressed on no element closes a menu, popup or dialog where focus is.
+// It submits nothing. Any other key, or Escape on an element (which focuses
+// it first, and may blur and save another field), stays guarded.
+const localKeyPress = (action) => action.tool === "press_key" && action.key === "Escape" && action.target == null;
 
 function sanitizedValues(values) {
   return Object.fromEntries(Object.entries(values || {}).map(([key, value]) => [
     key,
     sensitiveName(key) ? "[secret value available locally; contents hidden from Jev]" : String(value).slice(0, 160),
   ]));
+}
+
+// The page held more interactive elements than one observation takes for
+// the whole observation window. Nothing more is sent to it.
+function overLimit(error) {
+  const count = String(error?.message || "").match(/OBSERVATION_LIMIT: (\d+)/)?.[1];
+  return {
+    status: "observation_limit",
+    info: `The page showed ${count ? `${count} interactive elements, ` : ""}more than one observation reads, until the observation window ended. No further input was sent. Rerun the milestone once the page settles, start it on a narrower page or section, or use browser_screenshot.`,
+  };
 }
 
 function actionError(error) {
@@ -79,9 +93,10 @@ function typedFieldsOn(page, confirmedTypes) {
 }
 
 // A confirmed field that shows nothing now. Widgets such as date pickers can
-// rewrite a field from their own state on blur and empty it.
+// rewrite a field from their own state on blur and empty it. A select whose
+// search text cleared when an option was picked shows that option instead.
 function emptiedAfterTyping({ typed, current }) {
-  return String(typed.value ?? "") !== "" && current.value === "" && !sensitiveField(current);
+  return String(typed.value ?? "") !== "" && current.value === "" && !current.display && !sensitiveField(current);
 }
 
 // Names those fields when a run stops without verifying its goal.
@@ -929,6 +944,8 @@ export class JevSteerRuntime {
       let autoRecoveries = 0;
       let verification;
       let staleDecisions = 0;
+      let ambiguousRefusals = 0;
+      let refusedOn;
       let transitionObserved = false;
       let journalRecords = await this.journal.pending(tab.tabId);
       let formPlan;
@@ -936,7 +953,15 @@ export class JevSteerRuntime {
       for (let round = 0; round <= maxActions; round++) {
         if (Date.now() - started >= maxDurationMs) { status = "budget_exhausted"; info = "Milestone time budget exhausted; inspect progress before resuming."; break; }
         await this.settle(tab.tabId);
-        const observed = previous && lastAction ? await this.observe(tab.tabId, previous, lastAction) : { page: await this.settledPage(tab.tabId) };
+        let observed;
+        try {
+          observed = previous && lastAction ? await this.observe(tab.tabId, previous, lastAction) : { page: await this.settledPage(tab.tabId) };
+        } catch (error) {
+          if (!observationLimitError(error)) throw error;
+          ({ status, info } = overLimit(error));
+          page = undefined;
+          break;
+        }
         page = observed.page;
         page.tab_id = tab.tabId;
         // A local field value/selection can be confirmed before an autosave
@@ -1129,7 +1154,10 @@ export class JevSteerRuntime {
           info = "The next step appears to require pixel/canvas/image understanding. Hand this step to host vision/computer use, then resume the same task contract.";
           break;
         }
-        if (round > 0 && answer.error.noul >= 0.7) {
+        // A refused choice sends no input. On the page it was refused on,
+        // an error reading is about that refusal, not about the page.
+        const unchangedSinceRefusal = history.at(-1)?.recovery === "reobserve" && refusedOn === observationSignature(page);
+        if (round > 0 && answer.error.noul >= 0.7 && !unchangedSinceRefusal) {
           status = "error";
           info = "The page shows an error after the previous action.";
           break;
@@ -1181,10 +1209,18 @@ export class JevSteerRuntime {
           if (verificationMode === "host" && contract.assertions.length && round > 0
               && answer.blocked.noul < 0.5 && passiveMs > 0
               && journalRecords.some(r => r.run_id === runId && r.milestone_id === milestoneId)) {
-            const observed = await observeUntilReady(() => this.readPage(tab.tabId), {
-              ...this.observation, maxMs: passiveMs,
-              ready: p => evaluateAssertions(p, contract.assertions).every(a => a.passed),
-            });
+            let observed;
+            try {
+              observed = await observeUntilReady(() => this.readPage(tab.tabId), {
+                ...this.observation, maxMs: passiveMs,
+                ready: p => evaluateAssertions(p, contract.assertions).every(a => a.passed),
+              });
+            } catch (error) {
+              if (!observationLimitError(error)) throw error;
+              ({ status, info } = overLimit(error));
+              page = undefined;
+              break;
+            }
             page = observed.page;
             row.passive_result_wait_ms = observed.ms;
             if (!observed.timed_out) {
@@ -1429,16 +1465,29 @@ export class JevSteerRuntime {
           staleDecision = String(error?.message || "").startsWith("STALE_TARGET:");
           status = "action_failed";
           info = "Browser action was rejected or its execution was uncertain; inspect current state before attempting it again.";
+          // The check before input read a page over the element limit.
+          if (observationLimitError(error) && !journalRecord) ({ status, info } = overLimit(error));
           log("action failed", h.error);
+        }
+        // A target that matches several identical controls is still ambiguous
+        // on the same page. Jev gets one more look, then the host chooses.
+        if (staleDecision && /^STALE_TARGET: ambiguous/.test(h.error) && ambiguousRefusals++ >= 1) {
+          history.push(h);
+          status = "ambiguous";
+          info = `Jev's target ${brief(action.el)} matches several identical controls on this page, so no input was sent. Add guidance that tells them apart, or narrow the milestone to one of them.`;
+          break;
         }
         if (staleDecision && ++staleDecisions <= 2) {
           row.stale_decision = true;
-          history.push({ recovery: "reobserve", reason: "stale_target", error: h.error });
+          // No input was sent. Jev sees why its choice was refused; nothing
+          // on the page came from it.
+          history.push({ recovery: "reobserve", reason: "stale_target", input_sent: false, detail: h.error });
+          refusedOn = observationSignature(page);
           status = "max_actions";
           info = undefined;
           continue;
         }
-        if (actionSucceeded) staleDecisions = 0;
+        if (actionSucceeded) { staleDecisions = 0; ambiguousRefusals = 0; }
         history.push(h);
         if (!actionSucceeded && journalRecord && !staleDecision) {
           // A lost acknowledgement can follow a successful site mutation.
@@ -1507,12 +1556,14 @@ export class JevSteerRuntime {
       }
 
       this.shown = page ? { ...page, tab_id: tab.tabId } : null;
+      // A page too large to read still has an address and a title.
+      const where = page || (status === "observation_limit" ? await Promise.resolve().then(() => this.driver.metadata?.(tab.tabId)).catch(() => null) : null);
       const output = {
         status,
         task: contract,
         tab_id: tab.tabId,
-        url: page?.url,
-        title: page?.title,
+        url: where?.url,
+        title: where?.title,
         actions: history,
         done_score: Number((rounds.at(-1)?.done || 0).toFixed(2)),
         on_track_score: Number((rounds.at(-1)?.on_track ?? 1).toFixed(2)),
@@ -1702,10 +1753,11 @@ export class JevSteerRuntime {
     };
   }
 
-  findCurrentElement(oldElement, currentPage) {
+  findCurrentElement(oldElement, currentPage, tool) {
     if (!oldElement) return undefined;
     if (oldElement.identity_version) {
-      const match = locateSameElement(oldElement, currentPage);
+      const match = locateSameElement(oldElement, currentPage)
+        || (tool === "click" ? equivalentLink(oldElement, currentPage.elements.filter((e) => sameIdentity(oldElement, e, currentPage.url)), currentPage.url) : undefined);
       if (match) return match;
       throw new Error(`STALE_ELEMENT: ${brief(oldElement)} changed or is ambiguous. Take a new browser_snapshot.`);
     }
@@ -1732,7 +1784,7 @@ export class JevSteerRuntime {
       // Record the actual URL even for focused keyboard input without a
       // selector; these actions can submit a form just like clicking Save.
       const current = element != null || GUARDED.has(action) ? await this.readPage(tab.tabId) : null;
-      const currentElement = oldElement ? this.findCurrentElement(oldElement, current) : undefined;
+      const currentElement = oldElement ? this.findCurrentElement(oldElement, current, action) : undefined;
       const normalized = {
         tool: action,
         target: currentElement?.i,
@@ -1745,7 +1797,8 @@ export class JevSteerRuntime {
         key: action === "press_key" ? (key || "Escape") : action === "press_enter" ? "Enter" : undefined,
         observedUrl: current?.url,
       };
-      if (GUARDED.has(action)) {
+      const guarded = GUARDED.has(action) && !localKeyPress(normalized);
+      if (guarded) {
         const previous = await this.journal.pending(tab.tabId);
         if (previous.some((r) => this.journal.matches(r, normalized, current))) {
           throw new Error("UNCONFIRMED_ACTION: inspect the earlier outcome before manually repeating it");
@@ -1758,7 +1811,7 @@ export class JevSteerRuntime {
       // The hook runs AFTER target freshness checks but BEFORE any browser
       // command, preventing false journal entries for stale targets.
       let entry;
-      if (GUARDED.has(action)) {
+      if (guarded) {
         normalized.beforeDispatch = async () => {
           entry = await this.journal.begin(tab.tabId, {
             runId: manualRunId, milestoneId: "manual-recovery",

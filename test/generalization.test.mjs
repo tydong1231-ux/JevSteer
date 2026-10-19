@@ -44,6 +44,14 @@ test("duplicate field names are distinguished by fieldset scope", () => {
   assert.equal(evaluateAssertions(p, [{ ...assertions[0], context: undefined }])[0].passed, false);
 });
 
+test("a select-like combobox is compared by the value it shows", () => {
+  const customer = { i: 0, tag: "input", role: "combobox", label: "Customer", value: "", display: "CHAIN1019", context: "" };
+  const assertions = normalizeTaskContract({ goal: "Check", assertions: [{ type: "field_equals", label: "Customer", value: "CHAIN1019" }] }).assertions;
+  assert.equal(evaluateAssertions({ url: "https://app.test", text: "", elements: [customer] }, assertions)[0].passed, true);
+  // Text typed into its search box is what it holds while the list is open.
+  assert.equal(evaluateAssertions({ url: "https://app.test", text: "", elements: [{ ...customer, value: "CHAIN", display: undefined }] }, assertions)[0].passed, false);
+});
+
 test("native modal excludes background controls and ARIA toggle state is exact", () => {
   const p = buildSemanticPage({ domHtml: '<button id="behind">Delete</button><dialog open aria-label="Settings"><button id="switch" role="switch" aria-checked="false">Notifications</button></dialog>', rawElements: ["behind", "switch"].map((id) => ({ selector: `#${id}`, visible: true, tagName: "button" })) });
   assert.equal(p.elements.length, 1);
@@ -505,13 +513,20 @@ test("manual click replay cannot be bypassed with ignored value or key parameter
   assert.equal(k.commands.filter(c => c.command === "click").length, 1);
 });
 
-test("manual Escape key default and explicit Escape are the same journaled action", async () => {
+test("manual Escape on no element closes a popup without a journal record; other keys stay guarded", async () => {
   const k = new MemoryKapture(page());
   const runtime = memoryRuntime(k, scriptedDecider([{}]));
-  const result = await runtime.actManual({ tabId: "test", action: "press_key" });
-  assert.equal(result.status, "action_unconfirmed");
-  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /UNCONFIRMED_ACTION/);
-  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
+  k.tabDetail = async () => ({ url: k.page.url, title: k.page.title });
+  // The default key is Escape too. Neither leaves a record that blocks later runs.
+  assert.equal((await runtime.actManual({ tabId: "test", action: "press_key" })).status, "completed");
+  assert.equal((await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" })).status, "completed");
+  assert.equal((await runtime.journal.pending("test")).length, 0);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 2);
+  // Enter can submit a form: it is journaled and is not repeated before it is resolved.
+  const enter = await runtime.actManual({ tabId: "test", action: "press_key", key: "Enter" });
+  assert.equal(enter.status, "action_unconfirmed");
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Enter" }), /UNCONFIRMED_ACTION/);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 3);
 });
 
 

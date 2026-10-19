@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { config } from '../config.mjs';
-import { sameIdentity } from '../element-identity.mjs';
+import { sameIdentity, equivalentLink } from '../element-identity.mjs';
 import { FIELDISH, SELECTISH } from '../page-model.mjs';
 import { isDateText } from '../date-text.mjs';
 import { observeUntilReady } from '../observation.mjs';
@@ -137,9 +137,12 @@ export class PlaywrightDriver {
     const fresh = await this.observe(ref);
     if (action.observedUrl && fresh.url !== action.observedUrl) throw new Error('STALE_TARGET: page navigated after decision');
     const matches = fresh.elements.filter((e) => e.frame_id === original.frame_id && e.document_id === original.document_id && sameIdentity(original, e, fresh.url));
-    if (matches.length !== 1 || matches[0].disabled || action.tool === 'type' && matches[0].readonly) throw new Error('STALE_TARGET: ambiguous, disabled or changed document/record/form');
-    if (['type', 'select'].includes(action.tool) && String(original.value ?? '') !== String(matches[0].value ?? '')) throw new Error('STALE_TARGET: live field value changed');
-    action.el = matches[0];
+    if (!matches.length) throw new Error('STALE_TARGET: changed document/record/form');
+    const pick = matches.length === 1 ? matches[0] : action.tool === 'click' ? equivalentLink(original, matches, fresh.url) : undefined;
+    if (!pick) throw new Error(`STALE_TARGET: ambiguous: ${matches.length} identical controls`);
+    if (pick.disabled || action.tool === 'type' && pick.readonly) throw new Error('STALE_TARGET: disabled or read-only');
+    if (['type', 'select'].includes(action.tool) && String(original.value ?? '') !== String(pick.value ?? '')) throw new Error('STALE_TARGET: live field value changed');
+    action.el = pick;
   }
 
   async perform(ref, action, targetRef, { beforeDispatch } = {}) {

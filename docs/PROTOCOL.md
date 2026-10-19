@@ -113,7 +113,24 @@ previews, character counters, validation messages. The effect check, the
 If only its surrounding text changed, they accept the one control with the same
 label, name, form, record, frame and document, provided it was the only such
 control before. Equal controls in unkeyed rows still need their record text.
-Pre-input target checks and journal fingerprints stay exact.
+Pre-input target checks and journal fingerprints stay exact. Two links with the
+same text, context and address (Wikipedia's "20 | 50 | 100" pager above and
+below a list) load the same page, so a click on either is the same click; any
+other target that matches two identical controls is refused before input
+(`STALE_TARGET: ambiguous`). Jev gets one more look, then the milestone stops as
+`ambiguous` for the host. A refused choice sends no input, so on the unchanged
+page it is not reported as a page error.
+
+A field with no accessible name, placeholder or label element takes the name a
+person reads next to it (Playwright driver): its column's header in a table (also
+an antd header table kept apart from the body), else the text just before it in
+the boxes around it that hold no other field, when that text sits just above it
+or just before it on the same line (an antd Form.Item caption such as
+"Customer" or "Due Date"). A search icon in the field's own box adds "(search)",
+or names it "Search" alone. A placeholder that only says how to fill a field
+("Select date", "请输入", "YYYY-MM-DD") gives way to such a label and stays in
+`placeholder`. A select-like combobox whose input holds only search text (antd,
+react-select) reports the value it shows as `display`.
 
 If workflow knowledge is missing, return `needs_guidance` instead of guessing. The host patches the current milestone and resumes.
 
@@ -139,11 +156,14 @@ substitute for the host checking all semantic criteria and rejecting weak matche
 
 A pending ticket blocks browser input, navigation and new runs on that tab across
 MCP restarts. Acceptance requires the same observed page state and a non-busy page.
-A toast, such as antd's "Update successfully" message or another fixed-position
-alert or status region, goes away on its own, so the state a ticket binds leaves
-its text out; the host still sees it in the ticket's observation. The ticket keeps
-a digest of each toast it showed, and any other toast at acceptance, such as a
-late error, makes the ticket stale.
+A toast, such as antd's "Update successfully" message (under any class prefix),
+a toast or snackbar, or another fixed-position alert or status region, goes away
+on its own, so the state a ticket binds leaves its text out; the host still sees
+it in the ticket's observation. The ticket keeps a digest of each toast it
+showed, and any other toast at acceptance, such as a late error, makes the
+ticket stale. A count in a badge (a sidebar "Todo 41" that becomes 42 when the
+saved record adds a to-do) is left out of the bound state too: a badge has a
+class hook (badge, unread, antd's scroll-number) or is a small filled pill.
 `host_review_stale` requires rejection and re-observation of the same milestone,
 not replaying the earlier action. After a stale ticket is rejected, rerunning
 that milestone with the same `run_id` re-observes: in host and hybrid modes the
@@ -226,7 +246,10 @@ even when the HTTP command acknowledged success, because text fields may
 autosave and a Save click may commit asynchronously. The host must inspect the
 actual outcome and call `browser_resolve_action` before relying on a retry.
 An error after browser dispatch likewise returns the journal ID rather than
-hiding the uncertain mutation.
+hiding the uncertain mutation. `press_key` Escape with no element is the one
+exception: it closes a menu, popup or dialog, submits nothing, and returns
+`completed` without a journal record, so it never blocks a later run or tab.
+Escape on an element, and every other key, stay guarded.
 
 The runtime can continue after a lost acknowledgement only when a low-risk local
 effect is mechanically confirmed, or return success when the final task outcome
@@ -237,7 +260,8 @@ misreported as a definitely open JavaScript dialog.
 ## Deterministic controls
 
 `field_equals`: string `value` (including empty/multiline), exact `label`, optional
-`context`. Invalid or secret fields do not pass. `control_checked`: boolean
+`context`. A select-like combobox whose input holds only search text is compared
+by the value it shows (`display`). Invalid or secret fields do not pass. `control_checked`: boolean
 `value`, exact `label`, optional `context`; an unknown property never counts as
 false. `element_count`: nonnegative integer `value` plus `label`/`context`.
 Unsupported/malformed assertions are rejected rather than dropped. Duplicate
@@ -315,6 +339,12 @@ action, `observe_ms` (watching the previous input or wait), `decide_ms` and
 `requests`. A guarded input adds a `guards` row with the effect and constraint
 verdicts and the target's scope and context. `explain: true` returns the round
 rows, guard verdicts included, in the result.
+Playwright observations read at most 1000 interactive elements. A page over
+that limit, as when a search swaps its old list for the new one, is read again
+within the observation window. One still over it when the window ends stops the
+milestone as `observation_limit`: no further input is sent, and the result keeps
+the actions taken. Rerun once the page settles, start on a narrower page, or use
+`browser_screenshot` (`browser_snapshot` stops at the same limit).
 `browser_open` can return `navigation_unconfirmed` with a `tab_id` when its
 acknowledgement is lost and fresh DOM metadata cannot confirm the exact requested
 URL. Inspect that tab before another navigation. Redirects to a different URL

@@ -272,3 +272,31 @@ test('driver borrows context without closing it, exposes screenshots and rejects
   expect(bad.context).toBeUndefined();
   await bad.close();
 });
+
+test('two links to the same page are one click; links that open elsewhere and identical buttons stay ambiguous', async ({ page }) => {
+  // Wikipedia's search results show the same "(20 | 50 | 100)" pager above and below the list.
+  const pager = (extra = '') => `<div>(<a href="/list?limit=20">20</a> | <a href="/list?limit=100"${extra}>100</a>)</div>`;
+  const pages = { '/list': `<h1>Results</h1>${pager()}<ul><li>One</li></ul>${pager()}`, '/split': `<h1>Results</h1>${pager()}<ul><li>One</li></ul>${pager(' target="_blank"')}<div><button>Load</button></div><div><button>Load</button></div>` };
+  await page.route('https://fixture.invalid/**', (route) => {
+    const url = new URL(route.request().url());
+    route.fulfill({ contentType: 'text/html', body: url.searchParams.get('limit') ? `<h1>Showing ${url.searchParams.get('limit')}</h1>` : pages[url.pathname] });
+  });
+  await page.goto('https://fixture.invalid/list');
+  const { driver, id } = await driverFor(page);
+  try {
+    const before = await driver.observe(id);
+    const hundred = before.elements.filter((e) => e.label === '100');
+    expect(hundred).toHaveLength(2);
+    const action = { tool: 'click', target: hundred[1].i, el: hundred[1], observedUrl: before.url };
+    expect((await send(driver, id, action)).state).toBe('dispatched_ack');
+    // The link the decision named is the one clicked.
+    expect(action.el.ordinal).toBe(hundred[1].ordinal);
+    await page.waitForURL('**/list?limit=100');
+    await page.goto('https://fixture.invalid/split');
+    const split = await driver.observe(id);
+    const opens = split.elements.filter((e) => e.label === '100');
+    await expect(driver.assertTargetFresh(id, { tool: 'click', target: opens[0].i, el: opens[0], observedUrl: split.url })).rejects.toThrow('STALE_TARGET: ambiguous: 2 identical controls');
+    const load = split.elements.filter((e) => e.label === 'Load');
+    await expect(driver.assertTargetFresh(id, { tool: 'click', target: load[0].i, el: load[0], observedUrl: split.url })).rejects.toThrow('STALE_TARGET: ambiguous: 2 identical controls');
+  } finally { await driver.close(); }
+});

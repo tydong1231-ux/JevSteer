@@ -59,3 +59,37 @@ test('an error toast after the ticket makes it stale, and the rerun re-observes 
     expect(clicks).toBe(0);
   } finally { await mcp.close(); }
 });
+
+// ccMonet's sidebar: the Todo count sits in div.unread, a Tailwind pill with no
+// role (read-only probe, 2026-10-19). Its success message has no role either,
+// and an app can rename antd's class prefix.
+const sidebar = `<nav>
+    <a href="#ai"><div class="flex items-center pr-2"><span>AI Insights</span><span id="ai" style="display:inline-block;height:16px;min-width:16px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;text-align:center">42</span></div></a>
+    <a href="#todo"><div class="flex items-center pr-2"><span>Todo</span><div class="unread ml-auto"><div class="rounded-full"><span id="todo">41</span></div></div></div></a>
+  </nav>`;
+const renamed = customer.replace("notice.className = 'ant-message-notice'", "notice.className = 'ccm-message-notice ccm-message-notice-success'");
+
+test('a sidebar count that grows after the ticket, and a message under a renamed prefix, do not make it stale', async ({ page }, testInfo) => {
+  await page.setContent(sidebar + renamed);
+  const mcp = await mcpFixture(page, testInfo, save());
+  try {
+    const ticket = await run(mcp);
+    expect(ticket.status).toBe('host_review_required');
+    expect(ticket.verification.observation.text).toContain('Update successfully');
+    // Creating the record added a to-do, as on ccMonet, and the message fades.
+    await page.evaluate(() => { document.querySelector('#todo').textContent = '42'; document.querySelector('#ai').textContent = '43'; });
+    await expect(page.locator('.ccm-message-notice')).toHaveCount(0);
+    expect((await review(mcp, ticket, 'accept')).status).toBe('completed_host_verified');
+  } finally { await mcp.close(); }
+});
+
+test('a changed record still makes the ticket stale when a count changed with it', async ({ page }, testInfo) => {
+  await page.setContent(sidebar + customer);
+  const mcp = await mcpFixture(page, testInfo, save());
+  try {
+    const ticket = await run(mcp);
+    expect(ticket.status).toBe('host_review_required');
+    await page.evaluate(() => { document.querySelector('#todo').textContent = '42'; state.textContent = 'Status: Draft'; });
+    expect((await review(mcp, ticket, 'accept')).status).toBe('host_review_stale');
+  } finally { await mcp.close(); }
+});

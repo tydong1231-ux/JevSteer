@@ -64,6 +64,8 @@ function modelElement(e, multiFrame) {
   put("href", e.href);
   if (secret) out.value = "[REDACTED]";
   else if (e.value != null && (e.value !== "" || FORM_TAGS.has(e.tag) || e.contenteditable)) out.value = squash(e.value, 160);
+  // What a select-like combobox shows while its input holds only search text.
+  if (!secret) put("display", e.display && squash(e.display, 160));
   if (typeof e.checked === "boolean" && (e.checked || CHECKABLE_TYPES.has(String(e.type || "").toLowerCase()) || CHECKABLE_ROLES.has(e.role))) out.checked = e.checked;
   for (const flag of ["disabled", "readonly", "contenteditable", "invalid"]) if (e[flag]) out[flag] = true;
   if (e.options) out.options = e.options.map((o) => {
@@ -115,6 +117,7 @@ export function formatPage(page) {
       !e.label && e.text ? `text=${JSON.stringify(squash(e.text, 120))}` : "",
       e.placeholder ? `placeholder=${JSON.stringify(squash(e.placeholder, 80))}` : "",
       e.value && !sensitiveField(e) ? `value=${JSON.stringify(squash(e.value, 80))}` : "",
+      e.display && !sensitiveField(e) ? `shows=${JSON.stringify(squash(e.display, 80))}` : "",
       e.href ? `href=${JSON.stringify(squash(e.href, 120))}` : "",
       e.disabled ? "disabled" : "",
       e.checked != null ? `checked=${e.checked}` : "",

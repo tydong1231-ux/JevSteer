@@ -31,6 +31,20 @@ export function locateSameElement(original, page) {
   return matches[0];
 }
 
+// Links with the same text, context and address load the same page: Wikipedia
+// shows its "20 | 50 | 100 | 250 | 500" pager above and below a list. A click
+// on either is the same click; the one observed is preferred. Any other
+// control that matches twice stays ambiguous, as do in-page and script links.
+export function equivalentLink(original, matches, base) {
+  if (matches.length < 2 || !original?.href || /^\s*(#|javascript:)/i.test(original.href)) return undefined;
+  try {
+    if (!["http:", "https:"].includes(new URL(original.href, base).protocol)) return undefined;
+  } catch { return undefined; }
+  const same = (e) => (e.tag === "a" || e.role === "link") && (e.link_target || "") === (original.link_target || "") && !!e.download === !!original.download;
+  if (!same(original) || !matches.every(same)) return undefined;
+  return matches.find((e) => e.ordinal != null && e.ordinal === original.ordinal) || matches[0];
+}
+
 // True when the control is unique on `page` even without its surrounding text.
 export function uniqueWithoutContext(original, page) {
   return !!matchWithoutContext(original, page);

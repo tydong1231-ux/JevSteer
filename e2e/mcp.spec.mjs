@@ -188,3 +188,41 @@ test('replacement pages cannot bypass an unknown session write, and old records 
     await replacement.close();
   } finally { await mcp.close(); }
 });
+
+test('a run clicks either of two same-address links; two identical buttons stop as ambiguous with no input, not as a page error', async ({ page }, testInfo) => {
+  const pager = '<div>(<a href="/list?limit=20">20</a> | <a href="/list?limit=100">100</a>)</div>';
+  await page.route('https://fixture.invalid/**', (route) => {
+    const limit = new URL(route.request().url()).searchParams.get('limit');
+    route.fulfill({ contentType: 'text/html', body: limit ? `<h1>Showing ${limit} results</h1>` : `<h1>Results</h1>${pager}<ul><li>One</li></ul>${pager}<div><button onclick="window.loads=(window.loads||0)+1">Load</button></div><div><button onclick="window.loads=(window.loads||0)+1">Load</button></div>` });
+  });
+  await page.goto('https://fixture.invalid/list');
+  const second = (name) => (state) => decision({ target: state.page.elements.filter((e) => e.label === name).at(-1)?.i });
+  const links = await mcpFixture(page, testInfo, scriptedDecider([second('100'), { tool: 'none', done: 0.99 }]));
+  try {
+    const result = await links.call('browser_run', { tab_id: links.id, goal: 'Show 100 results', max_actions: 4, evidence_level: 'none' });
+    expect(result.status).toBe('completed_verified');
+    expect(page.url()).toContain('limit=100');
+  } finally { await links.close(); }
+  await page.goto('https://fixture.invalid/list');
+  // After a refusal Jev reads the history as an error; no input was sent.
+  const buttons = await mcpFixture(page, testInfo, scriptedDecider([second('Load'), (state) => decision({ target: state.page.elements.filter((e) => e.label === 'Load')[0].i, error: 0.9 }), second('Load')]));
+  try {
+    const result = await buttons.call('browser_run', { tab_id: buttons.id, goal: 'Load more results', max_actions: 6, evidence_level: 'none' });
+    expect(result.status).toBe('ambiguous');
+    expect(result.info).toContain('identical controls');
+    expect(result.actions.filter((a) => a.recovery === 'reobserve')).toEqual([{ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: ambiguous: 2 identical controls' }]);
+    expect(await page.evaluate(() => window.loads)).toBeUndefined();
+  } finally { await buttons.close(); }
+});
+
+test('Escape pressed on no element leaves no record that blocks the next tab; Enter does', async ({ page }, testInfo) => {
+  await page.setContent('<form><label>Search <input name="q"></label></form><div role="menu"><div role="menuitem">Export</div></div>');
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]), { driver: { sessionId: 'escape-fixture' } });
+  try {
+    expect((await mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Escape' })).status).toBe('completed');
+    const other = await mcp.call('browser_open', { url: 'about:blank' });
+    expect(other.tab_id).toBeTruthy();
+    expect((await mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Enter' })).status).toBe('action_unconfirmed');
+    await expect(mcp.call('browser_open', { url: 'about:blank' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
+  } finally { await mcp.close(); }
+});

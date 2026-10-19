@@ -331,7 +331,8 @@ separate operations. Safety and verification thresholds remain unchanged.
 
 Before dispatching an interaction, a durable journal records its intent. This
 also covers guarded `browser_act` recovery, which returns an unresolved action
-ID until the host verifies its outcome. An unconfirmed remote mutation survives
+ID until the host verifies its outcome (Escape pressed on no element only
+closes a popup and is not journaled). An unconfirmed remote mutation survives
 a changed `run_id`, milestone resume and process restart. Unrelated page changes do not release it. A lost acknowledgement
 can be reconciled by an exact local control effect or independently verified final
 outcome, without replaying input. Otherwise the host inspects evidence and calls

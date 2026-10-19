@@ -4,6 +4,11 @@ import { FIELDISH } from "./page-model.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// More interactive elements than one observation takes (see captureSnapshot).
+export function observationLimitError(error) {
+  return /^OBSERVATION_LIMIT:/.test(String(error?.message || error));
+}
+
 export function transientNavigationError(error) {
   return /timed? out|timeout|receiving end does not exist|could not establish connection|execution context was destroyed|SNAPSHOT_CHANGED:|Kapture GET .*\/dom\b.*Cannot read properties of null \(reading 'outerHTML'\)/i.test(String(error?.message || error));
 }
@@ -46,8 +51,10 @@ export function reviewedState(page) {
     }
     return text.replace(/\s+/g, " ").trim();
   };
-  const elements = page.elements.filter((e) => !e.toast).map((e) => ({ ...e, context: without(e.context) }));
-  return { digest: observationSignature({ ...page, text: without(String(page.text ?? "")), elements }), toasts: toasts.map(digest) };
+  // A badge count ("Todo 41") changes as other work adds to it: the review
+  // copies the snapshot made show it as "#".
+  const elements = page.elements.filter((e) => !e.toast).map((e) => ({ ...e, label: e.review_label ?? e.label, context: without(e.review_context ?? e.context) }));
+  return { digest: observationSignature({ ...page, text: without(String(page.review_text ?? page.text ?? "")), elements }), toasts: toasts.map(digest) };
 }
 
 export function sameReviewedState(page, record) {
@@ -72,8 +79,12 @@ export async function observeUntilReady(read, { before, action, ready, maxMs = 8
     catch (error) {
       // A navigation tears down the old content script. Retry observation only;
       // never retransmit the click, and never hide arbitrary transport errors.
-      if (!navigation || !transientNavigationError(error) || now() - started >= limit) throw error;
-      await pause(Math.min(pollMs, Math.max(1, limit - (now() - started))));
+      // While a page swaps its content it can briefly hold both the old and
+      // the new list, more elements than one observation takes: watch it
+      // settle, whatever the input was.
+      const overLimit = observationLimitError(error);
+      if (!(overLimit || navigation && transientNavigationError(error)) || now() - started >= limit) throw error;
+      await pause(Math.min(overLimit ? Math.max(pollMs, 500) : pollMs, Math.max(1, limit - (now() - started))));
       continue;
     }
     // The driver counts the page's data requests the last input started that

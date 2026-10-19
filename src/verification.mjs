@@ -62,8 +62,11 @@ export function evaluateAssertions(page, assertions = []) {
           actual = String(control.checked);
           passed = typeof control.checked === "boolean" && control.checked === assertion.value;
         } else {
-          actual = sensitiveField(control) ? "[REDACTED]" : excerpt(control.value);
-          passed = !sensitiveField(control) && String(control.value ?? "") === assertion.value && !control.invalid;
+          // An antd or react-select combobox shows its value next to an input
+          // that holds only search text.
+          const value = control.value === "" && control.display != null ? control.display : control.value;
+          actual = sensitiveField(control) ? "[REDACTED]" : excerpt(value);
+          passed = !sensitiveField(control) && String(value ?? "") === assertion.value && !control.invalid;
         }
         break;
       }
