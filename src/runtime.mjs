@@ -44,14 +44,12 @@ const TOOLS = {
 const KEYS = ["Escape", "Tab", "Space", "Backspace", "Delete", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End"];
 const TARGETED = TARGETED_TOOLS;
 const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"]);
-// Escape pressed on no element usually closes a menu, popup or dialog where
-// focus is. A page can also answer it (cancel an edit, autosave), so it is
-// journaled like any other input. Once acknowledged, it is resolved from what
-// the page did after it (see quietAfterKey). Escape on an element focuses it
-// first, and may blur and save another field.
-const localKeyPress = (action) => action.tool === "press_key" && action.key === "Escape" && action.target == null;
-// A save the page debounces starts a moment after the key.
-const KEY_QUIET_MS = 1000;
+// Escape pressed on no element usually only closes a menu, popup or dialog.
+// A page can also answer it (cancel an edit, autosave) on a channel the
+// runtime cannot see, so it is journaled like any other key and its outcome
+// is the host's to resolve. It carries no remote risk: once resolved it can
+// be pressed again.
+const bareEscape = (action) => action.tool === "press_key" && action.key === "Escape" && action.target == null;
 
 const pendingLine = (r) => `${r.tool} on tab_id ${r.page_id} (action_id ${r.id}, ${r.created_at})`;
 
@@ -1854,18 +1852,6 @@ export class JevSteerRuntime {
     };
   }
 
-  // After a key sent to no element: true when, KEY_QUIET_MS after it, the
-  // page has sent no request, beacon, form post or WebSocket message, and is
-  // still on the document it was on. A driver that cannot tell says nothing.
-  async quietAfterKey(tabId, before, observed) {
-    if (observed.timed_out || typeof this.driver.trafficSinceInput !== "function") return false;
-    const where = (page) => `${page?.url}|${page?.frames?.[0]?.document_id ?? ""}`;
-    if (where(observed.page) !== where(before)) return false;
-    await sleep(Math.max(0, KEY_QUIET_MS - (observed.ms || 0)));
-    const traffic = await this.driver.trafficSinceInput(tabId);
-    return !!traffic && traffic.requests === 0 && traffic.pending === 0 && traffic.other === 0 && where(await this.readPage(tabId)) === where(before);
-  }
-
   findCurrentElement(oldElement, currentPage, tool) {
     if (!oldElement) return undefined;
     if (oldElement.identity_version) {
@@ -1959,26 +1945,21 @@ export class JevSteerRuntime {
         // especially for autosaving text inputs and Save buttons.
         let effect;
         let observationError;
-        let observed;
         try {
-          observed = await this.observe(tab.tabId, current, {
+          const observed = await this.observe(tab.tabId, current, {
             tool: action, el: currentElement, expected_value: normalized.value,
             role: currentElement?.role, tag: currentElement?.tag, side_effect: 1,
           });
           effect = observed.effect;
         } catch (error) { observationError = actionError(error); }
-        // Escape on no element that sent nothing to the site and left the
-        // page on its document: that is its outcome, observed.
-        if (localKeyPress(normalized) && observed && await this.quietAfterKey(tab.tabId, current, observed)) {
-          await this.journal.resolve(tab.tabId, entry.id, "applied", "Escape acknowledged; afterwards the page sent no request or message and stayed on the same document");
-          return { status: "completed", action, tab_id: tab.tabId, action_id: entry.id, resolution: "applied", url: observed.page.url, title: observed.page.title };
-        }
         return {
           status: "action_unconfirmed", tab_id: tab.tabId, action_id: entry.id,
           action, element: brief(currentElement),
           ...(effect ? { effect } : {}),
           ...(observationError ? { observation_error: observationError } : {}),
-          info: "Manual action was dispatched. Its business outcome needs independent verification; resolve applied/not_applied with evidence before resuming.",
+          info: bareEscape(normalized)
+            ? "Escape was sent. A page can answer it (an autosave, a cancel), so it is journaled like any key. Check the page; if it only closed a menu, popup or dialog, resolve it as applied with that evidence. A resolved Escape can be pressed again."
+            : "Manual action was dispatched. Its business outcome needs independent verification; resolve applied/not_applied with evidence before resuming.",
         };
       }
 

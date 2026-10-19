@@ -1,8 +1,6 @@
 // Actual MCP browser_run/browser_review, real Chromium UI, deterministic
 // decision double, independent read-only HTTP/DOM oracle. Live Jev is separate.
 import { test, expect } from '@playwright/test';
-import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
 import { startFixtureServer } from '../test/helpers/fixture-server.mjs';
 import { mcpFixture } from './helpers.mjs';
 import { scriptedDecider, decision } from '../test/helpers/runtime.mjs';
@@ -292,75 +290,25 @@ test('while a write is unconfirmed, a new tab opens only a blank page or the add
   } finally { await mcp.close(); }
 });
 
-// Escape on no element is journaled like any input. When the page sent
-// nothing after it and stayed on its document, it is resolved from that.
-test('Escape pressed on no element is resolved from what the page did, so it does not block the next tab; Enter is not', async ({ page }, testInfo) => {
+// Escape on no element is journaled like any input: a page can answer it
+// (an autosave, a cancel) on a channel the runtime cannot see. The host
+// resolves it; a resolved Escape is not replay protected.
+test('Escape pressed on no element waits for the host like any key; once resolved it frees the session and can be pressed again', async ({ page }, testInfo) => {
   await page.setContent('<form><label>Search <input name="q"></label></form><div role="menu"><div role="menuitem">Export</div></div>');
   const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]), { driver: { sessionId: 'escape-fixture' } });
   try {
     const escape = await mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Escape' });
-    expect(escape).toMatchObject({ status: 'completed', resolution: 'applied' });
-    expect(await mcp.runtime.journal.pending(mcp.id)).toEqual([]);
-    expect((await mcp.runtime.journal.load(mcp.id)).find((r) => r.id === escape.action_id)).toMatchObject({ state: 'resolved', resolution: 'applied', replay_protected: false });
+    expect(escape.status).toBe('action_unconfirmed');
+    expect(escape.info).toMatch(/resolve it as applied/);
+    expect((await mcp.runtime.journal.pending(mcp.id)).map((r) => r.id)).toEqual([escape.action_id]);
+    // It is not sent again before it is resolved, and input on another tab waits.
+    await expect(mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_ACTION/);
     const other = await mcp.call('browser_open', { url: 'about:blank' });
-    expect(other.tab_id).toBeTruthy();
-    expect((await mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Enter' })).status).toBe('action_unconfirmed');
-    const next = await mcp.call('browser_open', { url: 'about:blank' });
-    await expect(mcp.call('browser_act', { tab_id: next.tab_id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
+    await expect(mcp.call('browser_act', { tab_id: other.tab_id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
+    const resolved = await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: escape.action_id, resolution: 'applied', evidence: 'The menu closed and nothing was saved' });
+    expect(resolved.replay_protected).toBe(false);
+    expect(await mcp.runtime.journal.pending(mcp.id)).toEqual([]);
+    expect((await mcp.call('browser_act', { tab_id: other.tab_id, action: 'press_key', key: 'Escape' })).status).toBe('action_unconfirmed');
+    await expect(mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
   } finally { await mcp.close(); }
 });
-
-// A page can answer Escape itself: an autosave, now or a moment later, a
-// beacon, or a WebSocket message. Then the key's outcome is the host's to
-// resolve, as for any input. The page comes from the same loopback server as
-// its socket: Chromium blocks a public page's connections to loopback (local
-// network access), and newer versions block its WebSockets too.
-async function draftServer(answer) {
-  let saves = 0;
-  const server = createServer((req, res) => {
-    if (req.url === '/autosave') { saves++; res.writeHead(204); return res.end(); }
-    res.setHeader('content-type', 'text/html');
-    res.end(`<h1>Draft</h1><script>const socket = new WebSocket('ws://' + location.host + '/live');
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ${answer}; });</script>`);
-  });
-  const sockets = new Set();
-  server.on('upgrade', (req, socket) => {
-    sockets.add(socket);
-    const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    socket.on('data', () => { saves++; });
-    socket.on('error', () => {});
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return {
-    url: `http://127.0.0.1:${server.address().port}/draft`,
-    saves: () => saves,
-    close: () => new Promise((resolve) => { for (const socket of sockets) socket.destroy(); server.closeAllConnections(); server.close(resolve); }),
-  };
-}
-
-for (const [what, send] of [
-  ['a request', "fetch('/autosave', { method: 'POST', body: 'draft' })"],
-  ['a request a moment later', "setTimeout(() => fetch('/autosave', { method: 'POST', body: 'draft' }), 400)"],
-  ['a beacon', "navigator.sendBeacon('/autosave', 'draft')"],
-  ['a WebSocket message', "socket.send('cancel draft')"],
-]) {
-  test(`an Escape the page answers with ${what} stays unconfirmed and blocks input on other tabs`, async ({ page }, testInfo) => {
-    const draft = await draftServer(send);
-    const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]), { driver: { sessionId: 'escape-answered-fixture' } });
-    try {
-      // JevSteer watches a page's traffic from its first use of the page. It
-      // sees messages on a socket the page opened after that.
-      await mcp.driver.observe(mcp.id);
-      await page.goto(draft.url);
-      await page.waitForFunction(() => socket.readyState !== WebSocket.CONNECTING);
-      expect(await page.evaluate(() => socket.readyState)).toBe(1);
-      const escape = await mcp.call('browser_act', { tab_id: mcp.id, action: 'press_key', key: 'Escape' });
-      expect(escape.status).toBe('action_unconfirmed');
-      expect((await mcp.runtime.journal.pending(mcp.id)).map((r) => r.id)).toEqual([escape.action_id]);
-      await expect.poll(draft.saves).toBeGreaterThan(0);
-      const next = await mcp.call('browser_open', { url: 'about:blank' });
-      await expect(mcp.call('browser_act', { tab_id: next.tab_id, action: 'press_key', key: 'Escape' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
-    } finally { await mcp.close(); await draft.close(); }
-  });
-}

@@ -515,15 +515,15 @@ test("manual click replay cannot be bypassed with ignored value or key parameter
   assert.equal(k.commands.filter(c => c.command === "click").length, 1);
 });
 
-test("manual Escape on no element is journaled; a driver that cannot see the page's traffic leaves it unconfirmed", async () => {
+test("manual Escape on no element is journaled like any key and is not repeated before it is resolved", async () => {
   const k = new MemoryKapture(page());
   const runtime = memoryRuntime(k, scriptedDecider([{}]));
   k.tabDetail = async () => ({ url: k.page.url, title: k.page.title });
-  assert.equal(typeof k.trafficSinceInput, "undefined");
   // The default key is Escape. A page can answer it (cancel an edit, autosave),
-  // so with nothing seen of what the page sent after it, its outcome is open.
+  // so its outcome is the host's to resolve.
   const escape = await runtime.actManual({ tabId: "test", action: "press_key" });
   assert.equal(escape.status, "action_unconfirmed");
+  assert.match(escape.info, /resolve it as applied/);
   assert.deepEqual((await runtime.journal.pending("test")).map((r) => [r.id, r.tool]), [[escape.action_id, "press_key"]]);
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /UNCONFIRMED_ACTION/);
   assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);

@@ -64,7 +64,7 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
 
   server.registerTool("browser_open", {
     title: "Open URL",
-    description: "Open an absolute URL in the user's real Chrome session. Lost navigation acknowledgements are reconciled by observing the exact requested destination without replay. navigation_unconfirmed returns the tab_id for inspection; do not blindly retry.",
+    description: "Open an absolute URL in the user's real Chrome session. Lost navigation acknowledgements are reconciled by observing the exact requested destination without replay. navigation_unconfirmed returns the tab_id for inspection; do not blindly retry. While input in this browser session has no confirmed outcome, it opens only about:blank or the address that input was chosen on, and never navigates the tab that holds that input; resolve it first with browser_resolve_action.",
     inputSchema: z.object({
       url: z.string().url(),
       tab_id: z.string().optional(),
@@ -173,7 +173,7 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
 
   server.registerTool("browser_act", {
     title: "Manual Browser Action",
-    description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. press_key Escape with no element only closes a popup and is not journaled. Never replay an uncertain action.",
+    description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. press_key Escape is journaled the same way, also with no element: a page can answer it (an autosave, a cancel). It carries no remote risk, so once resolved it can be pressed again. Never replay an uncertain action.",
     inputSchema: z.object({
       tab_id: z.string().optional(),
       action: z.enum(["click", "type", "press_enter", "press_key", "select", "hover", "scroll", "back", "wait"]),

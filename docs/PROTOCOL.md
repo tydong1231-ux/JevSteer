@@ -323,15 +323,12 @@ autosave and a Save click may commit asynchronously. The host must inspect the
 actual outcome and call `browser_resolve_action` before relying on a retry.
 An error after browser dispatch likewise returns the journal ID rather than
 hiding the uncertain mutation. `press_key` Escape with no element is journaled
-the same way, because a page can answer it (an autosave, a cancel). It usually
-only closes a menu, popup or dialog, so once it is acknowledged the runtime
-looks at what the page did: when, a second after the key, the page has sent no
-request, beacon, form post or WebSocket message and is still on the same
-document, the record is resolved as applied from that observation and the call
-returns `completed` with its `action_id`. Otherwise it is `action_unconfirmed`
-like any other key, and so is every such Escape on a driver that cannot report
-what the page sent (the Kapture driver does not). WebSocket messages are seen
-on sockets the page opened after JevSteer first used it.
+the same way. It usually only closes a menu, popup or dialog, but a page can
+answer it (an autosave, a cancel) on channels the runtime cannot fully see: a
+WebSocket opened before JevSteer attached, a service worker, a save it
+debounces. So the runtime never infers its outcome from quiet traffic; the host
+checks the page and resolves it. Escape carries no remote risk, so a resolved
+Escape is not replay protected and can be pressed again.
 
 The runtime can continue after a lost acknowledgement only when a low-risk local
 effect is mechanically confirmed, or return success when the final task outcome

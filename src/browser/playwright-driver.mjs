@@ -128,15 +128,6 @@ export class PlaywrightDriver {
     if (record.inputAt != null) result.observation.requests_since_input = requests.started;
     return result.observation;
   }
-  // What the page sent since the last input: data requests (XHR and fetch)
-  // and how many are still open, and other things that can carry a change
-  // (see PageEvents.sentSince). Undefined before any input.
-  async trafficSinceInput(ref) {
-    const record = await this.record(ref);
-    if (record.inputAt == null) return undefined;
-    const { started, pending } = record.events.requests(record.inputAt);
-    return { requests: started, pending, other: record.events.sentSince(record.inputAt) };
-  }
   waitFor(ref, condition, budget = {}) { return observeUntilReady(() => this.observe(ref), { ...budget, ready: condition }); }
 
   async assertTargetFresh(ref, action) {

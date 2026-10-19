@@ -332,9 +332,9 @@ decision suggests a side effect. Opening a picker and submitting a record are
 separate operations. Safety and verification thresholds remain unchanged.
 
 Before dispatching an interaction, a durable journal records its intent. This
-also covers guarded `browser_act` recovery, which returns an unresolved action
-ID until the host verifies its outcome (an Escape pressed on no element is
-resolved by the runtime when the page sent nothing after it). An unconfirmed
+also covers guarded `browser_act` recovery, an Escape pressed on no element
+included: it returns an unresolved action ID until the host verifies its
+outcome. An unconfirmed
 remote mutation survives
 a changed `run_id`, milestone resume and process restart. Unrelated page changes do not release it. A lost acknowledgement
 can be reconciled by an exact local control effect or independently verified final
