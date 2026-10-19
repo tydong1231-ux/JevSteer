@@ -129,8 +129,9 @@ by what it shows or holds and what is next to it: its hint, the value it shows,
 its value, options and state, and the text and table column beside it (two
 unnamed selects in one filter row, "Status" and "Vendor"). The control that
 still shows what the chosen one showed is the one used, wherever the page has
-moved it. Order never decides: a page can swap equal nodes without anything
-observed changing. Controls that nothing observed tells apart are refused
+moved it, also when only one of them is left: it may be the other. Order never
+decides: a page can swap equal nodes without anything observed changing.
+Controls that nothing observed tells apart are refused
 before input (`STALE_TARGET: ambiguous`); Jev gets one more look, then the
 milestone stops as `ambiguous` for the host. A refused choice sends no input, so
 on the unchanged page it is not reported as a page error.
@@ -167,7 +168,13 @@ click on that option (the run log shows `tool: "click"`, `chosen_as: "select"`).
 An option already chosen is not offered, because a click on a chosen option of
 a multi-select takes it out again. Before the journal write, the option must
 still be unchosen and still listed under the same combobox, which is still
-open; after the write, just before the click, it must still be unchosen.
+open. That combobox is found as any target is: of identical comboboxes, the one
+that still shows what it showed, leaving out which one is open, because a page
+can move its open list to a twin. When only which one is open tells them
+apart, the option is refused as ambiguous (`STALE_TARGET: ambiguous: the
+option's combobox has identical twins`). The option and its combobox are then
+pinned; after the write, just before the click, the option must still be
+unchosen, and the combobox still open with its list holding the option.
 Otherwise the click is refused before any input as a stale target
 (`STALE_TARGET: the option is already chosen`, or `... no longer listed under
 the combobox it was chosen from`), and Jev looks again.

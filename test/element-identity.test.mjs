@@ -54,4 +54,21 @@ test("identical controls are told apart by what they show, never by their order"
   assert.equal(pickTwin(twinsOf(same.elements[1], same), same.elements), undefined);
   // Nor is one whose look another twin took on.
   assert.equal(pickTwin(twins, [select(0, { hint: "Vendor" }), select(1, { hint: "Vendor" })]), undefined);
+  // When one is left, it is still picked only by its look: it may be the other.
+  assert.equal(pickTwin(twins, [select(0, { hint: "Status" })]), undefined);
+  assert.equal(pickTwin(twins, [select(0, { hint: "Vendor" })]).hint, "Vendor");
+});
+
+test("a combobox's twins can be told apart leaving out which one is open, as an open list can move", () => {
+  const box = (i, extra = {}) => ({ i, ...doc, tag: "input", role: "combobox", label: "Tags", context: "", ...extra });
+  const before = page(box(0, { expanded: true }), box(1, { expanded: false, display: "Urgent" }));
+  const owner = twinsOf(before.elements[0], before, { ignore: ["expanded"] });
+  assert.equal(owner.distinct, true);
+  // The open list moved to the twin: the chosen one is still the empty one.
+  const moved = page(box(0, { expanded: false }), box(1, { expanded: true, display: "Urgent" }));
+  assert.equal(pickTwin(owner, moved.elements), moved.elements[0]);
+  // Told apart only by which one is open: never picked.
+  const open = page(box(0, { expanded: true }), box(1, { expanded: false }));
+  assert.equal(twinsOf(open.elements[0], open).distinct, true);
+  assert.equal(twinsOf(open.elements[0], open, { ignore: ["expanded"] }).distinct, false);
 });

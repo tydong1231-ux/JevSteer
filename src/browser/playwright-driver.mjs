@@ -141,8 +141,12 @@ export class PlaywrightDriver {
     const matches = fresh.elements.filter((e) => e.frame_id === original.frame_id && e.document_id === original.document_id && sameIdentity(original, e, fresh.url));
     if (!matches.length) throw new Error('STALE_TARGET: changed document/record/form');
     // Of identical controls, the one that still shows what the chosen one
-    // showed (see twinsOf). Their order never picks one.
-    const pick = matches.length === 1 ? matches[0] : (action.tool === 'click' && equivalentLink(original, matches, fresh.url)) || pickTwin(action.observed?.twins, matches);
+    // showed (see twinsOf), even when only one is left: it may be the other.
+    // Their order never picks one.
+    const twins = action.observed?.twins;
+    const link = () => action.tool === 'click' && equivalentLink(original, matches, fresh.url);
+    const pick = twins ? link() || pickTwin(twins, matches) : matches.length === 1 ? matches[0] : link();
+    if (!pick && matches.length === 1) throw new Error('STALE_TARGET: one of identical controls is left, and nothing shows it is the one chosen');
     if (!pick) throw new Error(`STALE_TARGET: ambiguous: ${matches.length} identical controls`);
     if (pick.disabled || action.tool === 'type' && pick.readonly) throw new Error('STALE_TARGET: disabled or read-only');
     if (['type', 'select'].includes(action.tool) && String(original.value ?? '') !== String(pick.value ?? '')) throw new Error('STALE_TARGET: live field value changed');
@@ -154,6 +158,8 @@ export class PlaywrightDriver {
     const record = await this.record(ref);
     const timeout = this.options.timeoutMs;
     const inputMode = action.inputMode || this.options.inputMode;
+    // An option chosen from an open list: its combobox, pinned with it.
+    let owner;
     return dispatchInput(async () => {
       if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
       if (!['click', 'type', 'press_enter', 'press_key', 'select', 'hover', 'scroll', 'back', 'wait', 'none'].includes(action.tool)) throw new Error('UNSUPPORTED_ACTION');
@@ -175,7 +181,11 @@ export class PlaywrightDriver {
         const doc = `${this.frameInfo(entry.frame).id}:${this.frameInfo(entry.frame).revision}:${state.documentKey}`;
         if (!current || doc !== target.document_id || !sameIdentity(target, current, state.url) || current.disabled) throw new Error('STALE_TARGET: live target identity changed');
         if (['type', 'select'].includes(action.tool) && !sensitiveFieldValueEqual(target, current)) throw new Error('STALE_TARGET: live field value changed');
-        if (action.chosen_as === 'select' && current.selected === true) throw new Error(OPTION_CHOSEN);
+        if (action.chosen_as === 'select') {
+          if (current.selected === true) throw new Error(OPTION_CHOSEN);
+          owner = await pinned(record, action.listed_owner, timeout);
+          await assertOwnerHolds(owner, action.listed_owner, handle);
+        }
         if (action.tool === 'type' && (!FIELDISH(current) || action.value == null)) throw new Error('INVALID_INPUT: value required and field must be editable');
         if (action.tool === 'select' && !SELECTISH(current)) throw new Error('INVALID_INPUT: select requires a combobox');
         if (action.tool === 'select' && current.tag === 'select') {
@@ -202,7 +212,10 @@ export class PlaywrightDriver {
         if (!current || !sameIdentity(action.el, current, state.url) || current.disabled
             || doc !== action.el.document_id
             || ['type', 'select'].includes(action.tool) && !sensitiveFieldValueEqual(action.el, current)) throw new Error('STALE_TARGET: target changed while persisting intent');
-        if (action.chosen_as === 'select' && current.selected === true) throw new Error(OPTION_CHOSEN);
+        if (action.chosen_as === 'select') {
+          if (current.selected === true) throw new Error(OPTION_CHOSEN);
+          await assertOwnerHolds(owner, action.listed_owner, handle);
+        }
         force = forced(action, current);
         if (force) await handle.hover({ trial: true, timeout });
       }
@@ -260,7 +273,7 @@ export class PlaywrightDriver {
         case 'none': break;
       }
       return { input_mode: ['click', 'hover'].includes(action.tool) ? 'pointer' : 'keyboard' };
-    });
+    }).finally(() => owner?.dispose().catch(() => {}));
   }
   async screenshot(ref, { format = 'png' } = {}) {
     const record = await this.record(ref);
@@ -309,12 +322,59 @@ function forced(action, current) {
 // which is still open, and must not be chosen already: on a multi-select a
 // click on a chosen option takes it out again.
 const OPTION_CHOSEN = 'STALE_TARGET: the option is already chosen';
+const NOT_LISTED = 'STALE_TARGET: the option is no longer listed under the combobox it was chosen from';
 function assertStillListed(action, option, page) {
   if (option.selected === true) throw new Error(OPTION_CHOSEN);
-  const box = option.popup_of != null ? page.elements.find((e) => e.i === option.popup_of) : undefined;
-  if (!box || box.expanded !== true || action.listed_in && !sameIdentity(action.listed_in, box, page.url)) {
-    throw new Error('STALE_TARGET: the option is no longer listed under the combobox it was chosen from');
-  }
+  const listedIn = action.listed_in;
+  if (!listedIn) throw new Error(NOT_LISTED);
+  // Its combobox is found as any target is: the one control with its
+  // identity, or of identical ones the one that still shows what it showed
+  // (see twinsOf), never just the one open now.
+  const owners = page.elements.filter((e) => e.frame_id === listedIn.frame_id && e.document_id === listedIn.document_id && sameIdentity(listedIn, e, page.url));
+  const twins = action.observed?.owner_twins;
+  const owner = twins ? pickTwin(twins, owners) : owners.length === 1 ? owners[0] : undefined;
+  if (!owner && owners.length > 1) throw new Error("STALE_TARGET: ambiguous: the option's combobox has identical twins");
+  if (!owner || owner.expanded !== true || option.popup_of !== owner.i) throw new Error(NOT_LISTED);
+  action.listed_owner = owner;
+}
+
+async function pinned(record, el, timeout) {
+  const entry = el && record.refs.get(el.selector);
+  const handle = entry && await entry.locator.elementHandle({ timeout }).catch(() => null);
+  if (!handle) throw new Error(NOT_LISTED);
+  return handle;
+}
+
+// The pinned combobox still lists the pinned option: it is still the control
+// the freshness check found, still open, and its list holds the option.
+async function assertOwnerHolds(ownerHandle, owner, optionHandle) {
+  const state = await ownerHandle.evaluate(readDOM);
+  const current = state.elements[0];
+  if (!current || !sameIdentity(owner, current, state.url) || current.expanded !== true
+      || !await ownerHandle.evaluate(listsOption, optionHandle)) throw new Error(NOT_LISTED);
+}
+
+// Page code: whether the open combobox `box` lists `option`, linked as the
+// snapshot links them (see popupOwner there): the list its aria-controls or
+// aria-owns names, or the floating box that holds that list, holds it; or,
+// with no such list, it is the one open combobox and the option floats
+// outside it.
+function listsOption(box, option) {
+  if (!box.isConnected || !option?.isConnected || box.getAttribute('aria-expanded') !== 'true') return false;
+  const floating = (p) => ['absolute', 'fixed'].includes(getComputedStyle(p).position);
+  const floatOf = (p) => {
+    for (let up = 0; p && p !== document.body && up < 5; up++, p = p.parentElement) if (floating(p)) return p;
+    return undefined;
+  };
+  const roots = `${box.getAttribute('aria-controls') || ''} ${box.getAttribute('aria-owns') || ''}`.split(/\s+/).filter(Boolean)
+    .map((id) => box.getRootNode().getElementById?.(id) || document.getElementById(id)).filter(Boolean)
+    .map((l) => { const f = floatOf(l); return f && !f.contains(box) ? f : l; });
+  if (box.contains(option) || roots.some((r) => r.contains(option))) return true;
+  const open = [...document.querySelectorAll('[role=combobox][aria-expanded="true"]')].filter((c) => c.tagName !== 'SELECT' && c.getClientRects().length);
+  if (open.length !== 1 || open[0] !== box) return false;
+  let p = option.parentElement;
+  while (p && !floating(p)) p = p.parentElement;
+  return !!p && !p.contains(box);
 }
 
 // Resolves after the page has drawn two more frames. A hidden tab draws none,

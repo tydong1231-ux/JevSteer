@@ -120,9 +120,13 @@ function showsTyped({ typed, current }) {
 }
 
 // What the decision saw of its target, for the check before input: what
-// tells it from identical controls (see twinsOf).
-function observedFor(page, el) {
-  return el ? { twins: twinsOf(el, page) } : {};
+// tells it from identical controls (see twinsOf). For an option from an open
+// list, also what told its combobox from identical ones, leaving out which
+// one is open: a page can move its open list to a twin.
+function observedFor(page, el, listedIn) {
+  if (!el) return {};
+  const owner = listedIn && page.elements.find((e) => e.i === listedIn.i);
+  return { twins: twinsOf(el, page), ...(owner ? { owner_twins: twinsOf(owner, page, { ignore: ["expanded"] }) } : {}) };
 }
 
 // Names those fields when a run stops without verifying its goal.
@@ -1527,7 +1531,7 @@ export class JevSteerRuntime {
         try {
           const actStarted = Date.now();
           action.observedUrl = page.url;
-          action.observed = observedFor(page, action.el);
+          action.observed = observedFor(page, action.el, action.listed_in);
           if (GUARDED.has(action.tool)) action.beforeDispatch = async () => {
             journalRecord = await this.journal.begin(tab.tabId, {
               runId, milestoneId, action, page, intent: contract.goal, contractDigest, remoteRisk: sideEffect,
@@ -1569,7 +1573,9 @@ export class JevSteerRuntime {
         if (staleDecision && /^STALE_TARGET: ambiguous/.test(h.error) && ambiguousRefusals++ >= 1) {
           history.push(h);
           status = "ambiguous";
-          info = `Jev's target ${brief(action.el)} matches several identical controls on this page, so no input was sent. Add guidance that tells them apart, or narrow the milestone to one of them.`;
+          info = `${/combobox has identical twins/.test(h.error)
+            ? `Jev chose ${brief(action.el)} from the list of one of several identical comboboxes on this page, and nothing tells them apart`
+            : `Jev's target ${brief(action.el)} matches several identical controls on this page`}, so no input was sent. Add guidance that tells them apart, or narrow the milestone to one of them.`;
           break;
         }
         if ((staleDecision || covered) && ++staleDecisions <= 2) {
@@ -1863,10 +1869,10 @@ export class JevSteerRuntime {
     if (oldElement.identity_version) {
       const twins = this.shown?.elements.includes(oldElement) ? twinsOf(oldElement, this.shown) : undefined;
       const same = currentPage.elements.filter((e) => e.frame_id === oldElement.frame_id && e.document_id === oldElement.document_id && sameIdentity(oldElement, e, currentPage.url));
-      const match = locateSameElement(oldElement, currentPage)
-        || (tool === "click" ? equivalentLink(oldElement, currentPage.elements.filter((e) => sameIdentity(oldElement, e, currentPage.url)), currentPage.url) : undefined)
-        // One of identical controls, told apart by what it shows (see twinsOf).
-        || pickTwin(twins, same);
+      const link = () => tool === "click" ? equivalentLink(oldElement, currentPage.elements.filter((e) => sameIdentity(oldElement, e, currentPage.url)), currentPage.url) : undefined;
+      // One of identical controls is the one that still shows what it showed
+      // (see twinsOf), even when only one is left: it may be the other.
+      const match = twins ? link() || pickTwin(twins, same) : locateSameElement(oldElement, currentPage) || link();
       if (match) return match;
       throw new Error(`STALE_ELEMENT: ${brief(oldElement)} changed or is ambiguous. Take a new browser_snapshot.`);
     }

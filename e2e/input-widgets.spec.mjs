@@ -269,10 +269,25 @@ test('before input, an option from an open list must still be unchosen and liste
     await driver.assertTargetFresh(id, action);
     result = await driver.perform(id, action, action.el, { beforeDispatch: () => markChosen(page, 'Beta', true) });
     expect([result.state, result.error]).toEqual(['predispatch_rejected', 'STALE_TARGET: the option is already chosen']);
-    // Its combobox closed, its list still drawn.
+    // Its combobox closed, its list still drawn: refused at the check, before
+    // the journal, and while the journal is written.
     await markChosen(page, 'Beta', false);
+    const close = () => page.evaluate(() => document.querySelector('#tags').setAttribute('aria-expanded', 'false'));
+    const reopen = () => page.evaluate(() => document.querySelector('#tags').setAttribute('aria-expanded', 'true'));
     action = await listed('Beta');
-    await page.evaluate(() => document.querySelector('#tags').setAttribute('aria-expanded', 'false'));
+    await driver.assertTargetFresh(id, action);
+    await close();
+    journaled = 0;
+    result = await driver.perform(id, action, action.el, { beforeDispatch: async () => { journaled++; } });
+    expect([result.state, result.error, journaled]).toEqual(['predispatch_rejected', notListed, 0]);
+    await reopen();
+    action = await listed('Beta');
+    await driver.assertTargetFresh(id, action);
+    result = await driver.perform(id, action, action.el, { beforeDispatch: close });
+    expect([result.state, result.error]).toEqual(['predispatch_rejected', notListed]);
+    await reopen();
+    action = await listed('Beta');
+    await close();
     await expect(driver.assertTargetFresh(id, action)).rejects.toThrow(notListed);
     // The same options now show under Labels.
     await page.evaluate(() => {
@@ -294,6 +309,71 @@ test('before input, an option from an open list must still be unchosen and liste
     expect((await driver.perform(id, action, action.el)).state).toBe('dispatched_ack');
     expect(await page.evaluate(() => window.clicks)).toEqual(['tags_dropdown:Gamma']);
   } finally { await driver.close(); }
+});
+
+// Two antd selects with the same caption: identical controls. The first is
+// open and empty; the second is closed and shows `shown` when given. Each
+// lists the same options.
+const twinTags = (shown) => `<style>
+    .ant-select { position: relative; width: 240px; height: 28px; border: 1px solid #ccc; margin-bottom: 12px; }
+    .ant-select input { width: 100%; height: 26px; border: 0; }
+    .ant-select-dropdown { position: absolute; top: 140px; left: 300px; width: 200px; background: #fff; border: 1px solid #ccc; z-index: 1050; }
+    .ant-select-dropdown-hidden { display: none; }
+    .ant-select-item-option { padding: 5px 12px; cursor: pointer; }
+  </style>
+  <h1>Edit contact</h1>
+  ${['a', 'b'].map((id) => `<div class="ant-col"><div>Tags</div><div class="ant-select ant-select-multiple"><div class="ant-select-selector">${id === 'b' && shown ? `<span class="ant-select-selection-item" title="${shown}">${shown}</span>` : ''}<span class="ant-select-selection-search"><input id="${id}" role="combobox" type="search" aria-expanded="${id === 'a'}" aria-controls="${id}_list" value=""></span></div></div></div>`).join('')}
+  ${['a', 'b'].map((id) => `<div class="ant-select-dropdown${id === 'b' ? ' ant-select-dropdown-hidden' : ''}" id="${id}_dropdown"><div role="listbox" id="${id}_list" style="height:0;width:0;overflow:hidden"></div>
+    ${['Acme', 'Beta', 'Gamma'].map((name) => `<div aria-selected="false" class="ant-select-item ant-select-item-option" title="${name}">${name}</div>`).join('')}</div>`).join('')}
+  <script>
+    window.clicks = [];
+    for (const o of document.querySelectorAll('.ant-select-item-option')) o.addEventListener('click', () => {
+      window.clicks.push(o.parentElement.id + ':' + o.title);
+      o.setAttribute('aria-selected', String(o.getAttribute('aria-selected') !== 'true'));
+    });
+  </script>`;
+const chooseUnderFirst = (state) => decision({ tool: 'select', target: `${state.page.elements.find((e) => e.role === 'combobox' && e.expanded)?.i}>${pick((e) => e.role === 'option' && e.label === 'Beta')(state)}` });
+
+// Codex on ac65567: the open list moved from the chosen select to its twin
+// after Jev looked. The twin's identical option is the only one shown, and
+// its select matches the chosen one's identity. The chosen select is found by
+// what it shows (nothing), not by being the open one; it is closed now.
+test('an option is not clicked once its list has moved to an identical combobox', async ({ page }, testInfo) => {
+  await page.setContent(twinTags('Urgent'));
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    async (state) => {
+      const answer = chooseUnderFirst(state);
+      await page.evaluate(() => {
+        document.querySelector('#a').setAttribute('aria-expanded', 'false');
+        document.querySelector('#a_dropdown').classList.add('ant-select-dropdown-hidden');
+        document.querySelector('#b').setAttribute('aria-expanded', 'true');
+        document.querySelector('#b_dropdown').classList.remove('ant-select-dropdown-hidden');
+      });
+      return answer;
+    },
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(result.actions[0]).toEqual({ recovery: 'reobserve', reason: 'stale_target', input_sent: false, detail: 'STALE_TARGET: the option is no longer listed under the combobox it was chosen from' });
+    expect(result.pending_actions).toBeUndefined();
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+  } finally { await mcp.close(); }
+});
+
+// Twins that nothing tells apart but which one is open: an option from the
+// open one's list is refused, as the open list could move to the other.
+test('an option listed under one of two identical comboboxes nothing tells apart is refused, and the run stops as ambiguous', async ({ page }, testInfo) => {
+  await page.setContent(twinTags());
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([chooseUnderFirst]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Tag the contact Beta', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(result.status).toBe('ambiguous');
+    expect(result.info).toMatch(/^Jev chose option "Beta" from the list of one of several identical comboboxes on this page, and nothing tells them apart, so no input was sent/);
+    expect(result.actions.map((a) => a.detail ?? a.error)).toEqual(["STALE_TARGET: ambiguous: the option's combobox has identical twins", "STALE_TARGET: ambiguous: the option's combobox has identical twins"]);
+    expect(result.pending_actions).toBeUndefined();
+    expect(await page.evaluate(() => window.clicks)).toEqual([]);
+  } finally { await mcp.close(); }
 });
 
 // ccMonet's invoice form (Mac rerun, 2026-10-19): with the Customer list open,

@@ -47,10 +47,11 @@ export function equivalentLink(original, matches, base) {
 
 // What can tell identical controls apart once their identity matches: what
 // each one shows or holds (a hint, the value it shows, its value, options and
-// state), and the text and table column next to it.
+// state), and the text and table column next to it. `ignore` leaves out state
+// that can move from one twin to another, such as which combobox is open.
 const TELL_APART = ["hint", "display", "value_hash", "value", "near", "column", "checked", "selected", "expanded", "invalid", "readonly", "validation_message"];
-export function twinKey(e) {
-  return JSON.stringify([...TELL_APART.map((key) => e?.[key] ?? null), (e?.options || []).map((o) => [o.text, o.value, !!o.selected, !!o.disabled])]);
+export function twinKey(e, ignore = []) {
+  return JSON.stringify([...TELL_APART.map((key) => (ignore.includes(key) ? null : e?.[key] ?? null)), (e?.options || []).map((o) => [o.text, o.value, !!o.selected, !!o.disabled])]);
 }
 
 // Identical controls, such as unnamed selects in one filter row: where `el`
@@ -58,18 +59,19 @@ export function twinKey(e) {
 // order: a page can swap equal nodes without anything observed changing, so
 // order cannot show which node was chosen. `distinct` is false when nothing
 // observed tells `el` from another; then it is refused (see pickTwin).
-export function twinsOf(el, page) {
+export function twinsOf(el, page, { ignore = [] } = {}) {
   const twins = page.elements.filter((e) => e.frame_id === el.frame_id && e.document_id === el.document_id && sameIdentity(el, e, page.url));
   if (twins.length < 2 || !twins.includes(el)) return undefined;
-  const key = twinKey(el);
-  return { count: twins.length, key, distinct: twins.filter((e) => twinKey(e) === key).length === 1 };
+  const key = twinKey(el, ignore);
+  return { count: twins.length, key, ...(ignore.length ? { ignore } : {}), distinct: twins.filter((e) => twinKey(e, ignore) === key).length === 1 };
 }
 
 // The one of `matches` that still shows what the chosen twin showed, if it
-// was told apart from the others then and only one shows it now.
+// was told apart from the others then and only one shows it now. That holds
+// when only one match is left too: it may be the other twin.
 export function pickTwin(twins, matches) {
   if (!twins?.distinct) return undefined;
-  const same = matches.filter((e) => twinKey(e) === twins.key);
+  const same = matches.filter((e) => twinKey(e, twins.ignore) === twins.key);
   return same.length === 1 ? same[0] : undefined;
 }
 
