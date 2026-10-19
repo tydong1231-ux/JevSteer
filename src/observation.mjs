@@ -10,7 +10,8 @@ export function transientNavigationError(error) {
 function expectsNavigation(before, action) {
   if (action?.tool === "press_enter" && (action.el?.type === "search" || action.el?.role === "searchbox")) return true;
   if (action?.tool === "click" && action.el?.form_action) return true;
-  if (action?.tool !== "click" || !(action.el?.tag === "a" || action.el?.role === "link") || !action.el?.href) return false;
+  // A same-document link ("#", "#section", "#/route") loads no new page.
+  if (action?.tool !== "click" || !(action.el?.tag === "a" || action.el?.role === "link") || !action.el?.href || action.el.href.startsWith("#")) return false;
   try {
     const destination = new URL(action.el.href, before.url);
     return ["http:", "https:"].includes(destination.protocol) && destination.href !== before.url;

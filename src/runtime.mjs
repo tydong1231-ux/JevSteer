@@ -283,7 +283,9 @@ export class JevSteerRuntime {
     const sessionId = this.driver.sessionId;
     if (!sessionId) return;
     const foreign = (await this.journal.pendingSession(sessionId)).filter((r) => r.page_id !== tabId);
-    if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: inspect and resolve prior page outcomes before input on a replacement page: ${foreign.map((r) => `${r.page_id}/${r.id}`).join(', ')}`);
+    // The page may be closed by now; its record still blocks this session and
+    // browser_resolve_action still accepts its tab_id.
+    if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so input on another page is blocked: ${foreign.map((r) => `${r.tool} on tab_id ${r.page_id} (action_id ${r.id}, ${r.created_at})`).join("; ")}. Inspect what it did on the site, then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
   }
 
   async open(url, { tabId, newTab = true } = {}) {

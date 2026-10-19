@@ -68,6 +68,19 @@ export function readDOM(elements) {
   for (const e of document.querySelectorAll('dialog[open],[role=dialog][aria-modal=true]')) if (visible(e) && !modals.includes(e)) modals.push(e);
   const modal = modals.at(-1);
   const permitted = (e) => !modal || ancestors(e).includes(modal) || !!closest(e, '[role=listbox],[role=option]');
+  // Only a submit control of a GET form loads the form's action. Checkboxes,
+  // radios and fields in that form change nothing until it is submitted.
+  const getAction = (e) => {
+    const submits = e.tagName === 'BUTTON' ? !['button', 'reset'].includes(e.type) : e.tagName === 'INPUT' && ['submit', 'image'].includes(e.type);
+    if (!submits || !e.form) return undefined;
+    const method = e.hasAttribute('formmethod') ? e.formMethod : e.form.method;
+    const action = e.getAttribute('formaction') || e.form.getAttribute('action');
+    if (String(method || 'get').toLowerCase() !== 'get' || !action) return undefined;
+    try {
+      const url = new URL(action, document.baseURI);
+      return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined;
+    } catch { return undefined; }
+  };
   const describe = (e, index) => {
     const form = e.form || closest(e, 'form,[role=form]');
     const section = closest(e, 'fieldset,[role=group],[role=dialog],dialog');
@@ -89,7 +102,7 @@ export function readDOM(elements) {
       invalid: e.getAttribute('aria-invalid') === 'true' || (e.willValidate && !e.validity.valid) || false,
       validation_message: e.validationMessage || '', context: local, scope: scope || '',
       form_key: formKey || '', record_key: recordKey || '',
-      form_action: form && (form.method || 'get').toLowerCase() === 'get' ? form.getAttribute('action') || undefined : undefined,
+      form_action: getAction(e),
       options: e.tagName === 'SELECT' ? [...e.options].map((o) => ({ text: clean(o.text), value: o.value, selected: o.selected, disabled: o.disabled || o.parentElement?.disabled === true })) : undefined,
     };
     return descriptor;

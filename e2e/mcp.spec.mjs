@@ -178,6 +178,8 @@ test('replacement pages cannot bypass an unknown session write, and old records 
     const newRef = (await mcp.driver.pages()).find((p) => p.pageId !== mcp.id);
     await expect(mcp.call('browser_run', { tab_id: newRef.pageId, goal: 'Continue with another run', evidence_level: 'none' })).rejects.toThrow(/UNCONFIRMED_SESSION_ACTION/);
     await page.close();
+    // After the page is gone the error still names its tab_id, action_id and the way out.
+    await expect(mcp.call('browser_open', { url: 'about:blank' })).rejects.toThrow(`click on tab_id ${mcp.id} (action_id ${record.id}, ${record.created_at}). Inspect what it did on the site, then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
     const resolution = await mcp.call('browser_resolve_action', { tab_id: mcp.id, action_id: record.id, resolution: 'not_applied', evidence: 'Independent fixture oracle confirms no request reached the server' });
     expect(resolution.resolution).toBe('not_applied');
     await replacement.close();

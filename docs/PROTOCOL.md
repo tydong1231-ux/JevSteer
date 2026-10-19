@@ -223,8 +223,10 @@ stable directory for short-lived MCP processes. Host acceptance, login, CAPTCHA,
 irreversible confirmation and visual fallback remain explicit protocol outcomes.
 
 Transient content-script teardown is retried a bounded number of times during
-observation. Link navigation, explicit GET search forms and search Enter wait for route progress
-within `JEVSTEER_NAVIGATION_SETTLE_MS`; no browser input is replayed by this wait.
+observation. Link navigation, the submit button of an explicit GET search form
+and search Enter wait for route progress within `JEVSTEER_NAVIGATION_SETTLE_MS`;
+no browser input is replayed by this wait. Checkboxes, radios and fields inside
+that form, and same-page `#` links, are judged in place without that wait.
 `browser_open` can return `navigation_unconfirmed` with a `tab_id` when its
 acknowledgement is lost and fresh DOM metadata cannot confirm the exact requested
 URL. Inspect that tab before another navigation. Redirects to a different URL

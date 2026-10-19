@@ -61,17 +61,20 @@ export function verifyActionEffect(before, after, action) {
     }
   }
 
+  // A checkable control's own state is its effect, even inside a form or a
+  // link. Only when the click loaded another page is that load the effect.
+  if (action.tool === "click" && (["checkbox", "radio"].includes(action.el?.type) || ["checkbox", "radio", "switch"].includes(action.el?.role))
+      && typeof action.el?.checked === "boolean") {
+    if (typeof current?.checked === "boolean") return { status: current.checked !== action.el.checked ? "confirmed" : "failed", check: "checked_state" };
+    if (!current && before.url !== after.url) return { status: "confirmed", check: "navigation" };
+  }
+
   if (action.tool === "click" && (action.tag === "a" || action.role === "link" || action.el?.form_action)) {
     return { status: before.url !== after.url ? "confirmed" : (changed ? "changed" : "unknown"), check: "navigation" };
   }
 
   if (action.tool === "press_enter" && (action.el?.type === "search" || action.el?.role === "searchbox")) {
     return { status: before.url !== after.url ? "confirmed" : (changed ? "changed" : "unknown"), check: "navigation" };
-  }
-
-  if (action.tool === "click" && (["checkbox", "radio"].includes(action.el?.type) || ["checkbox", "radio", "switch"].includes(action.el?.role))
-      && typeof current?.checked === "boolean" && typeof action.el?.checked === "boolean") {
-    return { status: current.checked !== action.el.checked ? "confirmed" : "failed", check: "checked_state" };
   }
 
   if (["click", "press_enter", "press_key", "hover", "scroll"].includes(action.tool)) {
