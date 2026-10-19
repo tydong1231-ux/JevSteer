@@ -358,7 +358,10 @@ exact, including whitespace and empty strings. For example:
 new input begins after exhaustion, while an already dispatched command retains
 its transport timeout. `JEVSTEER_ACTION_SETTLE_MS` defaults to 8000 and
 `JEVSTEER_OBSERVATION_QUIET_MS` to 250, and `JEVSTEER_REVIEW_QUIET_MS`, the
-quiet period before a host review ticket binds the page, to 1000. With the
+quiet period before a host review ticket binds the page, to 1000. A `wait`
+watches the page for up to `JEVSTEER_WAIT_MS` (default 5000) and ends as soon as
+it changes; `JEVSTEER_MAX_IDLE_WAITS` (default 2) waits in a row that saw
+nothing change stop the milestone as `stuck`. With the
 Playwright driver each round waits for quiet full snapshots only, and for open
 XHR/fetch requests the last input started; the Kapture DOM-metadata settle poll
 is skipped because Playwright metadata carries no DOM size. Link navigation, explicit GET search-form

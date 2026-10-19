@@ -14,10 +14,12 @@ const report = (handler) => `<title>Profit and Loss</title><h1>Profit and Loss</
 
 async function serve(page, body) {
   await page.route('https://jevsteer.test/**', async (route) => {
-    if (new URL(route.request().url()).pathname === '/api/report') {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/report') {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       return route.fulfill({ json: { heading: 'For the period 2026/1/1 - 2026/12/31', income: '12,500.00' } });
     }
+    if (path.startsWith('/api/')) return route.fulfill({ json: { ok: true } });
     return route.fulfill({ contentType: 'text/html', body });
   });
   await page.goto('https://jevsteer.test/profit-and-loss');
@@ -41,6 +43,26 @@ test('a Generate click is watched until its report request returns', async ({ pa
     // One click, seen to change the page; no wait and no second click.
     expect(result.actions.map((a) => [a.action, a.effect?.status, a.requests])).toEqual([['click', 'changed', 1]]);
     await expect(page.locator('#report')).toHaveText('For the period 2026/1/1 - 2026/12/31 Income 12,500.00');
+  } finally { await mcp.close(); }
+});
+
+// Like ccMonet: Generate's requests return at once, and the report shows
+// seconds later with nothing open or spinning. One wait watches until it does.
+test('a report that shows seconds after its request returns is seen within one wait', async ({ page }, testInfo) => {
+  await serve(page, report(`async () => {
+    await fetch('/api/report/start');
+    setTimeout(() => { document.querySelector('#report').textContent = 'For the period 2026/1/1 - 2026/12/31 Income 12,500.00'; }, 3500);
+  }`));
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'click', target: pick((e) => e.label === 'Generate')(state) }),
+    (state) => decision(state.page.text.includes('For the period') ? { tool: 'none', done: 0.99 } : { tool: 'wait' }),
+  ]));
+  mcp.runtime.observation = { ...mcp.runtime.observation, maxMs: 8000, quietMs: 150 };
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Generate the Profit and Loss report', verification_mode: 'host', max_actions: 4, evidence_level: 'none' });
+    expect(result.status).toBe('host_review_required');
+    expect(result.actions.map((a) => [a.action, a.effect?.status, a.requests, a.page_changed])).toEqual([['click', 'unknown', 1, undefined], ['wait', 'unknown', undefined, undefined]]);
+    expect(result.verification.observation.text).toContain('For the period 2026/1/1 - 2026/12/31');
   } finally { await mcp.close(); }
 });
 

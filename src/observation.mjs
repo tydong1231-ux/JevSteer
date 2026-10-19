@@ -27,6 +27,34 @@ export function observationSignature(page) {
   return createHash("sha256").update(JSON.stringify(state)).digest("hex");
 }
 
+const digest = (value) => createHash("sha256").update(String(value)).digest("hex");
+
+// The state a host review ticket binds. A toast ("Update successfully") goes
+// away on its own seconds later, so its text is left out. The ticket keeps
+// digests of the toasts it showed: any other toast at acceptance, such as a
+// late error, still makes the ticket stale.
+export function reviewedState(page) {
+  const toasts = (page.toasts || []).filter((toast) => toast && page.text?.includes(toast));
+  // An element's context is its row's or parent's text, which can hold a
+  // toast shown next to it.
+  const without = (value) => {
+    if (value == null) return value;
+    let text = String(value);
+    for (const toast of toasts) {
+      const at = text.lastIndexOf(toast);
+      if (at >= 0) text = `${text.slice(0, at)} ${text.slice(at + toast.length)}`;
+    }
+    return text.replace(/\s+/g, " ").trim();
+  };
+  const elements = page.elements.filter((e) => !e.toast).map((e) => ({ ...e, context: without(e.context) }));
+  return { digest: observationSignature({ ...page, text: without(String(page.text ?? "")), elements }), toasts: toasts.map(digest) };
+}
+
+export function sameReviewedState(page, record) {
+  const now = reviewedState(page);
+  return now.digest === record.state_digest && now.toasts.every((toast) => (record.toasts || []).includes(toast));
+}
+
 // A click that changes nothing at first may still be at work: a handler can
 // wait before sending its request. Watch a little longer before reporting it.
 // Clicking into a text field or a native select only focuses or opens it.

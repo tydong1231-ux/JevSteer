@@ -139,8 +139,18 @@ substitute for the host checking all semantic criteria and rejecting weak matche
 
 A pending ticket blocks browser input, navigation and new runs on that tab across
 MCP restarts. Acceptance requires the same observed page state and a non-busy page.
+A toast, such as antd's "Update successfully" message or another fixed-position
+alert or status region, goes away on its own, so the state a ticket binds leaves
+its text out; the host still sees it in the ticket's observation. The ticket keeps
+a digest of each toast it showed, and any other toast at acceptance, such as a
+late error, makes the ticket stale.
 `host_review_stale` requires rejection and re-observation of the same milestone,
-not replaying the earlier action. Rejection does not clear uncertain mutations;
+not replaying the earlier action. After a stale ticket is rejected, rerunning
+that milestone with the same `run_id` re-observes: in host and hybrid modes the
+runtime checks the contract on the current page before Jev decides anything, and
+issues a fresh ticket when it holds. Only when the check fails does Jev act
+again. A ticket rejected for its result rather than for staleness resumes
+normally. Rejection does not clear uncertain mutations;
 acceptance resolves only the originating run/milestone's pending actions, retaining
 remote replay guards. Review storage contains hashes and protocol metadata only,
 not raw page, task values or evidence prose. CAPTCHA/login, irreversible actions,
@@ -162,11 +172,15 @@ never replays the request, resolves the journal or accepts the result automatica
 Missing/busy outcomes time out and remain unconfirmed.
 
 After a remote write this milestone sent, such as Create or Save, Jev may see no
-clear next step because the goal is already reached. Before returning
-`needs_guidance`, the runtime then checks the contract on the current page. A
-pass completes the milestone (`completed_verified`, or `host_review_required` in
-host mode or when hybrid verification is unsure); otherwise the milestone still
-stops with `needs_guidance`. No input is sent for this check.
+clear next step, no action at all, or no confident target, because the goal is
+already reached. Before stopping with `needs_guidance`, `stuck` or `ambiguous`,
+the runtime then checks the contract on the current page. Completion still takes
+both keys: Jev's own reading (a done score of at least 0.35) and the verifier.
+A verifier pass that Jev does not share goes to the host
+(`host_review_required` in host and hybrid modes; `verification_uncertain` in
+jev mode, with the write still pending). A pass both agree on completes the
+milestone (`completed_verified`, or `host_review_required` in host mode). When
+the check fails, the milestone stops as before. No input is sent for this check.
 
 Multiple remote writes need separately reviewable outcomes. If an earlier write is
 unconfirmed, independently inspect and resolve it before the next mutation; do not
@@ -270,14 +284,20 @@ that has changed nothing yet is watched for 1 s more, since handlers can wait
 before sending a request; clicks into text fields and native selects are not.
 Each action in the result carries `requests`: how many data requests the page
 sent after it. A click with an `unknown` effect and `requests: 0` did not reach
-a handler that does anything visible or remote. Link navigation, the submit button of an explicit GET search form
+a handler that does anything visible or remote. Jev's next decision sees these
+counts; the effect and constraint guards do not, so a form that checks a name
+as it is typed does not make its Add button look like a save. Link navigation, the submit button of an explicit GET search form
 and search Enter wait for route progress within `JEVSTEER_NAVIGATION_SETTLE_MS`;
 no browser input is replayed by this wait. Checkboxes, radios and fields inside
 that form, and same-page `#` links, are judged in place without that wait.
-A `wait` after which the page did not change and nothing on it is loading is
-marked `page_changed: false` in history. `JEVSTEER_MAX_IDLE_WAITS` (default 3)
-such waits in a row stop the milestone as `stuck`; `JEVSTEER_MAX_WAITS`
-(default 12) bounds all waits.
+A `wait` watches the page for up to `JEVSTEER_WAIT_MS` (default 5000, never more
+than the action settle budget) and ends as soon as the page changes. ccMonet's
+Profit and Loss report, for example, shows about 6 s after Generate, after its
+requests have returned and with no spinner; one wait now sees it. A wait after
+which the page did not change, nothing on it is loading and the page sent no new
+request is marked `page_changed: false` in history. `JEVSTEER_MAX_IDLE_WAITS`
+(default 2) such waits in a row stop the milestone as `stuck`;
+`JEVSTEER_MAX_WAITS` (default 12) bounds all waits.
 `browser_open` can return `navigation_unconfirmed` with a `tab_id` when its
 acknowledgement is lost and fresh DOM metadata cannot confirm the exact requested
 URL. Inspect that tab before another navigation. Redirects to a different URL

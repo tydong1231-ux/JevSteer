@@ -189,3 +189,46 @@ test("hybrid uncertainty goes to host but hard semantic failure remains a failur
 test("host mode cannot convert a CAPTCHA or login stop into an accepted review",async()=>{
  for(const scores of [{blocked:0.99},{login:0.99}]){const k=new MemoryKapture({text:"REF-42"});const r=memoryRuntime(k,scriptedDecider([{...ready,...scores}]));const result=await r.run("Inspect",options);assert(["blocked","needs_login"].includes(result.status));assert.equal(await r.reviews.pending("test"),undefined);}
 });
+
+test("a toast that goes away does not make a ticket stale; a new toast or any other change does",async()=>{
+ const toast={i:0,tag:"button",role:"button",label:"Close",selector:"#close",toast:true};
+ for(const [after,status] of [
+  [{text:"REF-42",toasts:[],elements:[]},"completed_host_verified"],
+  [{text:"REF-42 Update successfully"},"completed_host_verified"],
+  [{text:"REF-42 Sync failed",toasts:["Sync failed"],elements:[]},"host_review_stale"],
+  [{text:"REF-43",toasts:[],elements:[]},"host_review_stale"],
+ ]){
+  const k=new MemoryKapture({text:"REF-42 Update successfully",toasts:["Update successfully"],elements:[toast]});
+  const r=memoryRuntime(k,scriptedDecider([ready]));
+  const result=await r.run("Inspect REF-42",options);
+  assert.equal(result.status,"host_review_required");
+  // The host still sees the toast in the ticket.
+  assert.match(result.verification.observation.text,/Update successfully/);
+  Object.assign(k.page,after);
+  assert.equal((await r.reviewResult(proof(result))).status,status,JSON.stringify(after));
+ }
+});
+
+test("after a stale ticket is rejected, rerunning the milestone re-observes before any input",async()=>{
+ const k=new MemoryKapture({text:"REF-42",elements:[{i:0,tag:"button",role:"button",label:"New",selector:"#new"}]});
+ // Jev would click New if asked; the re-observation must not ask it.
+ const r=memoryRuntime(k,scriptedDecider([ready,{tool:"click",target:0,side_effect:0.01}]));
+ const first=await r.run("Inspect REF-42",options);
+ k.page.text="REF-42 Todo 39";
+ assert.equal((await r.reviewResult(proof(first))).status,"host_review_stale");
+ await r.reviewResult(proof(first,"reject"));
+ const again=await r.run("Inspect REF-42",{...options,runId:first.run_id});
+ assert.equal(again.status,"host_review_required");
+ assert.notEqual(again.host_review.review_id,first.host_review.review_id);
+ assert.equal(again.jev_calls,0);assert.equal(again.actions.length,0);assert.equal(k.commands.length,0);
+ assert.equal((await r.reviewResult(proof(again))).status,"completed_host_verified");
+});
+
+test("a ticket rejected for its result, not for staleness, resumes with Jev deciding",async()=>{
+ const k=new MemoryKapture({text:"REF-42",elements:[]});
+ const r=memoryRuntime(k,scriptedDecider([ready]));
+ const first=await r.run("Inspect REF-42",options);
+ await r.reviewResult(proof(first,"reject"));
+ const again=await r.run("Inspect REF-42",{...options,runId:first.run_id});
+ assert.equal(again.jev_calls,1);
+});

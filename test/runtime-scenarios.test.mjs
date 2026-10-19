@@ -133,9 +133,9 @@ test("waits that change nothing on a settled page are marked for Jev and stop th
   const decider = scriptedDecider([(state) => { seen = structuredClone(state.task.history); return decision({ tool: "wait" }); }]);
   const result = await memoryRuntime(k, decider).run("Show the report through 2026/12/31", { maxActions: 20, evidenceLevel: "none" });
   assert.equal(result.status, "stuck");
-  assert.match(result.info, /did not change in 3 waits and nothing on it is loading/);
+  assert.match(result.info, /did not change in 2 waits and nothing on it is loading/);
   // What Jev saw on its last decision: each earlier wait changed nothing.
-  assert.deepEqual(seen.map((h) => [h.action, h.page_changed]), [["wait", false], ["wait", false], ["wait", false]]);
+  assert.deepEqual(seen.map((h) => [h.action, h.page_changed]), [["wait", false], ["wait", false]]);
   assert.equal(k.commands.length, 0);
 });
 
@@ -159,12 +159,42 @@ const saveCustomer = { successCriteria: ["A saved customer row shows the exact n
 
 test("after a sent Create, an unclear next step checks the contract before asking for guidance", async () => {
   const k = customerForm();
-  // Jev does not mark the task done after Create and is unsure what comes next.
-  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1 }]));
+  // Jev half believes the customer is saved and is unsure what comes next.
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1, done: 0.5 }]));
   const result = await runtime.run("Save customer JevSteer QA P1019B", saveCustomer);
   assert.equal(result.status, "completed_verified");
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
   assert.deepEqual(await runtime.journal.pending("test"), []);
+});
+
+test("after a sent Create, a verifier pass that Jev does not share goes to the host", async () => {
+  // Jev does not find the goal reached; only the verifier does.
+  for (const [mode, status] of [["hybrid", "host_review_required"], ["jev", "verification_uncertain"]]) {
+    const k = customerForm();
+    const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1 }]));
+    const result = await runtime.run("Save customer JevSteer QA P1019B", { ...saveCustomer, verificationMode: mode });
+    assert.equal(result.status, status, mode);
+    assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+    // The Create stays pending until the host accepts or resolves it.
+    assert.equal((await runtime.journal.pending("test")).length, 1);
+  }
+});
+
+// Jev picks the new row, but with too little confidence to click it.
+const unsureTarget = (done = 0.01) => () => ({ ...decision({ done }), target: { choice: "0", probabilities: { 0: 0.1 } } });
+
+test("after a sent Create, Jev seeing no action or no clear target also checks the contract first", async () => {
+  for (const [next, status] of [[{ tool: "none", done: 0.2 }, "host_review_required"], [unsureTarget(), "host_review_required"], [unsureTarget(0.5), "completed_verified"]]) {
+    const k = customerForm();
+    const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, next]));
+    const result = await runtime.run("Save customer JevSteer QA P1019B", saveCustomer);
+    assert.equal(result.status, status);
+    assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  }
+  // When the check fails, the stop is the same as before.
+  const k = customerForm();
+  const failed = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, unsureTarget(0.5)], { verifyScore: 0.1 })).run("Save customer JevSteer QA P1019B", saveCustomer);
+  assert.equal(failed.status, "ambiguous");
 });
 
 test("after a sent Create, an uncertain check goes to the host; without a write the host is asked for guidance", async () => {
@@ -289,4 +319,48 @@ test("Playwright rounds wait on full observations, not the URL/title metadata po
   assert.equal((await runtime.settledPage("tab")).loading.busy, false);
   assert.equal(details, 0);
   assert.equal(reads, 2);
+});
+
+test("a wait ends as soon as the page changes", async () => {
+  // The report shows 300 ms into the wait; the wait does not run its full 5 s.
+  const k = new MemoryKapture({ text: "Profit and Loss", elements: [button] });
+  const runtime = memoryRuntime(k, scriptedDecider([
+    () => { setTimeout(() => { k.page.text = "Profit and Loss For the period 2026/1/1 - 2026/12/31"; }, 300); return decision({ tool: "wait" }); },
+    (state) => decision(state.page.text.includes("For the period") ? { tool: "none", done: 0.99 } : { tool: "wait" }),
+  ]));
+  runtime.observation = { maxMs: 8000, quietMs: 0, pollMs: 20, waitMs: 5000 };
+  const started = Date.now();
+  const result = await runtime.run("Show the report", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(result.status, "completed_verified");
+  assert.deepEqual(result.actions.map((a) => [a.action, a.page_changed]), [["wait", undefined]]);
+  assert.ok(Date.now() - started < 2500, `took ${Date.now() - started} ms`);
+});
+
+test("a wait in which the page sent requests is not idle", async () => {
+  const k = new MemoryKapture({ text: "Generating", elements: [button] });
+  let sent = 0;
+  // A job the page polls: each wait sees one more request, and no change yet.
+  const runtime = memoryRuntime(k, scriptedDecider([() => { k.page.requests_since_input = ++sent; return decision({ tool: "wait" }); }]));
+  const result = await runtime.run("Show the report", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(result.status, "max_actions");
+  assert.ok(result.actions.every((a) => a.page_changed === undefined));
+});
+
+test("the effect and constraint guards do not see how many requests earlier inputs sent", async () => {
+  const k = new MemoryKapture({ text: "Add Customer", elements: [button] });
+  k.onCommand = (command) => { if (command === "click") k.page.requests_since_input = 3; };
+  const guards = [];
+  let decided;
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.01 }, { side_effect: 0.01 }, { tool: "none", done: 0.99 }], {
+    inspect: (state, questions) => {
+      if (questions.action_side_effect || questions.violates) guards.push(state.task.history);
+      else if (questions.tool) decided = state.task.history;
+    },
+  }));
+  await runtime.run("Add two contact rows", { constraints: ["Do not save"], maxActions: 4, evidenceLevel: "none" });
+  // Jev's own next step sees the count; the guards judge without it.
+  assert.equal(decided[0].requests, 3);
+  const later = guards.filter((history) => history.length);
+  assert.ok(later.length >= 2);
+  assert.ok(later.every((history) => history.every((entry) => !("requests" in entry))));
 });
