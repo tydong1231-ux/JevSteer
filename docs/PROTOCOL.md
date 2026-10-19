@@ -202,7 +202,8 @@ field, later in the page, across from it and at most 64 px under or over it,
 that holds a control other than a text field, is the field's popup. Its
 controls carry `popup_of`, and Jev's page gets
 `popup: { field, field_value, shows }`, also in the first call of a two-stage
-decision on a large page. The floating parts of the next line item (an antd
+decision on a large page. A secret field's popup is left out, because it can
+echo what was typed there. The floating parts of the next line item (an antd
 select's search box, a remove button at the row's end), a fixed bar above the
 field and a footer far below it are not popups. A field this run typed keeps
 the `hint` it showed then, so the search box still reads as "Search contacts,

@@ -94,12 +94,14 @@ function modelElement(e, multiFrame) {
 
 // What the focused field's popup shows, next to that field: search results
 // under a global search box read as that box's results, not as page text.
+// A secret field's popup can echo what was typed ("hunter2 is too common"),
+// so it is left out, like the text next to such a field.
 function popupForModel(page) {
   const field = page.popup && page.elements.find((e) => e.i === page.popup.field);
-  if (!field || !squash(page.popup.text)) return undefined;
+  if (!field || sensitiveField(field) || !squash(page.popup.text)) return undefined;
   return {
     field: `[${field.i}] ${brief(field)}`,
-    ...(sensitiveField(field) ? {} : { field_value: squash(field.value, 80) }),
+    field_value: squash(field.value, 80),
     shows: squash(page.popup.text, 600),
   };
 }

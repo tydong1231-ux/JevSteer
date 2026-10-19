@@ -6,6 +6,7 @@
 import { test, expect } from '@playwright/test';
 import { driverFor, mcpFixture } from './helpers.mjs';
 import { scriptedDecider, decision } from '../test/helpers/runtime.mjs';
+import { toModelPage } from '../src/page-model.mjs';
 
 const bills = `
   <header style="display:flex;gap:24px;align-items:center;height:56px">
@@ -111,6 +112,33 @@ test('Enter that Jev chose for the box it typed in goes to that box, though its 
     expect(await page.evaluate(() => window.entered)).toBe('CP-MEIJI');
     expect(result.status).toBe('host_review_required');
   } finally { await mcp.close(); }
+});
+
+// A password box whose strength popup echoes what was typed, after more page
+// text than Jev reads.
+const secretEcho = `<p>${'Terms of service. '.repeat(560)}</p>
+  <div class="pw" style="position:relative;width:300px">
+    <input type="password" aria-label="Password" style="width:100%">
+    <div id="strength" style="position:absolute;left:0;top:100%;margin-top:4px;display:none;background:#fff"><span id="echo"></span> is too common <button type="button">Suggest another</button></div>
+  </div>
+  <script>
+    const pw = document.querySelector('.pw input');
+    pw.addEventListener('input', () => { document.querySelector('#echo').textContent = pw.value; document.querySelector('#strength').style.display = pw.value ? '' : 'none'; });
+  </script>`;
+
+test('a secret field\'s popup is left out of Jev\'s page, though the snapshot finds it', async ({ page }) => {
+  await page.setContent(secretEcho);
+  const { driver, id } = await driverFor(page);
+  try {
+    await page.fill('.pw input', 'hunter2');
+    const seen = await driver.observe(id);
+    const field = seen.elements.find((e) => e.type === 'password');
+    expect(field.value).toBe('[REDACTED]');
+    expect(seen.popup).toEqual({ field: field.i, text: 'hunter2 is too common Suggest another' });
+    const model = toModelPage(seen);
+    expect(model.popup).toBeUndefined();
+    expect(model.text).not.toContain('hunter2');
+  } finally { await driver.close(); }
 });
 
 // An invoice's line items: antd draws each Product select's search input in an

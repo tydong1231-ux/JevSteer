@@ -56,13 +56,19 @@ test("a hint and a table column reach Jev; a hint names a field only when nothin
   assert.match(formatPage(page), /\[0\] <input> role=textbox type=text hint="Search contacts, vendor bills..."/);
 });
 
-test("the focused field's popup shows next to that field, never with a secret value", () => {
+test("the focused field's popup shows next to that field; a secret field's popup is left out", () => {
   const field = { i: 3, tag: "input", role: "textbox", label: "", hint: "Search contacts", value: "CP-MEIJI" };
   const page = { url: "https://erp.test", title: "Bills", text: "Vendor 1 CP-MEIJI CO.,LTD.", elements: [field, { i: 6, tag: "div", label: "CP-MEIJI CO.,LTD.", popup_of: 3 }], popup: { field: 3, text: "Vendor 1 CP-MEIJI CO.,LTD." } };
   const model = toModelPage(page);
   assert.deepEqual(model.popup, { field: '[3] textbox "Search contacts"', field_value: "CP-MEIJI", shows: "Vendor 1 CP-MEIJI CO.,LTD." });
   assert.equal(model.elements[1].popup_of, 3);
-  const secret = toModelPage({ ...page, elements: [{ ...field, type: "password", label: "Password" }] });
-  assert.equal(secret.popup.field_value, undefined);
+  // A popup that echoes what was typed in a secret field is left out of
+  // Jev's page, also when it lies beyond the page text Jev reads.
+  for (const secret of [{ type: "password", label: "Password" }, { label: "API token" }]) {
+    const echo = { ...page, text: "x".repeat(9000), elements: [{ ...field, ...secret, value: "hunter2" }], popup: { field: 3, text: "hunter2 is too common" } };
+    const model = toModelPage(echo);
+    assert.equal(model.popup, undefined);
+    assert.doesNotMatch(JSON.stringify(model), /hunter2/);
+  }
   assert.equal(toModelPage({ ...page, popup: { field: 9, text: "x" } }).popup, undefined);
 });
