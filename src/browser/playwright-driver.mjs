@@ -9,6 +9,7 @@ import { PageEvents } from './events.mjs';
 import { sessionIdentity, physicalPageId } from './sessions.mjs';
 import { dispatchInput } from './driver.mjs';
 import { inspectBusinessDOM } from './inspect.mjs';
+import { SENSITIVE_PATTERNS } from '../sensitive.mjs';
 
 export class PlaywrightDriver {
   constructor(options = {}) {
@@ -222,7 +223,7 @@ export class PlaywrightDriver {
   async inspect(ref) {
     const record = await this.record(ref);
     if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
-    return { page_id: record.pageId, session_id: this.sessionId, ...(await record.page.evaluate(inspectBusinessDOM)) };
+    return { page_id: record.pageId, session_id: this.sessionId, ...(await record.page.evaluate(inspectBusinessDOM, SENSITIVE_PATTERNS)) };
   }
   async startEvents(ref) { await this.record(ref); return { monitoring: true }; }
   async stopEvents() {}

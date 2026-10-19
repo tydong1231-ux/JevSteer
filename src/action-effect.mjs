@@ -1,5 +1,12 @@
-import { elementFingerprint, pageDiff } from "./page-model.mjs";
+import { createHash } from "node:crypto";
+import { elementFingerprint, pageDiff, squash } from "./page-model.mjs";
 import { locateSameElement } from "./element-identity.mjs";
+
+// Kapture snapshots give rich-text editors and custom textboxes no value; their
+// content is element text, whitespace-collapsed and cut to this many chars.
+const TEXT_CHARS = 180;
+
+const digest = (value) => createHash("sha256").update(String(value ?? "")).digest("hex");
 
 function findAfter(after, action) {
   if (!action?.el) return undefined;
@@ -17,11 +24,19 @@ export function verifyActionEffect(before, after, action) {
   const current = findAfter(after, action);
 
   if (action.tool === "type") {
-    if (action.el?.type === "password") return { status: "unknown", check: "field_value_redacted" };
-    if (!current) return { status: "unknown", check: "field_value" };
+    const secret = action.el?.type === "password" || current?.value === "[REDACTED]";
+    if (!current) return { status: "unknown", check: secret ? "field_value_redacted" : "field_value" };
     if (current.invalid) return { status: "failed", check: "field_validation" };
-    const actual = String(current.value ?? "");
-    const expected = String(action.expected_value ?? "");
+    if (secret) {
+      // Secret values are never compared as text. The Playwright snapshot keeps
+      // a digest of the live value, which still confirms or rejects the fill.
+      if (!current.value_hash) return { status: "unknown", check: "field_value_redacted" };
+      return { status: current.value_hash === digest(action.expected_value) ? "confirmed" : "failed", check: "field_value_hash" };
+    }
+    const native = current.tag === "input" || current.tag === "textarea";
+    const asText = !native && current.value == null && current.text != null;
+    const actual = asText ? squash(current.text, TEXT_CHARS) : String(current.value ?? "");
+    const expected = asText ? squash(action.expected_value, TEXT_CHARS) : String(action.expected_value ?? "");
     return { status: actual === expected ? "confirmed" : "failed", check: "field_value" };
   }
 

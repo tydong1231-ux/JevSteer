@@ -23,6 +23,30 @@ test('MCP host oracle reads visible business cells independently without input o
   } finally { await mcp.close(); }
 });
 
+test('MCP host oracle redacts PIN and 2FA controls like sensitiveName()', async ({ page }, testInfo) => {
+  await page.setContent('<label>PIN<input value="1234"></label><label>2FA code<input value="654321"></label><input name="card_pin" aria-label="Card" value="9999"><label>Shipping address<input value="1 Main St"></label>');
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([{ tool: 'none', done: 0.99 }]));
+  try {
+    const oracle = await mcp.call('browser_inspect', { tab_id: mcp.id });
+    expect(oracle.controls.map((e) => e.value)).toEqual(['[REDACTED]', '[REDACTED]', '[REDACTED]', '1 Main St']);
+    expect(JSON.stringify(oracle)).not.toMatch(/1234|654321|9999/);
+  } finally { await mcp.close(); }
+});
+
+test('typing a host-supplied PIN is confirmed without exposing it', async ({ page }, testInfo) => {
+  await page.setContent('<h1>Card settings</h1><label>Card PIN<input id="pin" autocomplete="off"></label>');
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'type', target: lookup(state, 'Card PIN') }),
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Enter the supplied card PIN without saving', values: { pin: '4321' }, verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    await expect(page.locator('#pin')).toHaveValue('4321');
+    expect(result.status).toBe('host_review_required');
+    expect(JSON.stringify(result)).not.toContain('4321');
+  } finally { await mcp.close(); }
+});
+
 test('exact constraint guard rejects low-risk row selection before any real input', async ({ page }, testInfo) => {
   await page.setContent('<label>Select all<input type="checkbox"></label>');
   let exact = 0;

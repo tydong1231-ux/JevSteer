@@ -52,7 +52,10 @@ export class KaptureDriver {
       if (normalize(original.href) !== normalize(current.href)) throw new Error('STALE_TARGET: target navigation changed');
     }
     if (original.name && current.name && original.name !== current.name) throw new Error('STALE_TARGET: target field changed');
-    if (['type', 'select'].includes(action.tool) && current.value != null && String(original.value ?? '') !== String(current.value)) throw new Error('STALE_TARGET: field value changed after decision');
+    // Snapshots hide password values ("[REDACTED]"), so the live value of such
+    // a field can never match; the identity check above still applies.
+    const hidden = original.type === 'password' || original.value === '[REDACTED]';
+    if (['type', 'select'].includes(action.tool) && current.value != null && !hidden && String(original.value ?? '') !== String(current.value)) throw new Error('STALE_TARGET: field value changed after decision');
     if (original.identity_version) action.el = { ...target, selector: generated(target.selector) && generated(current.selector) ? current.selector : target.selector };
   }
 

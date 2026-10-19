@@ -1,4 +1,4 @@
-const SENSITIVE_KEY = /(authorization|cookie|set-cookie|password|passwd|secret|token|api[-_]?key|otp|2fa|pin|cvv|cvc|security[-_]?code)/i;
+import { sensitiveName } from "./sensitive.mjs";
 
 function truncate(value, max = 1200) {
   const s = typeof value === "string" ? value : JSON.stringify(value);
@@ -10,7 +10,7 @@ function truncate(value, max = 1200) {
 export function safeUrl(value) {
   try {
     const url = new URL(String(value));
-    for (const key of [...url.searchParams.keys()]) if (SENSITIVE_KEY.test(key)) url.searchParams.set(key, "[REDACTED]");
+    for (const key of [...url.searchParams.keys()]) if (sensitiveName(key)) url.searchParams.set(key, "[REDACTED]");
     if (url.hash && /(access_token|id_token|secret|session|api_key|authorization)/i.test(url.hash)) url.hash = "#[REDACTED]";
     return url.toString();
   } catch {
@@ -24,7 +24,7 @@ function redact(value, depth = 0) {
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, child] of Object.entries(value)) {
-      out[key] = SENSITIVE_KEY.test(key) ? "[REDACTED]" : redact(child, depth + 1);
+      out[key] = sensitiveName(key) ? "[REDACTED]" : redact(child, depth + 1);
     }
     return out;
   }

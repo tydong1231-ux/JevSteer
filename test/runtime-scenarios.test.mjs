@@ -170,3 +170,18 @@ test("expanded evidence also redacts secrets in the request URL", async () => {
   assert(!JSON.stringify(runtime.getEvidence(packet.requests[0].evidence_ref)).includes("private-token"));
   assert(!JSON.stringify(runtime.getEvidence(packet.requests[0].evidence_ref)).includes("private-password"));
 });
+
+test("exact constraint guard sees the chosen native option, never a secret one", async () => {
+  let seen;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state) => {
+    seen = state.proposed_action;
+    return { answers: { violates: { noul: 0.05 } }, ms: 1, tokens: 1 };
+  });
+  const el = { i: 0, selector: "#status", tag: "select", role: "combobox", label: "Status", options: [{ text: "Open", value: "open" }, { text: "Closed", value: "closed" }] };
+  const contract = { goal: "Reopen the ticket", success_criteria: [], constraints: ["Do not set Status to Closed"], guidance: [] };
+  const page = { url: "https://fixture.test/ticket", title: "Ticket", text: "Status", elements: [el] };
+  assert.equal(await runtime.checkConstraintForAction(page, contract, { tool: "select", el, value: "open" }, []), 0.05);
+  assert.deepEqual(seen.selected_option, { text: "Open", value: "open" });
+  await runtime.checkConstraintForAction(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
+  assert.equal(seen.selected_option, undefined);
+});

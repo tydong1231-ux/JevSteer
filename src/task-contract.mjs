@@ -33,7 +33,12 @@ export function normalizeAssertions(assertions = []) {
     if (raw.type === "control_checked" && typeof raw.value !== "boolean") throw new Error("control_checked requires a boolean value");
     if (raw.type === "element_count" && (!Number.isInteger(raw.value) || raw.value < 0)) throw new Error("element_count requires a nonnegative integer");
     if (raw.type === "field_equals" && typeof raw.value !== "string") throw new Error("field_equals requires a string value");
-    const value = control ? raw.value : cleanString(raw.value, raw.type === "url_matches" ? 220 : 300);
+    // Regexes are kept verbatim: collapsing whitespace or truncating would
+    // silently change (or break) the pattern. Other values are plain text.
+    if (raw.type === "url_matches" && String(raw.value ?? "").trim().length > 300) throw new Error("url_matches pattern is too long (max 300 characters)");
+    const value = control ? raw.value
+      : raw.type === "url_matches" ? String(raw.value ?? "").trim()
+        : cleanString(raw.value, 300);
     if (!control && !value) throw new Error("Assertion requires a nonempty value");
     out.push({
       type: raw.type,

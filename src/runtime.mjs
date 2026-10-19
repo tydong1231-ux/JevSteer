@@ -516,6 +516,11 @@ export class JevSteerRuntime {
 
   async checkConstraintForAction(page, contract, action, history) {
     if (!contract.constraints.length) return 0;
+    // A value-specific constraint ("do not set Status to Closed") can only be
+    // judged with the chosen option, so name it unless the control is secret.
+    const option = action.tool === "select" && action.value != null && !sensitiveField(action.el)
+      ? (action.el?.options || []).find((o) => String(o.value) === String(action.value)) || { value: String(action.value) }
+      : undefined;
     const { answers } = await this.call(
       {
         page: { url: page.url, title: page.title, text: page.text.slice(0, 1800) },
@@ -529,6 +534,7 @@ export class JevSteerRuntime {
           ...(action.el?.checked != null ? { checked: action.el.checked } : {}),
           ...(action.el?.href ? { href: action.el.href } : {}),
           ...(action.valueKey ? { value_key: action.valueKey } : {}),
+          ...(option ? { selected_option: { ...(option.text != null ? { text: String(option.text).slice(0, 100) } : {}), value: String(option.value).slice(0, 100) } } : {}),
           ...(action.key ? { key: action.key } : {}),
         },
       },

@@ -67,6 +67,16 @@ test('static image hints distinguish sibling icons without leaking URL secrets o
   } finally { await driver.close(); }
 });
 
+test('CSS-hidden alternate icons do not leak into a toggle button name', async ({ page }) => {
+  await page.setContent('<style>.off{display:none}.ghost{visibility:hidden}</style><button onclick="window.fav=(window.fav||0)+1"><span role="img" aria-label="Unfavorite" class="off"></span><span role="img" aria-label="Archive" class="ghost"></span><span role="img" aria-label="Favorite"></span></button><button onclick="window.chart=true"><svg width="16" height="16"><title>Open chart</title><rect width="16" height="16"/></svg></button>');
+  const { driver, id } = await driverFor(page);
+  try {
+    const labels = (await driver.observe(id)).elements.map((e) => e.label);
+    expect(labels).toEqual(expect.arrayContaining(['Favorite', 'Open chart']));
+    expect(labels.join(' ')).not.toMatch(/Unfavorite|Archive/);
+  } finally { await driver.close(); }
+});
+
 test('card text takes precedence over a nested favorite icon name', async ({ page }) => {
   await page.setContent('<div class="cursor-pointer" style="width:400px;height:160px" onclick="window.opened=true"><h2>Profit and Loss</h2><p>Revenue and expense report</p><button aria-label="Toggle favorite" onclick="event.stopPropagation();window.favorites=(window.favorites||0)+1"><span role="img" aria-label="star"></span></button></div>');
   const { driver, id } = await driverFor(page);

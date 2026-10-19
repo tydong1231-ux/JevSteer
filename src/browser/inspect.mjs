@@ -1,6 +1,8 @@
 // Fixed, read-only business oracle for the HOST, independent of Jev's target
 // selection and completion decision. Never accepts executable caller code.
-export function inspectBusinessDOM() {
+// `patterns` is SENSITIVE_PATTERNS from src/sensitive.mjs: this function runs
+// in the page and cannot import sensitiveName(), so it rebuilds the same rule.
+export function inspectBusinessDOM(patterns) {
   const clean = (s, max = 1800) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const visible = (e) => {
     if (!e.getClientRects().length) return false;
@@ -10,6 +12,14 @@ export function inspectBusinessDOM() {
     }
     return true;
   };
+  const long = new RegExp(patterns?.long || '(?!)', 'i');
+  const short = new RegExp(patterns?.short || '(?!)', 'i');
+  const sensitiveName = (value) => {
+    const words = value.replace(/([a-z])([A-Z])/g, '$1 $2');
+    return long.test(value) || long.test(words) || short.test(words);
+  };
+  // Card and one-time-code autocomplete tokens are secret here as well.
+  const legacySecret = /password|passwd|secret|token|api.?key|credit.?card|cvv|cvc|otp|one-time-code|cc-number|cc-csc|(?:security|verification|access|private).?(?:key|code)/i;
   const allTables = [...document.querySelectorAll('table,[role=table],[role=grid]')].filter(visible);
   const tables = allTables.slice(0, 12).map((table) => {
     const rows = [...table.querySelectorAll('tr,[role=row]')].filter(visible);
@@ -23,7 +33,8 @@ export function inspectBusinessDOM() {
   const allControls = [...document.querySelectorAll('input:not([type=hidden]),textarea,select,button,[role=button],.cursor-pointer')].filter(visible);
   const controls = allControls.slice(0, 1000).map((e) => {
     const label = clean(e.getAttribute('aria-label') || [...(e.labels || [])].map((l) => l.innerText).join(' ') || e.getAttribute('placeholder') || e.innerText, 180);
-    const secret = e.type === 'password' || /password|passwd|secret|token|api.?key|credit.?card|cvv|cvc|otp|one-time-code|cc-number|cc-csc|(?:security|verification|access|private).?(?:key|code)/i.test([label, e.name, e.id, e.autocomplete].join(' '));
+    const names = [label, e.name, e.id, e.autocomplete].join(' ');
+    const secret = e.type === 'password' || legacySecret.test(names) || sensitiveName(names);
     const blockers = [];
     for (let p = e; p; p = p.parentElement) if (p.matches(':disabled,[aria-disabled=true],[inert]')) blockers.push({ tag: p.tagName.toLowerCase(), role: p.getAttribute('role'), id: p.id, aria_disabled: p.getAttribute('aria-disabled'), native_disabled: p.matches(':disabled') });
     return {

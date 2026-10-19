@@ -46,18 +46,74 @@ function inferRole(tag, type, explicit) {
   return undefined;
 }
 
-function safeQuery($, selector) {
+// Lookup tables and memoized subtree text for one snapshot. Scanning the
+// whole DOM per element (ids, classes, label[for]) and cloning large
+// ancestors per field made snapshots quadratic: 3,000 controls took over a
+// minute. Each table returns what the equivalent query returns: the first
+// match in document order. Call reset() after mutating the DOM.
+function createIndex($) {
+  let ids;
+  let classes;
+  let labels;
+  const memo = new Map();
+  const firstBy = (selector, keys) => {
+    const map = new Map();
+    $(selector).each((_, el) => {
+      for (const key of keys(el)) if (!map.has(key)) map.set(key, el);
+    });
+    return map;
+  };
+  const found = (el) => (el ? $(el) : $([]));
+  return {
+    reset() { ids = classes = labels = undefined; memo.clear(); },
+    byId(id) {
+      ids ??= firstBy("[id]", (el) => [$(el).attr("id")]);
+      return found(ids.get(id));
+    },
+    byClass(name) {
+      classes ??= firstBy("[class]", (el) => ($(el).attr("class") || "").split(/\s+/).filter(Boolean));
+      return found(classes.get(name));
+    },
+    labelFor(id) {
+      labels ??= firstBy("label[for]", (el) => [$(el).attr("for")]);
+      return found(labels.get(id));
+    },
+    cached(kind, el, compute) {
+      let entries = memo.get(kind);
+      if (!entries) memo.set(kind, entries = new Map());
+      if (!entries.has(el)) entries.set(el, compute());
+      return entries.get(el);
+    },
+  };
+}
+
+// Kapture names elements with "#id" or generated ".kapture-N" selectors.
+const SIMPLE_SELECTOR = /^([#.])(-?[A-Za-z_][A-Za-z0-9_-]*)$/;
+
+function safeQuery($, index, selector) {
+  const simple = SIMPLE_SELECTOR.exec(String(selector));
+  if (simple) return simple[1] === "#" ? index.byId(simple[2]) : index.byClass(simple[2]);
   try { return $(selector).first(); } catch { return null; }
 }
 
-function findById($, id) {
+function findById(index, id) {
   if (!id) return null;
-  try {
-    return $("[id]").filter((_, el) => $(el).attr("id") === id).first();
-  } catch {
-    return null;
-  }
+  return index.byId(id);
 }
+
+// Squashed text of an element without the excluded descendants.
+function strippedText($, index, el, excluded, max) {
+  return index.cached(`${excluded}|${max}`, el, () => {
+    const copy = $(el).clone();
+    copy.find(excluded).remove();
+    return squash(copy.text(), max);
+  });
+}
+
+const HIDDEN_CONTENT = "script,style,noscript,template,[hidden],[aria-hidden=true]";
+const NEARBY_EXCLUDED = `input,textarea,select,${HIDDEN_CONTENT}`;
+const RECORD_CONTROLS = 'button,input,textarea,select,[role="button"]:not(a[href])';
+const RECORD_EXCLUDED = `${RECORD_CONTROLS},script,style,[hidden],[aria-hidden="true"]`;
 
 function elementText(node) {
   if (!node || !node.length) return "";
@@ -71,7 +127,7 @@ function labelText(node) {
   return elementText(copy);
 }
 
-function nearbyText(node) {
+function nearbyText($, index, node) {
   if (!node || !node.length) return "";
   const own = elementText(node);
   const row = node.closest('tr,[role="row"]');
@@ -82,31 +138,27 @@ function nearbyText(node) {
     // vs contact) can be distinguished after target selection.
     const ancestors = node.parents().slice(0, 8);
     let firstContextLength;
-    for (let index = 0; index < ancestors.length; index++) {
-      const candidate = ancestors.eq(index).clone();
-      candidate.find("script,style,noscript,template,[hidden],[aria-hidden=true]").remove();
-      const text = squash(candidate.text(), 501);
+    for (let i = 0; i < ancestors.length; i++) {
+      const text = strippedText($, index, ancestors[i], HIDDEN_CONTENT, 501);
       if (text.length <= Math.max(16, own.length + 12)) continue;
       firstContextLength ??= text.length;
       if (text.length > Math.min(500, firstContextLength * 2 + 40)) break;
-      contextNode = ancestors.eq(index);
+      contextNode = ancestors.eq(i);
     }
   }
-  const context = contextNode.clone();
-  context.find("input,textarea,select,script,style,noscript,template,[hidden],[aria-hidden=true]").remove();
-  const parent = squash(context.text(), 500);
+  const parent = contextNode[0] ? strippedText($, index, contextNode[0], NEARBY_EXCLUDED, 500) : "";
   if (!parent) return "";
   if (!own) return parent.slice(0, 180);
   return squash(parent.replace(own, " "), 180);
 }
 
-function labelFor($, node, raw, tag, type) {
+function labelFor($, index, node, raw, tag, type) {
   const aria = squash(node?.attr("aria-label"), 180);
   if (aria) return aria;
 
   const labelledBy = node?.attr("aria-labelledby");
   if (labelledBy) {
-    const parts = labelledBy.split(/\s+/).map((id) => squash(findById($, id)?.text(), 120)).filter(Boolean);
+    const parts = labelledBy.split(/\s+/).map((id) => squash(findById(index, id)?.text(), 120)).filter(Boolean);
     if (parts.length) return squash(parts.join(" "), 180);
   }
 
@@ -115,10 +167,7 @@ function labelFor($, node, raw, tag, type) {
 
   const id = node?.attr("id") || raw.id;
   if (id) {
-    let explicit = "";
-    try {
-      explicit = labelText($("label[for]").filter((_, el) => $(el).attr("for") === id).first());
-    } catch {}
+    const explicit = labelText(index.labelFor(id));
     if (explicit) return explicit;
   }
 
@@ -129,8 +178,10 @@ function labelFor($, node, raw, tag, type) {
   if (["input", "textarea", "select"].includes(tag)) {
     const cell = node?.closest("td");
     if (cell?.length) {
-      const index = Number(cell.attr("data-index") ?? cell.index());
-      const header = squash(cell.closest("table").find("thead tr").first().children("th,td").eq(index).text(), 100);
+      const column = Number(cell.attr("data-index") ?? cell.index());
+      const table = cell.closest("table");
+      const headerRow = table[0] ? index.cached("header-row", table[0], () => table.find("thead tr").first()) : table;
+      const header = squash(headerRow.children("th,td").eq(column).text(), 100);
       if (header) return header;
     }
   }
@@ -159,38 +210,62 @@ function redactPasswordAttrs($) {
   });
 }
 
-function semanticScope($, node) {
+function semanticScope($, index, node) {
   const parts = [];
   for (const el of node.parents('dialog,[role="dialog"],form,fieldset,section,[role="group"]').toArray().reverse()) {
-    const owner = $(el);
-    const referenced = (owner.attr("aria-labelledby") || "").split(/\s+/).map((id) => findById($, id)?.text()).filter(Boolean).join(" ");
-    const title = owner.attr("aria-label") || referenced || owner.children("legend,h1,h2,h3,h4").first().text() || owner.attr("name");
-    if (title) parts.push(squash(title, 120));
+    const title = index.cached("scope-title", el, () => {
+      const owner = $(el);
+      const referenced = (owner.attr("aria-labelledby") || "").split(/\s+/).map((id) => findById(index, id)?.text()).filter(Boolean).join(" ");
+      const title = owner.attr("aria-label") || referenced || owner.children("legend,h1,h2,h3,h4").first().text() || owner.attr("name");
+      return title ? squash(title, 120) : null;
+    });
+    if (title != null) parts.push(title);
   }
   return parts.join(" > ");
 }
 
-function recordContext($, node) {
-  const textWithoutActions = (record) => {
-    const clone = record.clone();
-    clone.find('button,input,textarea,select,[role="button"]:not(a[href]),script,style,[hidden],[aria-hidden="true"]').remove();
-    return squash(clone.text(), 501);
-  };
+function recordContext($, index, node) {
+  const textWithoutActions = (el) => strippedText($, index, el, RECORD_EXCLUDED, 501);
+  const controlCount = (el) => index.cached("record-controls", el, () => $(el).find(RECORD_CONTROLS).length);
   const record = node.closest('tr,[role="row"],[role="listitem"],article,li');
-  if (record?.length) return squash(textWithoutActions(record), 500);
+  if (record?.length) return squash(textWithoutActions(record[0]), 500);
   if (!node.is('button,a,[role="button"],[role="link"]')) return "";
   // Repeated cards are often plain DIVs rather than semantic list items.
   // Use the nearest compact repeated sibling container with independent text;
   // do not identify a record from button text, DOM position or vendor classes.
   const shape = (el) => `${el.prop("tagName")}|${(el.attr("class") || "").split(/\s+/).filter(Boolean).sort().join(" ")}`;
+  // Siblings of one shape, grouped by how many controls each contains.
+  const repeated = (el, controls) => {
+    if (!el.parent) {
+      return $(el).siblings().filter((_, other) => shape($(other)) === shape($(el)) && controlCount(other) === controls).length > 0;
+    }
+    const groups = index.cached("sibling-shapes", el.parent, () => {
+      const byShape = new Map();
+      for (const child of $(el.parent).children().toArray()) {
+        const key = shape($(child));
+        if (!byShape.has(key)) byShape.set(key, []);
+        byShape.get(key).push(child);
+      }
+      return byShape;
+    });
+    const key = shape($(el));
+    const counts = index.cached(`sibling-controls|${key}`, el.parent, () => {
+      const histogram = new Map();
+      for (const member of groups.get(key) || []) {
+        const count = controlCount(member);
+        histogram.set(count, (histogram.get(count) || 0) + 1);
+      }
+      return histogram;
+    });
+    return (counts.get(controls) || 0) > 1;
+  };
   for (const parent of node.parents().slice(0, 6).toArray()) {
     const candidate = $(parent);
     if (candidate.is("body,html,form,nav,header,footer")) break;
-    const text = textWithoutActions(candidate);
+    const text = textWithoutActions(parent);
     if (!text || text.length > 500) continue;
-    const controls = candidate.find('button,input,textarea,select,[role="button"]:not(a[href])').length;
-    if (controls && candidate.siblings().filter((_, el) => shape($(el)) === shape(candidate)
-        && $(el).find('button,input,textarea,select,[role="button"]:not(a[href])').length === controls).length) return text;
+    const controls = controlCount(parent);
+    if (controls && repeated(parent, controls)) return text;
   }
   return "";
 }
@@ -205,7 +280,8 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
   const modalSelector = MODAL_SELECTOR;
   // Ask Kapture for the containers themselves: class-based CSS hiding cannot
   // be inferred from HTML attributes, and a visible dialog may contain only text.
-  const measured = (rawElements || []).map((raw) => ({ raw, node: safeQuery($, raw.selector)?.[0] }));
+  const index = createIndex($);
+  const measured = (rawElements || []).map((raw) => ({ raw, node: safeQuery($, index, raw.selector)?.[0] }));
   const visibleDialog = (el) => {
     const node = $(el);
     if (hiddenNode(node)) return false;
@@ -220,6 +296,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
   const activeDialog = dialogs.filter((_, el) => visibleDialog(el)).last();
   // Hidden modal templates must not leak their labels/options into page text.
   dialogs.filter((_, el) => !visibleDialog(el)).remove();
+  index.reset();
 
   // A blocking modal is the current interaction surface. Its background can
   // contain thousands of virtual table rows and otherwise bury the detail
@@ -249,7 +326,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
 
   for (const raw of rawElements || []) {
     if (!raw?.visible || !raw.selector) continue;
-    const node = safeQuery($, raw.selector);
+    const node = safeQuery($, index, raw.selector);
     // A raw element absent from this HTML may belong to a replaced DOM,
     // unsupported iframe or shadow root. Never invent its semantics.
     if (!node?.length) continue;
@@ -261,7 +338,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
     const type = squash(node?.attr("type") || "", 40).toLowerCase() || undefined;
     const role = inferRole(tag, type, squash(node?.attr("role"), 60) || undefined);
     const password = type === "password";
-    const label = labelFor($, node, raw, tag, type);
+    const label = labelFor($, index, node, raw, tag, type);
     const text = ["input", "textarea", "select"].includes(tag) ? "" : elementText(node);
     const options = Array.isArray(raw.options) ? raw.options.map((o) => ({
       text: squash(o.text, 100),
@@ -269,7 +346,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       selected: !!o.selected,
       disabled: !!o.disabled,
     })) : undefined;
-    const form = node.attr("form") ? findById($, node.attr("form")) : node.closest("form");
+    const form = node.attr("form") ? findById(index, node.attr("form")) : node.closest("form");
     const submits = tag === "button" && !["button", "reset"].includes(type)
       || tag === "input" && ["submit", "image"].includes(type);
     let formAction;
@@ -300,14 +377,14 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       readonly: node?.attr("readonly") != null || node?.attr("aria-readonly") === "true",
       contenteditable: node?.attr("contenteditable") === "true",
       options,
-      near: nearbyText(node) || undefined,
-      context: recordContext($, node) || undefined,
-      scope: semanticScope($, node) || undefined,
+      near: nearbyText($, index, node) || undefined,
+      context: recordContext($, index, node) || undefined,
+      scope: semanticScope($, index, node) || undefined,
       identity_version: 1,
       invalid: node?.attr("aria-invalid") === "true",
       expanded: ["true", "false"].includes(node?.attr("aria-expanded")) ? node.attr("aria-expanded") === "true" : undefined,
       selected: ["true", "false"].includes(node?.attr("aria-selected")) ? node.attr("aria-selected") === "true" : undefined,
-      validation_message: (node?.attr("aria-errormessage") || "").split(/\s+/).map((id) => elementText(findById($, id))).filter(Boolean).join(" ") || undefined,
+      validation_message: (node?.attr("aria-errormessage") || "").split(/\s+/).map((id) => elementText(findById(index, id))).filter(Boolean).join(" ") || undefined,
       bounds: raw.bounds,
     });
   }

@@ -30,8 +30,16 @@ export function readDOM(elements) {
     return clean(walk(e), max);
   };
   const idText = (e, ids) => (ids || '').split(/\s+/).map((id) => text(e.getRootNode().getElementById?.(id), 180)).filter(Boolean).join(' ');
+  // Toggle buttons often keep the alternate icon in the DOM hidden with CSS
+  // (favorite/unfavorite), so computed display/visibility counts too. An SVG
+  // <title> is never rendered itself; judge it by its parent graphic.
+  const iconHidden = (icon) => {
+    const shown = icon.matches('svg title') ? icon.parentElement : icon;
+    if (!shown || getComputedStyle(shown).visibility !== 'visible') return true;
+    return ancestors(shown).some((p) => p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true' || getComputedStyle(p).display === 'none');
+  };
   const iconName = (e) => [...e.querySelectorAll('[role=img][aria-label],svg title,img[alt]')]
-    .filter((icon) => !ancestors(icon).some((p) => p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true'))
+    .filter((icon) => !iconHidden(icon))
     .map((icon) => clean(icon.getAttribute('aria-label') || icon.getAttribute('alt') || icon.textContent, 180)).filter(Boolean).join(' ');
   // Asset names are explicitly hints, never fabricated accessible names. Strip
   // query/fragment data; opaque or duplicate icons still fail unique identity.

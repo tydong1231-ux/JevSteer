@@ -5,6 +5,16 @@ function milestoneId(value, index) {
   return clean || `milestone-${index + 1}`;
 }
 
+const MAX_MILESTONES = 12;
+
+function clampActions(...candidates) {
+  for (const value of candidates) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return Math.max(1, Math.min(40, Math.floor(n)));
+  }
+  return 12;
+}
+
 export function normalizeMilestonePlan({
   goal,
   milestones = [],
@@ -23,13 +33,17 @@ export function normalizeMilestonePlan({
       milestones: [{
         id: "main",
         ...normalizeTaskContract({ goal: overallGoal, successCriteria, constraints, guidance, assertions }),
-        max_actions: maxActions,
+        max_actions: clampActions(maxActions),
       }],
     };
   }
 
+  // Dropping milestones silently would let a host believe its whole plan ran.
+  if (milestones.length > MAX_MILESTONES) {
+    throw new Error(`Too many milestones: ${milestones.length} (max ${MAX_MILESTONES})`);
+  }
   const ids = new Set();
-  const normalized = milestones.slice(0, 12).map((raw, index) => {
+  const normalized = milestones.map((raw, index) => {
     const id = milestoneId(raw?.id, index);
     if (ids.has(id)) throw new Error(`Duplicate milestone id: ${id}`);
     ids.add(id);
@@ -45,7 +59,7 @@ export function normalizeMilestonePlan({
     return {
       id,
       ...contract,
-      max_actions: Math.max(1, Math.min(40, Number(raw?.max_actions || raw?.maxActions || maxActions || 12))),
+      max_actions: clampActions(raw?.max_actions, raw?.maxActions, maxActions),
     };
   });
 
