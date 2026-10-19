@@ -45,13 +45,32 @@ export function equivalentLink(original, matches, base) {
   return matches.find((e) => e.ordinal != null && e.ordinal === original.ordinal) || matches[0];
 }
 
-// Identical controls, such as two unnamed selects in one filter row, differ
-// only in their order. Where `el` is one of several on `page`: which one, of
-// how many. Order points at the same control only while the page is exactly
-// as it was when that control was chosen (see assertTargetFresh).
+// What can tell identical controls apart once their identity matches: what
+// each one shows or holds (a hint, the value it shows, its value, options and
+// state), and the text and table column next to it.
+const TELL_APART = ["hint", "display", "value_hash", "value", "near", "column", "checked", "selected", "expanded", "invalid", "readonly", "validation_message"];
+export function twinKey(e) {
+  return JSON.stringify([...TELL_APART.map((key) => e?.[key] ?? null), (e?.options || []).map((o) => [o.text, o.value, !!o.selected, !!o.disabled])]);
+}
+
+// Identical controls, such as unnamed selects in one filter row: where `el`
+// is one of several on `page`, what tells it from the others. Never their
+// order: a page can swap equal nodes without anything observed changing, so
+// order cannot show which node was chosen. `distinct` is false when nothing
+// observed tells `el` from another; then it is refused (see pickTwin).
 export function twinsOf(el, page) {
   const twins = page.elements.filter((e) => e.frame_id === el.frame_id && e.document_id === el.document_id && sameIdentity(el, e, page.url));
-  return twins.length > 1 && twins.includes(el) ? { index: twins.indexOf(el), count: twins.length } : undefined;
+  if (twins.length < 2 || !twins.includes(el)) return undefined;
+  const key = twinKey(el);
+  return { count: twins.length, key, distinct: twins.filter((e) => twinKey(e) === key).length === 1 };
+}
+
+// The one of `matches` that still shows what the chosen twin showed, if it
+// was told apart from the others then and only one shows it now.
+export function pickTwin(twins, matches) {
+  if (!twins?.distinct) return undefined;
+  const same = matches.filter((e) => twinKey(e) === twins.key);
+  return same.length === 1 ? same[0] : undefined;
 }
 
 // True when the control is unique on `page` even without its surrounding text.

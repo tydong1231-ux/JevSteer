@@ -52,11 +52,17 @@ such as "Generate only calculates the report" keeps a read-only button out of
 the remote-write journal.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
-on a closed/replaced Page blocks new input on other Pages in that session. It
-does not block `browser_open` or `browser_snapshot`: navigation and reading are
-how the host checks on the site what the action did, for example in a new tab
-on the record list. The host can resolve the original `tab_id` and action ID
-after independent readback, even when the physical Page no longer exists. Changing profile/driver is not an
+on a closed/replaced Page blocks new input on other Pages in that session.
+`browser_snapshot` still reads any page. Opening a page sends it no input, but
+its address is a request to the site, which can change something (a GET that
+saves, a logout) or wipe what the action left. So while the action is
+unresolved, `browser_open` opens only `about:blank` or the address the action
+was chosen on (kept as a digest in its journal record), such as the record
+list in a new tab, to check on the site what the action did. Any other
+address, and any navigation of a page whose own input is unresolved, is
+refused with `UNCONFIRMED_SESSION_ACTION` before a request is made. The host
+can resolve the original `tab_id` and action ID after independent readback,
+even when the physical Page no longer exists. Changing profile/driver is not an
 automatic journal migration: finish/reconcile old workflows before switching.
 
 Browser dialogs are held for host intervention; the driver never accepts them.
@@ -118,10 +124,14 @@ control before. Equal controls in unkeyed rows still need their record text.
 Pre-input target checks and journal fingerprints stay exact. Two links with the
 same text, context and address (Wikipedia's "20 | 50 | 100" pager above and
 below a list) load the same page, so a click on either is the same click; any
-other target that matches two identical controls is refused before input
-(`STALE_TARGET: ambiguous`), unless the page is exactly as it was when the
-control was chosen: then its order tells identical controls apart, such as two
-unnamed selects in one filter row. Otherwise Jev gets one more look, then the
+other target that matches two identical controls is told apart from them only
+by what it shows or holds and what is next to it: its hint, the value it shows,
+its value, options and state, and the text and table column beside it (two
+unnamed selects in one filter row, "Status" and "Vendor"). The control that
+still shows what the chosen one showed is the one used, wherever the page has
+moved it. Order never decides: a page can swap equal nodes without anything
+observed changing. Controls that nothing observed tells apart are refused
+before input (`STALE_TARGET: ambiguous`); Jev gets one more look, then the
 milestone stops as `ambiguous` for the host. A refused choice sends no input, so
 on the unchanged page it is not reported as a page error.
 
@@ -312,10 +322,16 @@ even when the HTTP command acknowledged success, because text fields may
 autosave and a Save click may commit asynchronously. The host must inspect the
 actual outcome and call `browser_resolve_action` before relying on a retry.
 An error after browser dispatch likewise returns the journal ID rather than
-hiding the uncertain mutation. `press_key` Escape with no element is the one
-exception: it closes a menu, popup or dialog, submits nothing, and returns
-`completed` without a journal record, so it never blocks a later run or tab.
-Escape on an element, and every other key, stay guarded.
+hiding the uncertain mutation. `press_key` Escape with no element is journaled
+the same way, because a page can answer it (an autosave, a cancel). It usually
+only closes a menu, popup or dialog, so once it is acknowledged the runtime
+looks at what the page did: when, a second after the key, the page has sent no
+request, beacon, form post or WebSocket message and is still on the same
+document, the record is resolved as applied from that observation and the call
+returns `completed` with its `action_id`. Otherwise it is `action_unconfirmed`
+like any other key, and so is every such Escape on a driver that cannot report
+what the page sent (the Kapture driver does not). WebSocket messages are seen
+on sockets the page opened after JevSteer first used it.
 
 The runtime can continue after a lost acknowledgement only when a low-risk local
 effect is mechanically confirmed, or return success when the final task outcome

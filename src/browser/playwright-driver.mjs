@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { config } from '../config.mjs';
-import { sameIdentity, equivalentLink } from '../element-identity.mjs';
+import { sameIdentity, equivalentLink, pickTwin } from '../element-identity.mjs';
 import { FIELDISH, SELECTISH } from '../page-model.mjs';
 import { isDateText } from '../date-text.mjs';
 import { observeUntilReady, observationSignature } from '../observation.mjs';
@@ -128,6 +128,15 @@ export class PlaywrightDriver {
     if (record.inputAt != null) result.observation.requests_since_input = requests.started;
     return result.observation;
   }
+  // What the page sent since the last input: data requests (XHR and fetch)
+  // and how many are still open, and other things that can carry a change
+  // (see PageEvents.sentSince). Undefined before any input.
+  async trafficSinceInput(ref) {
+    const record = await this.record(ref);
+    if (record.inputAt == null) return undefined;
+    const { started, pending } = record.events.requests(record.inputAt);
+    return { requests: started, pending, other: record.events.sentSince(record.inputAt) };
+  }
   waitFor(ref, condition, budget = {}) { return observeUntilReady(() => this.observe(ref), { ...budget, ready: condition }); }
 
   async assertTargetFresh(ref, action) {
@@ -136,15 +145,13 @@ export class PlaywrightDriver {
     if (!original?.snapshot_id || original.page_id !== record.pageId || original.session_id !== this.sessionId) throw new Error('STALE_TARGET: wrong page/session or no observation-bound target');
     const fresh = await this.observe(ref);
     // The page this check read: a refusal is about it (see the runtime).
-    const now = action.checkedOn = observationSignature(fresh);
+    action.checkedOn = observationSignature(fresh);
     if (action.observedUrl && fresh.url !== action.observedUrl) throw new Error('STALE_TARGET: page navigated after decision');
     const matches = fresh.elements.filter((e) => e.frame_id === original.frame_id && e.document_id === original.document_id && sameIdentity(original, e, fresh.url));
     if (!matches.length) throw new Error('STALE_TARGET: changed document/record/form');
-    // Of identical controls, the one in the same place, if nothing on the
-    // page changed since the decision.
-    const { signature, twins } = action.observed || {};
-    const twin = twins?.count === matches.length && signature === now ? matches[twins.index] : undefined;
-    const pick = matches.length === 1 ? matches[0] : (action.tool === 'click' && equivalentLink(original, matches, fresh.url)) || twin;
+    // Of identical controls, the one that still shows what the chosen one
+    // showed (see twinsOf). Their order never picks one.
+    const pick = matches.length === 1 ? matches[0] : (action.tool === 'click' && equivalentLink(original, matches, fresh.url)) || pickTwin(action.observed?.twins, matches);
     if (!pick) throw new Error(`STALE_TARGET: ambiguous: ${matches.length} identical controls`);
     if (pick.disabled || action.tool === 'type' && pick.readonly) throw new Error('STALE_TARGET: disabled or read-only');
     if (['type', 'select'].includes(action.tool) && String(original.value ?? '') !== String(pick.value ?? '')) throw new Error('STALE_TARGET: live field value changed');

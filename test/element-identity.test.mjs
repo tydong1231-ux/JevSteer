@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findRemembered, locateAfterAction, rememberField, twinsOf } from "../src/element-identity.mjs";
+import { findRemembered, locateAfterAction, pickTwin, rememberField, twinsOf } from "../src/element-identity.mjs";
 
 const doc = { frame_id: "f1", document_id: "f1:0:1", identity_version: 2 };
 const field = (i, context, extra = {}) => ({ i, ...doc, tag: "input", role: "textbox", label: "Credit limit", name: "credit", context, ...extra });
@@ -36,11 +36,22 @@ test("record keys, forms and documents still separate controls without context",
   assert.equal(locateAfterAction(before.elements[0], otherDocument, before), undefined);
 });
 
-test("identical controls are told apart only by their order", () => {
-  const select = (i) => ({ i, ...doc, tag: "input", role: "combobox", label: "", context: "" });
-  const filters = page(select(0), select(1), field(2, "Amount"));
-  assert.deepEqual(twinsOf(filters.elements[1], filters), { index: 1, count: 2 });
+test("identical controls are told apart by what they show, never by their order", () => {
+  const select = (i, extra = {}) => ({ i, ...doc, tag: "input", role: "combobox", label: "", context: "", ...extra });
+  const filters = page(select(0, { hint: "Status" }), select(1, { hint: "Vendor" }), field(2, "Amount"));
+  const twins = twinsOf(filters.elements[1], filters);
+  assert.equal(twins.count, 2);
+  assert.equal(twins.distinct, true);
   assert.equal(twinsOf(filters.elements[2], filters), undefined);
   // Another document's copy is not a twin.
   assert.equal(twinsOf(filters.elements[0], page(filters.elements[0], { ...select(1), document_id: "f1:1:2" })), undefined);
+  // The page swapped them: the one showing "Vendor" is still the one chosen.
+  const swapped = page(select(0, { hint: "Vendor" }), select(1, { hint: "Status" }));
+  assert.equal(pickTwin(twins, swapped.elements), swapped.elements[0]);
+  // Two that nothing observed tells apart are never picked, swapped or not.
+  const same = page(select(0), select(1));
+  assert.equal(twinsOf(same.elements[1], same).distinct, false);
+  assert.equal(pickTwin(twinsOf(same.elements[1], same), same.elements), undefined);
+  // Nor is one whose look another twin took on.
+  assert.equal(pickTwin(twins, [select(0, { hint: "Vendor" }), select(1, { hint: "Vendor" })]), undefined);
 });

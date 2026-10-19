@@ -5,6 +5,11 @@ import { actionIdentity } from "./element-identity.mjs";
 
 const hash = (value) => createHash("sha256").update(String(value)).digest("hex");
 
+// The address a page showed, kept only as a digest like everything else here.
+export function addressHash(url) {
+  try { return hash(new URL(url).href); } catch { return hash(url); }
+}
+
 // Write intent BEFORE dispatch. A timeout or process exit cannot tell us
 // whether the site already accepted a submission. No raw field data is stored.
 export class ActionJournal {
@@ -83,7 +88,10 @@ export class ActionJournal {
       id: randomUUID(), state: "pending", run_id: runId, milestone_id: milestoneId,
       tool: action.tool, fingerprint: hash(actionIdentity(action, page.url)),
       ...(page.session_id ? { session_id: page.session_id, page_id: page.page_id } : {}),
-      // Values, business goal and URLs are not stored in cleartext.
+      // Values, business goal and URLs are not stored in cleartext. The
+      // address the input was chosen on may be opened again while it is
+      // unconfirmed (see the runtime's open).
+      ...(page.url ? { url_hash: addressHash(page.url) } : {}),
       value_hash: hash(action.value ?? ""),
       ...(intent ? { intent_hash: hash(intent) } : {}),
       ...(contractDigest ? { contract_digest: contractDigest } : {}),

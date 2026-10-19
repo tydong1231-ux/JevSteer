@@ -15,8 +15,8 @@ import { sameDateText } from "./date-text.mjs";
 import { buildEvidencePacket, evidenceRef, relevantRequest, safeUrl, sanitizeNetworkBody, summarizeRequest } from "./evidence.mjs";
 import { buildTargetSpace, availableTools, eligibleFor, listedOptions, NO_TARGET, TARGETED_TOOLS } from "./decision-space.mjs";
 import { generateFieldText } from "./text-helper.mjs";
-import { locateSameElement, equivalentLink, sameIdentity, rememberField, findRemembered, twinsOf } from "./element-identity.mjs";
-import { ActionJournal } from "./action-journal.mjs";
+import { locateSameElement, equivalentLink, sameIdentity, rememberField, findRemembered, twinsOf, pickTwin } from "./element-identity.mjs";
+import { ActionJournal, addressHash } from "./action-journal.mjs";
 import { countsReferenced, observeUntilReady, observationSignature, observationLimitError, reviewedState, sameReviewedState, transientNavigationError } from "./observation.mjs";
 import { HostReviewStore, reviewDigest, reviewReceipt } from "./host-review.mjs";
 import { sensitiveName, sensitiveField } from "./sensitive.mjs";
@@ -44,10 +44,16 @@ const TOOLS = {
 const KEYS = ["Escape", "Tab", "Space", "Backspace", "Delete", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End"];
 const TARGETED = TARGETED_TOOLS;
 const GUARDED = new Set(["click", "press_enter", "press_key", "type", "select"]);
-// Escape pressed on no element closes a menu, popup or dialog where focus is.
-// It submits nothing. Any other key, or Escape on an element (which focuses
-// it first, and may blur and save another field), stays guarded.
+// Escape pressed on no element usually closes a menu, popup or dialog where
+// focus is. A page can also answer it (cancel an edit, autosave), so it is
+// journaled like any other input. Once acknowledged, it is resolved from what
+// the page did after it (see quietAfterKey). Escape on an element focuses it
+// first, and may blur and save another field.
 const localKeyPress = (action) => action.tool === "press_key" && action.key === "Escape" && action.target == null;
+// A save the page debounces starts a moment after the key.
+const KEY_QUIET_MS = 1000;
+
+const pendingLine = (r) => `${r.tool} on tab_id ${r.page_id} (action_id ${r.id}, ${r.created_at})`;
 
 function sanitizedValues(values) {
   return Object.fromEntries(Object.entries(values || {}).map(([key, value]) => [
@@ -114,10 +120,10 @@ function showsTyped({ typed, current }) {
     && current.display.split(", ").some((item) => squash(item).toLowerCase().includes(value));
 }
 
-// The page an action was chosen on, for the check before input: identical
-// controls are told apart by order only while that page is unchanged.
+// What the decision saw of its target, for the check before input: what
+// tells it from identical controls (see twinsOf).
 function observedFor(page, el) {
-  return { signature: observationSignature(page), ...(el ? { twins: twinsOf(el, page) } : {}) };
+  return el ? { twins: twinsOf(el, page) } : {};
 }
 
 // Names those fields when a run stops without verifying its goal.
@@ -378,11 +384,31 @@ export class JevSteerRuntime {
     const foreign = (await this.journal.pendingSession(sessionId)).filter((r) => r.page_id !== tabId);
     // The page may be closed by now; its record still blocks this session and
     // browser_resolve_action still accepts its tab_id.
-    if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so input on another page is blocked: ${foreign.map((r) => `${r.tool} on tab_id ${r.page_id} (action_id ${r.id}, ${r.created_at})`).join("; ")}. Inspect what it did on the site (browser_open and browser_snapshot still work), then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
+    if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so input on another page is blocked: ${foreign.map(pendingLine).join("; ")}. Inspect what it did on the site (browser_snapshot works, and browser_open opens about:blank or the address that input was chosen on in a new tab), then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
+  }
+
+  // Opening a page sends it no input, but its address is a request to the
+  // site, which can change something (a GET that saves, a logout) or wipe
+  // what an unconfirmed input left. While input in this session has no
+  // confirmed outcome, a tab opens only about:blank or the address such an
+  // input was chosen on: that shows the site's state without asking it for
+  // anything new. A page with unconfirmed input of its own is not navigated.
+  async assertOpenClear(tabId, url) {
+    const sessionId = this.driver.sessionId;
+    if (!sessionId) return;
+    const pending = await this.journal.pendingSession(sessionId);
+    if (!pending.length) return;
+    const own = pending.some((r) => r.page_id === tabId);
+    if (!own && (url === "about:blank" || pending.some((r) => r.url_hash && r.url_hash === addressHash(url)))) return;
+    throw new Error(own
+      ? `UNCONFIRMED_SESSION_ACTION: input on this page has no confirmed outcome, so it is not navigated: ${pending.map(pendingLine).join("; ")}. Open a new tab to check the site, then call browser_resolve_action with that tab_id and action_id.`
+      : `UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so browser_open opens only about:blank or the address that input was chosen on, not ${safeUrl(url)}: ${pending.map(pendingLine).join("; ")}. Inspect what it did on the site, then call browser_resolve_action with that tab_id and action_id, even if that page was closed.`);
   }
 
   async open(url, { tabId, newTab = true } = {}) {
     await this.ensureReady();
+    // Refused before a tab is made for it; checked again under the lease.
+    if (newTab) await this.assertOpenClear(undefined, url);
     let tab;
     if (newTab) {
       const created = await this.driver.createPage();
@@ -393,9 +419,10 @@ export class JevSteerRuntime {
     }
     this.activeTabId = tab.tabId;
     return this.leases.withLease(tab.tabId, { runId: `open-${randomUUID()}` }, async () => {
-      // Opening a page sends it no input. While a write on another tab has
-      // no confirmed outcome, a new tab is where the host checks what it did
-      // on the site; input there stays blocked until it is resolved.
+      // While a write has no confirmed outcome, a new tab is where the host
+      // checks what it did on the site; input there stays blocked until it
+      // is resolved.
+      await this.assertOpenClear(tab.tabId, url);
       const pending = await this.reviews.pending(tab.tabId);
       if (pending) return { status: "host_review_required", tab_id: tab.tabId, host_review: reviewReceipt(pending), info: "Accept or reject this tab's pending outcome before navigating elsewhere." };
       const started = Date.now();
@@ -1827,6 +1854,18 @@ export class JevSteerRuntime {
     };
   }
 
+  // After a key sent to no element: true when, KEY_QUIET_MS after it, the
+  // page has sent no request, beacon, form post or WebSocket message, and is
+  // still on the document it was on. A driver that cannot tell says nothing.
+  async quietAfterKey(tabId, before, observed) {
+    if (observed.timed_out || typeof this.driver.trafficSinceInput !== "function") return false;
+    const where = (page) => `${page?.url}|${page?.frames?.[0]?.document_id ?? ""}`;
+    if (where(observed.page) !== where(before)) return false;
+    await sleep(Math.max(0, KEY_QUIET_MS - (observed.ms || 0)));
+    const traffic = await this.driver.trafficSinceInput(tabId);
+    return !!traffic && traffic.requests === 0 && traffic.pending === 0 && traffic.other === 0 && where(await this.readPage(tabId)) === where(before);
+  }
+
   findCurrentElement(oldElement, currentPage, tool) {
     if (!oldElement) return undefined;
     if (oldElement.identity_version) {
@@ -1834,8 +1873,8 @@ export class JevSteerRuntime {
       const same = currentPage.elements.filter((e) => e.frame_id === oldElement.frame_id && e.document_id === oldElement.document_id && sameIdentity(oldElement, e, currentPage.url));
       const match = locateSameElement(oldElement, currentPage)
         || (tool === "click" ? equivalentLink(oldElement, currentPage.elements.filter((e) => sameIdentity(oldElement, e, currentPage.url)), currentPage.url) : undefined)
-        // One of identical controls, by order, on a page unchanged since the snapshot.
-        || (twins?.count === same.length && observationSignature(this.shown) === observationSignature(currentPage) ? same[twins.index] : undefined);
+        // One of identical controls, told apart by what it shows (see twinsOf).
+        || pickTwin(twins, same);
       if (match) return match;
       throw new Error(`STALE_ELEMENT: ${brief(oldElement)} changed or is ambiguous. Take a new browser_snapshot.`);
     }
@@ -1876,7 +1915,7 @@ export class JevSteerRuntime {
         observedUrl: current?.url,
         observed: current && currentElement ? observedFor(current, currentElement) : undefined,
       };
-      const guarded = GUARDED.has(action) && !localKeyPress(normalized);
+      const guarded = GUARDED.has(action);
       if (guarded) {
         const previous = await this.journal.pending(tab.tabId);
         if (previous.some((r) => this.journal.matches(r, normalized, current))) {
@@ -1920,13 +1959,20 @@ export class JevSteerRuntime {
         // especially for autosaving text inputs and Save buttons.
         let effect;
         let observationError;
+        let observed;
         try {
-          const observed = await this.observe(tab.tabId, current, {
+          observed = await this.observe(tab.tabId, current, {
             tool: action, el: currentElement, expected_value: normalized.value,
             role: currentElement?.role, tag: currentElement?.tag, side_effect: 1,
           });
           effect = observed.effect;
         } catch (error) { observationError = actionError(error); }
+        // Escape on no element that sent nothing to the site and left the
+        // page on its document: that is its outcome, observed.
+        if (localKeyPress(normalized) && observed && await this.quietAfterKey(tab.tabId, current, observed)) {
+          await this.journal.resolve(tab.tabId, entry.id, "applied", "Escape acknowledged; afterwards the page sent no request or message and stayed on the same document");
+          return { status: "completed", action, tab_id: tab.tabId, action_id: entry.id, resolution: "applied", url: observed.page.url, title: observed.page.title };
+        }
         return {
           status: "action_unconfirmed", tab_id: tab.tabId, action_id: entry.id,
           action, element: brief(currentElement),

@@ -25,12 +25,20 @@ export class PageEvents {
     // fires them whether or not anything is saved. Long polls are not either.
     this.open = new Map();
     this.started = [];
+    // Times of anything else the page sent that can carry a change: a beacon
+    // or form post (any method but GET, HEAD and OPTIONS), and WebSocket
+    // messages. Analytics beacons are left out here too.
+    this.sent = [];
     this.inputAt = -Infinity;
     this.heldUntil = new Map();
     this.longPolls = new Set();
     const on = (name, fn) => { page.on(name, fn); this.listeners.push([name, fn]); };
     on('request', (req) => {
-      if (!DATA_REQUESTS.has(req.resourceType()) || trackerRequest(req.url())) return;
+      if (trackerRequest(req.url())) return;
+      if (!DATA_REQUESTS.has(req.resourceType())) {
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) this.note();
+        return;
+      }
       const at = this.now();
       const key = endpoint(req);
       if (at - (this.heldUntil.get(key) ?? -Infinity) <= RESENT_MS && at - this.inputAt > RESENT_MS) this.longPolls.add(key);
@@ -62,6 +70,7 @@ export class PageEvents {
     on('pageerror', () => this.push({ kind: 'pageerror' }));
     on('dialog', (dialog) => { this.pendingDialog = dialog; this.push({ kind: 'dialog', type: dialog.type() }); });
     on('download', () => this.push({ kind: 'download' }));
+    on('websocket', (socket) => socket.on('framesent', () => this.note()));
     on('close', () => this.close());
   }
   push(entry) {
@@ -82,6 +91,13 @@ export class PageEvents {
     }
     return { started: this.started.filter((at) => at >= since).length, pending };
   }
+  note(at = this.now()) {
+    if (!this.listeners.length) return;
+    this.sent.push(at);
+    if (this.sent.length > 500) this.sent.splice(0, this.sent.length - 500);
+  }
+  // Beacons, form posts and WebSocket messages sent at or after `since`.
+  sentSince(since = 0) { return this.sent.filter((at) => at >= since).length; }
   read(since = 0) {
     const entries = this.entries.filter((e) => e.cursor > since);
     return { cursor: this.cursor, requests: entries.filter((e) => e.kind === 'network'), events: entries.filter((e) => e.kind !== 'network'), truncated: since > 0 && since < (this.entries[0]?.cursor || 0) - 1 };
@@ -103,6 +119,7 @@ export class PageEvents {
     this.responses.clear();
     this.open.clear();
     this.started = [];
+    this.sent = [];
     this.inputAt = -Infinity;
     this.heldUntil.clear();
     this.longPolls.clear();

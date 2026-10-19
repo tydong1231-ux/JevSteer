@@ -515,20 +515,34 @@ test("manual click replay cannot be bypassed with ignored value or key parameter
   assert.equal(k.commands.filter(c => c.command === "click").length, 1);
 });
 
-test("manual Escape on no element closes a popup without a journal record; other keys stay guarded", async () => {
+test("manual Escape on no element is journaled; a driver that cannot see the page's traffic leaves it unconfirmed", async () => {
   const k = new MemoryKapture(page());
   const runtime = memoryRuntime(k, scriptedDecider([{}]));
   k.tabDetail = async () => ({ url: k.page.url, title: k.page.title });
-  // The default key is Escape too. Neither leaves a record that blocks later runs.
-  assert.equal((await runtime.actManual({ tabId: "test", action: "press_key" })).status, "completed");
-  assert.equal((await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" })).status, "completed");
-  assert.equal((await runtime.journal.pending("test")).length, 0);
+  assert.equal(typeof k.trafficSinceInput, "undefined");
+  // The default key is Escape. A page can answer it (cancel an edit, autosave),
+  // so with nothing seen of what the page sent after it, its outcome is open.
+  const escape = await runtime.actManual({ tabId: "test", action: "press_key" });
+  assert.equal(escape.status, "action_unconfirmed");
+  assert.deepEqual((await runtime.journal.pending("test")).map((r) => [r.id, r.tool]), [[escape.action_id, "press_key"]]);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /UNCONFIRMED_ACTION/);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
+  // Once the host resolves it, Escape is not replay protected: it can be pressed again.
+  const resolved = await runtime.resolveAction({ tabId: "test", actionId: escape.action_id, resolution: "applied", evidence: "The menu closed and nothing was saved" });
+  assert.equal(resolved.replay_protected, false);
+  assert.equal((await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" })).status, "action_unconfirmed");
   assert.equal(k.commands.filter(c=>c.command==="keypress").length, 2);
-  // Enter can submit a form: it is journaled and is not repeated before it is resolved.
+});
+
+test("manual Enter is journaled and is not repeated before it is resolved", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  k.tabDetail = async () => ({ url: k.page.url, title: k.page.title });
+  // Enter can submit a form.
   const enter = await runtime.actManual({ tabId: "test", action: "press_key", key: "Enter" });
   assert.equal(enter.status, "action_unconfirmed");
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Enter" }), /UNCONFIRMED_ACTION/);
-  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 3);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
 });
 
 
