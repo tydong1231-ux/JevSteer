@@ -96,6 +96,31 @@ for (const [score, status] of [[{ blocked: 0.99 }, "blocked"], [{ needs_vision: 
   });
 }
 
+test("a sign-in page returns needs_login even when Jev also asks for vision", async () => {
+  // Jev scores both: the page wants a login and its next step looks visual,
+  // as with a QR code beside the form.
+  const both = new MemoryKapture({ elements: [button] });
+  assert.equal((await memoryRuntime(both, scriptedDecider([{ needs_vision: 0.99, login: 0.99 }])).run("Open the report", { evidenceLevel: "none" })).status, "needs_login");
+  // A password field with a sign-in button settles it, whatever Jev's login score.
+  const form = new MemoryKapture({ url: "https://erp.test/login?next=%2Freports", elements: [
+    { i: 0, selector: "#password", tag: "input", role: "textbox", type: "password", label: "Password", value: "" },
+    { i: 1, selector: "#signin", tag: "button", role: "button", label: "Log in" },
+  ] });
+  const result = await memoryRuntime(form, scriptedDecider([{ needs_vision: 0.99, login: 0.2 }])).run("Open the report", { evidenceLevel: "none" });
+  assert.equal(result.status, "needs_login");
+  assert.equal(form.commands.length + both.commands.length, 0);
+});
+
+test("explained rounds carry their timing and the guards' verdicts", async () => {
+  const k = new MemoryKapture({ elements: [button] });
+  k.onCommand = (command) => { if (command === "click") k.page.text = "Saved"; };
+  const result = await memoryRuntime(k, scriptedDecider([{ tool: "click" }, { tool: "none", done: 0.99 }])).run("Save", { evidenceLevel: "none", explain: true });
+  const [click, after] = result.rounds;
+  assert.equal(typeof click.decide_ms, "number");
+  assert.equal(typeof click.side_effect_guard, "number");
+  assert.equal(typeof after.observe_ms, "number");
+});
+
 test("low target confidence returns ambiguous without a click", async () => {
   const k = new MemoryKapture({ elements: [button] });
   const result = await memoryRuntime(k, scriptedDecider([() => {
@@ -125,6 +150,89 @@ test("waiting does not clear an unconfirmed mutation or permit duplicate submiss
   const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { tool: "wait" }, { side_effect: 0.9 }])).run("Save a test customer", { maxActions: 8, evidenceLevel: "none" });
   assert.equal(result.status, "action_failed");
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+});
+
+test("waits that change nothing on a settled page are marked for Jev and stop the run", async () => {
+  const k = new MemoryKapture({ text: "Profit and Loss 2026/1/1 - 2026/10/31", elements: [button] });
+  let seen;
+  const decider = scriptedDecider([(state) => { seen = structuredClone(state.task.history); return decision({ tool: "wait" }); }]);
+  const result = await memoryRuntime(k, decider).run("Show the report through 2026/12/31", { maxActions: 20, evidenceLevel: "none" });
+  assert.equal(result.status, "stuck");
+  assert.match(result.info, /did not change in 2 waits and nothing on it is loading/);
+  // What Jev saw on its last decision: each earlier wait changed nothing.
+  assert.deepEqual(seen.map((h) => [h.action, h.page_changed]), [["wait", false], ["wait", false]]);
+  assert.equal(k.commands.length, 0);
+});
+
+test("waits while the page changes or loads are not idle", async () => {
+  const k = new MemoryKapture({ text: "Generating", elements: [button] });
+  let n = 0;
+  const decider = scriptedDecider([() => { k.page.text = `Generating ${n++}`; return decision({ tool: "wait" }); }]);
+  const result = await memoryRuntime(k, decider).run("Show the report", { maxActions: 5, evidenceLevel: "none" });
+  assert.equal(result.status, "max_actions");
+  assert.ok(result.actions.every((a) => a.page_changed === undefined));
+});
+
+function customerForm() {
+  const create = { i: 0, selector: "#create", tag: "button", role: "button", label: "Create" };
+  const row = { i: 0, selector: "#row", tag: "tr", role: "button", label: "JevSteer QA P1019B THB 0.00" };
+  const k = new MemoryKapture({ text: "Add Customer Name", elements: [create] });
+  k.onCommand = (command) => { if (command === "click") { k.page.text = "Customers JevSteer QA P1019B THB 0.00"; k.page.elements = [row]; } };
+  return k;
+}
+const saveCustomer = { successCriteria: ["A saved customer row shows the exact name JevSteer QA P1019B"], maxActions: 4, evidenceLevel: "none" };
+
+test("after a sent Create, an unclear next step checks the contract before asking for guidance", async () => {
+  const k = customerForm();
+  // Jev half believes the customer is saved and is unsure what comes next.
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1, done: 0.5 }]));
+  const result = await runtime.run("Save customer JevSteer QA P1019B", saveCustomer);
+  assert.equal(result.status, "completed_verified");
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  assert.deepEqual(await runtime.journal.pending("test"), []);
+});
+
+test("after a sent Create, a verifier pass that Jev does not share goes to the host", async () => {
+  // Jev does not find the goal reached; only the verifier does.
+  for (const [mode, status] of [["hybrid", "host_review_required"], ["jev", "verification_uncertain"]]) {
+    const k = customerForm();
+    const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1 }]));
+    const result = await runtime.run("Save customer JevSteer QA P1019B", { ...saveCustomer, verificationMode: mode });
+    assert.equal(result.status, status, mode);
+    assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+    // The Create stays pending until the host accepts or resolves it.
+    assert.equal((await runtime.journal.pending("test")).length, 1);
+  }
+});
+
+// Jev picks the new row, but with too little confidence to click it.
+const unsureTarget = (done = 0.01) => () => ({ ...decision({ done }), target: { choice: "0", probabilities: { 0: 0.1 } } });
+
+test("after a sent Create, Jev seeing no action or no clear target also checks the contract first", async () => {
+  for (const [next, status] of [[{ tool: "none", done: 0.2 }, "host_review_required"], [unsureTarget(), "host_review_required"], [unsureTarget(0.5), "completed_verified"]]) {
+    const k = customerForm();
+    const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, next]));
+    const result = await runtime.run("Save customer JevSteer QA P1019B", saveCustomer);
+    assert.equal(result.status, status);
+    assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  }
+  // When the check fails, the stop is the same as before.
+  const k = customerForm();
+  const failed = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, unsureTarget(0.5)], { verifyScore: 0.1 })).run("Save customer JevSteer QA P1019B", saveCustomer);
+  assert.equal(failed.status, "ambiguous");
+});
+
+test("after a sent Create, an uncertain check goes to the host; without a write the host is asked for guidance", async () => {
+  const k = customerForm();
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { next_step_clear: 0.1 }], { verifyScore: 0.6 }));
+  const result = await runtime.run("Save customer JevSteer QA P1019B", { ...saveCustomer, verificationMode: "hybrid" });
+  assert.equal(result.status, "host_review_required");
+  assert.ok(result.host_review?.review_id);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+  // A read-only click leaves no write to check; an unclear step still asks.
+  const read = customerForm();
+  const unclear = await memoryRuntime(read, scriptedDecider([{ side_effect: 0.01 }, { next_step_clear: 0.1 }])).run("Save customer JevSteer QA P1019B", saveCustomer);
+  assert.equal(unclear.status, "needs_guidance");
 });
 
 test("navigation during a decision reobserves without replaying the click", async () => {
@@ -180,8 +288,107 @@ test("exact constraint guard sees the chosen native option, never a secret one",
   const el = { i: 0, selector: "#status", tag: "select", role: "combobox", label: "Status", options: [{ text: "Open", value: "open" }, { text: "Closed", value: "closed" }] };
   const contract = { goal: "Reopen the ticket", success_criteria: [], constraints: ["Do not set Status to Closed"], guidance: [] };
   const page = { url: "https://fixture.test/ticket", title: "Ticket", text: "Status", elements: [el] };
-  assert.equal(await runtime.checkConstraintForAction(page, contract, { tool: "select", el, value: "open" }, []), 0.05);
+  assert.equal(await runtime.checkConstraint(page, contract, { tool: "select", el, value: "open" }, []), 0.05);
   assert.deepEqual(seen.selected_option, { text: "Open", value: "open" });
-  await runtime.checkConstraintForAction(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
+  await runtime.checkConstraint(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
   assert.equal(seen.selected_option, undefined);
+});
+
+test("effect and constraint guards are separate requests; the constraint one sees page text only and blocks when unanswered", async () => {
+  const asked = [];
+  let reply = {};
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked.push({ questions: Object.keys(questions).sort(), page: Object.keys(state.page).sort() });
+    return { answers: reply, ms: 1, tokens: 1 };
+  });
+  const el = { i: 0, selector: "#save", tag: "button", role: "button", label: "Save" };
+  const page = { url: "https://fixture.test/form", title: "Form", text: "Form", elements: [el] };
+  const contract = { goal: "Save", success_criteria: [], constraints: ["Do not save"], guidance: [] };
+  reply = { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 } };
+  assert.deepEqual(await runtime.checkActionEffects(page, contract, { tool: "click", el }, []), { sideEffect: 0.9, irreversible: 0.1 });
+  reply = { violates: { noul: 0.2 } };
+  assert.equal(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), 0.2);
+  reply = {};
+  assert.deepEqual(await runtime.checkActionEffects(page, contract, { tool: "click", el }, [], 0.3, 0.4), { sideEffect: 0.3, irreversible: 0.4 });
+  assert.equal(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), 1);
+  assert.deepEqual(asked.map((a) => a.questions), [["action_irreversible", "action_side_effect"], ["violates"], ["action_irreversible", "action_side_effect"], ["violates"]]);
+  assert.deepEqual(asked[1].page, ["text", "title", "url"]);
+});
+
+test("a constraint block says allow_irreversible does not lift it and how to settle it", async () => {
+  const k = new MemoryKapture({ elements: [button] });
+  const decider = async (state, questions) => {
+    if (questions.violates) return { answers: { violates: { noul: 0.74 } }, ms: 1, tokens: 1 };
+    if (questions.action_side_effect) return { answers: { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 } }, ms: 1, tokens: 1 };
+    return { answers: decision(), ms: 1, tokens: 1 };
+  };
+  const result = await memoryRuntime(k, decider).run("Create customer Acme", { constraints: ["Do not create duplicates"], allowIrreversible: true, maxActions: 3, evidenceLevel: "none" });
+  assert.equal(result.status, "constraint_blocked");
+  assert.match(result.info, /allow_irreversible does not lift this check/);
+  assert.equal(result.pending.p_constraint_risk, 0.74);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+});
+
+test("Playwright rounds wait on full observations, not the URL/title metadata poll", async () => {
+  const { JevSteerRuntime } = await import("../src/runtime.mjs");
+  const { ActionJournal } = await import("../src/action-journal.mjs");
+  let details = 0;
+  let reads = 0;
+  const driver = {
+    kind: "playwright",
+    detail: async () => { details++; return { url: "https://fixture.test", title: "T" }; },
+    observe: async () => { reads++; return { url: "https://fixture.test", title: "T", text: "", elements: [], loading: { busy: reads < 2 } }; },
+  };
+  const runtime = new JevSteerRuntime({ driver, journal: new ActionJournal({ dir: null }), observation: { maxMs: 1000, quietMs: 0, pollMs: 1 } });
+  assert.equal(await runtime.settle("tab"), 0);
+  assert.equal((await runtime.settledPage("tab")).loading.busy, false);
+  assert.equal(details, 0);
+  assert.equal(reads, 2);
+});
+
+test("a wait ends as soon as the page changes", async () => {
+  // The report shows 300 ms into the wait; the wait does not run its full 5 s.
+  const k = new MemoryKapture({ text: "Profit and Loss", elements: [button] });
+  const runtime = memoryRuntime(k, scriptedDecider([
+    () => { setTimeout(() => { k.page.text = "Profit and Loss For the period 2026/1/1 - 2026/12/31"; }, 300); return decision({ tool: "wait" }); },
+    (state) => decision(state.page.text.includes("For the period") ? { tool: "none", done: 0.99 } : { tool: "wait" }),
+  ]));
+  runtime.observation = { maxMs: 8000, quietMs: 0, pollMs: 20, waitMs: 5000 };
+  const started = Date.now();
+  const result = await runtime.run("Show the report", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(result.status, "completed_verified");
+  assert.deepEqual(result.actions.map((a) => [a.action, a.page_changed]), [["wait", undefined]]);
+  assert.ok(Date.now() - started < 2500, `took ${Date.now() - started} ms`);
+});
+
+test("a wait in which the page sent requests is not idle, but three of them in a row stop", async () => {
+  const k = new MemoryKapture({ text: "Generating", elements: [button] });
+  let sent = 0;
+  // A job the page polls, or a page that polls badge counters: each wait sees
+  // one more request and no visible change.
+  const runtime = memoryRuntime(k, scriptedDecider([() => { k.page.requests_since_input = ++sent; return decision({ tool: "wait" }); }]));
+  const result = await runtime.run("Show the report", { maxActions: 10, evidenceLevel: "none" });
+  assert.ok(result.actions.every((a) => a.page_changed === undefined));
+  assert.equal(result.status, "stuck");
+  assert.equal(result.actions.filter((a) => a.action === "wait").length, 3);
+  assert.match(result.info, /did not change in 3 waits.*kept sending requests/);
+});
+
+test("the effect and constraint guards do not see how many requests earlier inputs sent", async () => {
+  const k = new MemoryKapture({ text: "Add Customer", elements: [button] });
+  k.onCommand = (command) => { if (command === "click") k.page.requests_since_input = 3; };
+  const guards = [];
+  let decided;
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.01 }, { side_effect: 0.01 }, { tool: "none", done: 0.99 }], {
+    inspect: (state, questions) => {
+      if (questions.action_side_effect || questions.violates) guards.push(state.task.history);
+      else if (questions.tool) decided = state.task.history;
+    },
+  }));
+  await runtime.run("Add two contact rows", { constraints: ["Do not save"], maxActions: 4, evidenceLevel: "none" });
+  // Jev's own next step sees the count; the guards judge without it.
+  assert.equal(decided[0].requests, 3);
+  const later = guards.filter((history) => history.length);
+  assert.ok(later.length >= 2);
+  assert.ok(later.every((history) => history.every((entry) => !("requests" in entry))));
 });

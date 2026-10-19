@@ -266,18 +266,25 @@ Its fixtures adapt the search/filter and guard-testing ideas from
 `run-contract.mjs` calls this project's actual `browser_run` MCP tool with
 host-defined semantic milestones. Use `browser_tabs` to select the intended
 demo tab and add its `tab_id` to the JSON contract when multiple tabs are
-connected. Review each returned Evidence Packet before resuming at
-`next_milestone_index` with the same `run_id`. A result that requires guidance
-or is uncertain is not an automatic pass. The examples are workflow contracts,
-not selector scripts. Use a unique customer name for creation runs and inspect
-existing records before creating another one.
+connected. A contract without `tab_id` may name a `start_url` instead: the
+script opens it in a new tab with `browser_open` and runs there. `start_url`
+belongs to the scripts; `browser_run` ignores it. Review each returned Evidence
+Packet before resuming at `next_milestone_index` with the same `run_id`. A
+result that requires guidance or is uncertain is not an automatic pass. The
+examples are workflow contracts, not selector scripts. Use a unique customer
+name for creation runs and inspect existing records before creating another one.
 
 Complex public-site contracts are in `examples/arxiv-advanced-readonly.json`
-and `examples/selenium-public-form.json`. Open the corresponding arXiv advanced
-search or Selenium public web form in a dedicated tab, supply its `tab_id`, and
-review each ticket independently. Never auto-accept a ticket in a test runner.
+and `examples/selenium-public-form.json`. Each names its `start_url` (the arXiv
+advanced search or the Selenium web form). Through `scripts/live-host.mjs`, call
+`browser_open` with that URL and pass the returned `tab_id` to `browser_run`.
+Review each ticket independently. Never auto-accept a ticket in a test runner.
 The ccMonet read-only/report examples also use explicit host verification; reuse
 the user's intended authenticated tab and organization, without editing records.
+`examples/ccmonet-customer.json` creates one synthetic customer in the demo
+company. It starts on the Customers list, fills the form (a contact's Add
+included) in one milestone and clicks Create in the next, so the fill review
+settles any doubt about Add before anything is saved.
 
 Traces are stored in ignored `.test-artifacts/`; `.env` and raw customer data
 must stay local. No tests run during normal MCP startup.
@@ -354,9 +361,19 @@ exact, including whitespace and empty strings. For example:
 `max_duration_ms` defaults to 300000 per milestone. The budget is cooperative: no
 new input begins after exhaustion, while an already dispatched command retains
 its transport timeout. `JEVSTEER_ACTION_SETTLE_MS` defaults to 8000 and
-`JEVSTEER_OBSERVATION_QUIET_MS` to 250. Link navigation, explicit GET search-form
-submissions and search Enter can wait
-up to `JEVSTEER_NAVIGATION_SETTLE_MS` (default 15000) for an observed route change;
+`JEVSTEER_OBSERVATION_QUIET_MS` to 250, and `JEVSTEER_REVIEW_QUIET_MS`, the
+quiet period before a host review ticket binds the page, to 1000. A `wait`
+watches the page for up to `JEVSTEER_WAIT_MS` (default 5000) and ends as soon as
+it changes; `JEVSTEER_MAX_IDLE_WAITS` (default 2) waits in a row that saw
+nothing change stop the milestone as `stuck`, one more if the page kept sending
+requests. With the
+Playwright driver each round waits for quiet full snapshots only, and for open
+XHR/fetch requests the last input started, not counting analytics and ad
+beacons; the Kapture DOM-metadata settle poll
+is skipped because Playwright metadata carries no DOM size. Link navigation, explicit GET search-form
+submissions and search Enter can wait up to `JEVSTEER_NAVIGATION_SETTLE_MS`
+(default 15000) for an observed route change. Checkboxes, radios and fields in
+such a form, and same-page `#` links, do not wait for one;
 transient content-script teardown is retried through reads only. A lost
 `browser_open` acknowledgement is accepted only after fresh DOM metadata confirms
 the exact requested destination. Otherwise `navigation_unconfirmed` retains the

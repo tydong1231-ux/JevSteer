@@ -47,6 +47,20 @@ export class HostReviewStore {
   async accepted(tabId, runId, milestoneId, contractDigest) {
     return (await this.load(tabId)).find(r => r.state === "accepted" && r.run_id === runId && r.milestone_id === milestoneId && r.contract_digest === contractDigest);
   }
+  // The newest ticket of one milestone, whatever its state.
+  async latest(tabId, runId, milestoneId) {
+    return (await this.load(tabId)).findLast(r => r.run_id === runId && r.milestone_id === milestoneId);
+  }
+  // An acceptance found the page changed. The host then rejects the ticket
+  // and reruns the milestone, which re-observes instead of acting.
+  async markStale(tabId, id) {
+    const rows = await this.load(tabId);
+    const record = rows.find(r => r.id === id);
+    if (!record || record.state !== "pending") throw new Error("HOST_REVIEW_NOT_PENDING");
+    record.stale_at = new Date().toISOString();
+    await this.save(tabId, rows);
+    return record;
+  }
   async issue(tabId, details) {
     const rows = await this.load(tabId);
     if (rows.some(r => r.state === "pending")) throw new Error("HOST_REVIEW_PENDING");

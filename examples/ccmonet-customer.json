@@ -1,11 +1,13 @@
 {
   "goal": "Create and inspect synthetic demo customer JevSteer QA UNIQUE-RUN",
+  "start_url": "https://new.ccmonet.com/protected/sales/customers",
   "review_mode": "strict",
   "constraints": ["Demo company only. Create or edit only JevSteer QA UNIQUE-RUN. Do not create duplicates; inspect an existing match instead.","Do not send emails, invitations, payments or approvals."],
   "values": {"customer_name":"JevSteer QA UNIQUE-RUN","email":"jevsteer.qa.UNIQUE-RUN@example.invalid"},
   "milestones": [
-    {"id":"form","goal":"Open the Add Customer form","success_criteria":["Add Customer form is open with Name and Contact sections"],"guidance":["Global New creates documents. Customer creation belongs to the Customers add menu."],"max_actions":20},
-    {"id":"save","goal":"Save customer JevSteer QA UNIQUE-RUN with contact email jevsteer.qa.UNIQUE-RUN@example.invalid","success_criteria":["The matching saved customer row contains the exact name and email"],"guidance":["Customer email belongs to a Contact entry. Create persists the customer after filling basic and contact details. If Create was already acknowledged, verify its outcome before retrying."],"max_actions":24},
-    {"id":"inspect","goal":"The existing customer JevSteer QA UNIQUE-RUN details is open and its email matches the supplied email","success_criteria":["The Name and Email fields show the requested saved values"],"guidance":["Saved customer details are editable and include a Save button; opening them without edits does not require saving."],"max_actions":20}
+    {"id":"form","goal":"Open the Add Customer form","success_criteria":["Add Customer form is open with Name and Contact sections"],"guidance":["Global New creates documents, not customers. Customer creation belongs to the plus (+) menu on the Customers list; that menu's Create only opens an empty Add Customer form and saves nothing."],"max_actions":20},
+    {"id":"fill","goal":"Fill the Add Customer form with name JevSteer QA UNIQUE-RUN and one contact whose email is jevsteer.qa.UNIQUE-RUN@example.invalid, without creating the customer","success_criteria":["The Name field shows JevSteer QA UNIQUE-RUN","A contact entry shows the supplied email","The form is still open and Create has not been clicked"],"guidance":["Customer email belongs to a Contact entry. Add in the Contact section only adds an unsaved contact row to this form. Create persists the customer; it belongs to the next milestone."],"max_actions":20},
+    {"id":"save","goal":"Create customer JevSteer QA UNIQUE-RUN from the filled form","success_criteria":["A saved customer row shows the exact name JevSteer QA UNIQUE-RUN"],"guidance":["The form is already filled. Create persists the customer. If Create was already acknowledged, verify its outcome before retrying."],"max_actions":8},
+    {"id":"inspect","goal":"The existing customer JevSteer QA UNIQUE-RUN details is open and its email matches the supplied email","success_criteria":["The Name field shows JevSteer QA UNIQUE-RUN","The Email field shows the supplied email; ccMonet stores emails in lowercase, so compare it ignoring letter case"],"guidance":["Saved customer details are editable and include a Save button; opening them without edits does not require saving."],"max_actions":20}
   ]
 }

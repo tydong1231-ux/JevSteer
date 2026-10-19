@@ -1,5 +1,6 @@
 {
   "goal": "Find Attention Is All You Need using arXiv advanced title, classification and original-submission-date filters, then verify its abstract record",
+  "start_url": "https://arxiv.org/search/advanced",
   "verification_mode": "host",
   "review_mode": "strict",
   "constraints": ["Public read-only search. Do not log in, upload, submit papers, donate, download files or follow external social links."],

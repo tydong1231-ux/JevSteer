@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { elementFingerprint, pageDiff, squash } from "./page-model.mjs";
-import { locateSameElement } from "./element-identity.mjs";
+import { locateAfterAction } from "./element-identity.mjs";
+import { sameDateText } from "./date-text.mjs";
 
 // Kapture snapshots give rich-text editors and custom textboxes no value; their
 // content is element text, whitespace-collapsed and cut to this many chars.
@@ -8,9 +9,9 @@ const TEXT_CHARS = 180;
 
 const digest = (value) => createHash("sha256").update(String(value ?? "")).digest("hex");
 
-function findAfter(after, action) {
+function findAfter(after, action, before) {
   if (!action?.el) return undefined;
-  if (action.el.identity_version) return locateSameElement(action.el, after);
+  if (action.el.identity_version) return locateAfterAction(action.el, after, before);
   const bySelector = after.elements?.find((e) => e.selector && e.selector === action.el.selector);
   if (bySelector) return bySelector;
   const fingerprint = elementFingerprint(action.el);
@@ -21,7 +22,7 @@ function findAfter(after, action) {
 export function verifyActionEffect(before, after, action) {
   if (!before || !after || !action) return undefined;
   const changed = pageDiff(before, after) !== "no obvious visible change";
-  const current = findAfter(after, action);
+  const current = findAfter(after, action, before);
 
   if (action.tool === "type") {
     const secret = action.el?.type === "password" || current?.value === "[REDACTED]";
@@ -37,7 +38,10 @@ export function verifyActionEffect(before, after, action) {
     const asText = !native && current.value == null && current.text != null;
     const actual = asText ? squash(current.text, TEXT_CHARS) : String(current.value ?? "");
     const expected = asText ? squash(action.expected_value, TEXT_CHARS) : String(action.expected_value ?? "");
-    return { status: actual === expected ? "confirmed" : "failed", check: "field_value" };
+    if (actual === expected) return { status: "confirmed", check: "field_value" };
+    // A date picker rewrites a committed date in its own format: 2026/01/01.
+    if (sameDateText(actual, expected)) return { status: "confirmed", check: "field_value_date" };
+    return { status: "failed", check: "field_value" };
   }
 
   if (action.tool === "select") {
@@ -61,17 +65,20 @@ export function verifyActionEffect(before, after, action) {
     }
   }
 
+  // A checkable control's own state is its effect, even inside a form or a
+  // link. Only when the click loaded another page is that load the effect.
+  if (action.tool === "click" && (["checkbox", "radio"].includes(action.el?.type) || ["checkbox", "radio", "switch"].includes(action.el?.role))
+      && typeof action.el?.checked === "boolean") {
+    if (typeof current?.checked === "boolean") return { status: current.checked !== action.el.checked ? "confirmed" : "failed", check: "checked_state" };
+    if (!current && before.url !== after.url) return { status: "confirmed", check: "navigation" };
+  }
+
   if (action.tool === "click" && (action.tag === "a" || action.role === "link" || action.el?.form_action)) {
     return { status: before.url !== after.url ? "confirmed" : (changed ? "changed" : "unknown"), check: "navigation" };
   }
 
   if (action.tool === "press_enter" && (action.el?.type === "search" || action.el?.role === "searchbox")) {
     return { status: before.url !== after.url ? "confirmed" : (changed ? "changed" : "unknown"), check: "navigation" };
-  }
-
-  if (action.tool === "click" && (["checkbox", "radio"].includes(action.el?.type) || ["checkbox", "radio", "switch"].includes(action.el?.role))
-      && typeof current?.checked === "boolean" && typeof action.el?.checked === "boolean") {
-    return { status: current.checked !== action.el.checked ? "confirmed" : "failed", check: "checked_state" };
   }
 
   if (["click", "press_enter", "press_key", "hover", "scroll"].includes(action.tool)) {

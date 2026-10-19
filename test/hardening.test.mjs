@@ -125,6 +125,17 @@ test("contenteditable typing is checked against element text, not a missing valu
   assert.equal(verifyActionEffect(page([el]), page([{ ...el, text: "Hello" }]), { tool: "type", el, expected_value: "Hello world" }).status, "failed");
 });
 
+test("a checkable control is judged by its checked state, even when it is a link or carries a form action", () => {
+  for (const el of [
+    { selector: "#cs", tag: "a", role: "checkbox", href: "#", label: "Computer Science", checked: false },
+    { selector: "#first", tag: "input", type: "radio", label: "Original date", checked: false, form_action: "https://example.test/results" },
+  ]) {
+    const action = { tool: "click", tag: el.tag, role: el.role, el };
+    assert.deepEqual(verifyActionEffect(page([el]), page([{ ...el, checked: true }]), action), { status: "confirmed", check: "checked_state" });
+    assert.deepEqual(verifyActionEffect(page([el]), page([el]), action), { status: "failed", check: "checked_state" });
+  }
+});
+
 test("secret fields are confirmed by the live value digest, never by their hidden text", () => {
   const digest = (value) => createHash("sha256").update(value).digest("hex");
   const el = { selector: "#pin", tag: "input", label: "PIN", value: "[REDACTED]", value_hash: digest("") };

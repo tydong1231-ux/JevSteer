@@ -68,6 +68,33 @@ export function readDOM(elements) {
   for (const e of document.querySelectorAll('dialog[open],[role=dialog][aria-modal=true]')) if (visible(e) && !modals.includes(e)) modals.push(e);
   const modal = modals.at(-1);
   const permitted = (e) => !modal || ancestors(e).includes(modal) || !!closest(e, '[role=listbox],[role=option]');
+  // A toast ("Update successfully") floats over the page and goes away on its
+  // own: antd's message and notification notices, and any fixed-position
+  // alert or status region. Host review tickets leave its text out of the
+  // state they bind. (Page code: constants must live inside this function.)
+  const TOAST = '[role=alert],[role=status],[aria-live=assertive],[aria-live=polite],.ant-message-notice,.ant-notification-notice';
+  const toastRoots = [...(modal || document).querySelectorAll(TOAST)].filter((e) => visible(e)
+    && !(parent(e) && closest(parent(e), TOAST)) && !e.querySelector('input,textarea,select')
+    && ancestors(e).some((p) => getComputedStyle(p).position === 'fixed') && text(e, 301).length <= 300);
+  // dnd-kit renders each sortable or draggable item as role=button with
+  // aria-disabled while dragging is off. That state is about dragging only:
+  // ccMonet's bill rows still open on click. Any other aria-disabled ancestor
+  // still disables everything inside it.
+  const dragOnly = (p) => /\b(sortable|draggable)\b/i.test(p.getAttribute('aria-roledescription') || '')
+    || /(^|\s)DndDescribedBy-\d+(\s|$)/.test(p.getAttribute('aria-describedby') || '');
+  // Only a submit control of a GET form loads the form's action. Checkboxes,
+  // radios and fields in that form change nothing until it is submitted.
+  const getAction = (e) => {
+    const submits = e.tagName === 'BUTTON' ? !['button', 'reset'].includes(e.type) : e.tagName === 'INPUT' && ['submit', 'image'].includes(e.type);
+    if (!submits || !e.form) return undefined;
+    const method = e.hasAttribute('formmethod') ? e.formMethod : e.form.method;
+    const action = e.getAttribute('formaction') || e.form.getAttribute('action');
+    if (String(method || 'get').toLowerCase() !== 'get' || !action) return undefined;
+    try {
+      const url = new URL(action, document.baseURI);
+      return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined;
+    } catch { return undefined; }
+  };
   const describe = (e, index) => {
     const form = e.form || closest(e, 'form,[role=form]');
     const section = closest(e, 'fieldset,[role=group],[role=dialog],dialog');
@@ -76,6 +103,7 @@ export function readDOM(elements) {
     const formKey = form && (form.id || form.getAttribute('name') || name(form) || clean(form.getAttribute('action')));
     const scope = section && (section.matches('fieldset') ? text(section.querySelector('legend'), 180) : name(section));
     const local = text(record || parent(e), 500);
+    const ariaOff = ancestors(e).filter((p) => p.getAttribute('aria-disabled') === 'true');
     const descriptor = {
       ordinal: index, tag: e.tagName.toLowerCase(), role: role(e), type: e.getAttribute('type') || (e.tagName === 'INPUT' ? e.type : undefined),
       label: name(e), text: text(e, 180), name: e.getAttribute('name') || '', placeholder: e.getAttribute('placeholder') || '',
@@ -84,12 +112,16 @@ export function readDOM(elements) {
       checked: 'checked' in e ? e.checked : e.hasAttribute('aria-checked') ? e.getAttribute('aria-checked') === 'true' : undefined,
       selected: e.hasAttribute('aria-selected') ? e.getAttribute('aria-selected') === 'true' : undefined,
       expanded: e.hasAttribute('aria-expanded') ? e.getAttribute('aria-expanded') === 'true' : undefined,
-      disabled: e.matches(':disabled') || !!closest(e, '[aria-disabled=true]'),
+      disabled: e.matches(':disabled') || ariaOff.some((p) => !dragOnly(p)),
+      // Inside a drag-only one. Playwright's input checks still count it as
+      // disabled; the driver checks such targets itself.
+      drag_disabled: ariaOff.some(dragOnly) || undefined,
       readonly: e.readOnly === true || e.getAttribute('aria-readonly') === 'true', contenteditable: e.isContentEditable,
       invalid: e.getAttribute('aria-invalid') === 'true' || (e.willValidate && !e.validity.valid) || false,
       validation_message: e.validationMessage || '', context: local, scope: scope || '',
       form_key: formKey || '', record_key: recordKey || '',
-      form_action: form && (form.method || 'get').toLowerCase() === 'get' ? form.getAttribute('action') || undefined : undefined,
+      form_action: getAction(e),
+      toast: toastRoots.some((t) => t.contains(e)) || undefined,
       options: e.tagName === 'SELECT' ? [...e.options].map((o) => ({ text: clean(o.text), value: o.value, selected: o.selected, disabled: o.disabled || o.parentElement?.disabled === true })) : undefined,
     };
     return descriptor;
@@ -99,6 +131,7 @@ export function readDOM(elements) {
     documentKey: String(performance.timeOrigin), url: location.href, title: document.title,
     text: text(modal || document.body, 24000), background_context: modal ? text(document.querySelector('h1'), 500) : undefined,
     modal: !!modal,
+    toasts: toastRoots.map((e) => text(e, 300)).filter(Boolean),
     loading: { busy: document.readyState === 'loading' || all.some((e) => visible(e) && permitted(e) && e.getAttribute('aria-busy') === 'true') || [...document.querySelectorAll('[aria-busy=true],[role=progressbar]')].some(visible) },
     elements: filtered,
   };
@@ -148,6 +181,7 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
       url: page.url(), title: main?.title || await page.title(),
       text: active.map((f) => f.data.text).join('\n'), background_context: main?.background_context,
       loading: { busy: active.some((f) => f.data.loading.busy) }, elements,
+      toasts: active.flatMap((f) => f.data.toasts),
       frames: active.map((f) => ({ frame_id: f.info.id, document_id: f.documentId, url: f.data.url })),
       metrics: { element_count: elements.length, frame_count: active.length },
     },

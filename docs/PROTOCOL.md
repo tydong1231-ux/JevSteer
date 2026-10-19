@@ -41,6 +41,15 @@ constraints before binding, then permits only those validated TYPE/SELECT inputs
 Every guarded explore input also gets an exact remote/irreversible effect check,
 regardless of its rough score. Read-only excludes remote preference writes such
 as favorite/star/bookmark/subscription toggles, not just financial record saves.
+The effect and constraint questions are separate Jev requests sent at once; the
+constraint request sees the page text only. A missing constraint answer counts
+as a violation, and the constraint verdict is applied after the replay and
+journal gates. `allow_irreversible` does not lift a `constraint_blocked` stop:
+settle the doubt with a guidance fact the host has checked (for example, that no
+duplicate record exists) or change the constraint. The effect request treats
+`guidance` and `constraints` as host facts about what a control does, so a fact
+such as "Generate only calculates the report" keeps a read-only button out of
+the remote-write journal.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session. The
@@ -61,6 +70,13 @@ redacted; financial evidence remains private. Limits/truncation are explicit.
 Visible virtual rows are not evidence of the entire dataset, and this reader
 does not assert server persistence or create an acceptance receipt. Tab discovery
 does not install event collectors on unrelated pages.
+
+An `aria-disabled=true` ancestor disables every control inside it, except a
+dnd-kit sortable or draggable item (`aria-roledescription` sortable/draggable, or
+a `DndDescribedBy-N` description), whose `aria-disabled` only turns dragging off.
+Input to a target inside one skips Playwright's enabled check once a trial hover
+shows the target is visible, stable and not covered. `browser_inspect` marks such
+an ancestor `drag_only`.
 
 ## Milestone contract
 
@@ -91,6 +107,14 @@ Guidance must be just-in-time workflow knowledge, not selectors or click sequenc
 
 JevSteer never assumes an action succeeded only because the command returned. The next observation records a mechanical effect check; final milestone completion still requires strict semantic/assertion verification.
 
+Pages often rewrite text next to a field as it is filled: live totals, formatted
+previews, character counters, validation messages. The effect check, the
+"already typed" filter and form-mode bindings first look for the exact control.
+If only its surrounding text changed, they accept the one control with the same
+label, name, form, record, frame and document, provided it was the only such
+control before. Equal controls in unkeyed rows still need their record text.
+Pre-input target checks and journal fingerprints stay exact.
+
 If workflow knowledge is missing, return `needs_guidance` instead of guessing. The host patches the current milestone and resumes.
 
 ## Host review
@@ -115,8 +139,18 @@ substitute for the host checking all semantic criteria and rejecting weak matche
 
 A pending ticket blocks browser input, navigation and new runs on that tab across
 MCP restarts. Acceptance requires the same observed page state and a non-busy page.
+A toast, such as antd's "Update successfully" message or another fixed-position
+alert or status region, goes away on its own, so the state a ticket binds leaves
+its text out; the host still sees it in the ticket's observation. The ticket keeps
+a digest of each toast it showed, and any other toast at acceptance, such as a
+late error, makes the ticket stale.
 `host_review_stale` requires rejection and re-observation of the same milestone,
-not replaying the earlier action. Rejection does not clear uncertain mutations;
+not replaying the earlier action. After a stale ticket is rejected, rerunning
+that milestone with the same `run_id` re-observes: in host and hybrid modes the
+runtime checks the contract on the current page before Jev decides anything, and
+issues a fresh ticket when it holds. Only when the check fails does Jev act
+again. A ticket rejected for its result rather than for staleness resumes
+normally. Rejection does not clear uncertain mutations;
 acceptance resolves only the originating run/milestone's pending actions, retaining
 remote replay guards. Review storage contains hashes and protocol metadata only,
 not raw page, task values or evidence prose. CAPTCHA/login, irreversible actions,
@@ -126,12 +160,27 @@ When network capture is enabled, a short inspection capture reproduces Chrome's
 debugger-notice viewport so attach/detach does not create a false stale result.
 Assertions are checked again on the stable ticket observation after evidence
 cleanup. Inspection capture is always released and performs no browser input.
+That observation waits for the page to stay unchanged for
+`JEVSTEER_REVIEW_QUIET_MS` (default 1000), so a field filled by a later request,
+such as a bill's file type, is part of the ticket rather than making it stale
+before the host accepts.
 
 If Jev returns no next action while an originating remote request is still pending,
 host mode can passively wait up to the remaining action-settling/time budget for a
 nonempty assertion set to pass on a stable, non-busy page. This only observes; it
 never replays the request, resolves the journal or accepts the result automatically.
 Missing/busy outcomes time out and remain unconfirmed.
+
+After a remote write this milestone sent, such as Create or Save, Jev may see no
+clear next step, no action at all, or no confident target, because the goal is
+already reached. Before stopping with `needs_guidance`, `stuck` or `ambiguous`,
+the runtime then checks the contract on the current page. Completion still takes
+both keys: Jev's own reading (a done score of at least 0.35) and the verifier.
+A verifier pass that Jev does not share goes to the host
+(`host_review_required` in host and hybrid modes; `verification_uncertain` in
+jev mode, with the write still pending). A pass both agree on completes the
+milestone (`completed_verified`, or `host_review_required` in host mode). When
+the check fails, the milestone stops as before. No input is sent for this check.
 
 Multiple remote writes need separately reviewable outcomes. If an earlier write is
 unconfirmed, independently inspect and resolve it before the next mutation; do not
@@ -203,6 +252,16 @@ than guessing. With no applicable assertion the model uses the selected field's
 explicit label/name first. Range pickers can still reorder coupled date endpoints;
 keep intermediate ranges valid and verify both controls plus the generated heading.
 
+Typing a value that reads as a calendar date (`2026/1/1`, `10/20/2026`,
+`2026年1月1日`, `Oct 20, 2026`) ends by leaving the field, unless it is a
+combobox. Date pickers such as antd's commit a typed date only then, so a
+Generate or Save click right after typing would otherwise read the old date.
+The driver then waits for the page to draw two frames (at most 250 ms), the
+frame in which such a picker writes its value back. The effect check then sees
+the committed value and accepts the same date rewritten with other padding or
+separators (`2026/01/01`). Fast input also sends a Shift key press after
+filling, for widgets that parse fields on key events.
+
 ## Runtime limits
 
 `max_actions` bounds decision rounds; `max_duration_ms` bounds starting more
@@ -212,8 +271,50 @@ stable directory for short-lived MCP processes. Host acceptance, login, CAPTCHA,
 irreversible confirmation and visual fallback remain explicit protocol outcomes.
 
 Transient content-script teardown is retried a bounded number of times during
-observation. Link navigation, explicit GET search forms and search Enter wait for route progress
-within `JEVSTEER_NAVIGATION_SETTLE_MS`; no browser input is replayed by this wait.
+observation, as is a page read that a redirect interrupts ("Execution context was
+destroyed"); up to five reads, 1.5 s in all.
+
+With the Playwright driver, observation after an input also waits while XHR or
+fetch requests the page started after that input are still open, up to the
+action settle budget (`JEVSTEER_ACTION_SETTLE_MS`). A report whose Generate
+button shows nothing until its request returns is then seen in the same round,
+without waits or a second click. A slow report or save is waited on until it
+returns; a request still open after 30 s counts as a stream and is no longer
+waited on. When a request held open for 8 s or more returns and the page sends
+another to the same endpoint within a second, with no input in the second before
+it, the endpoint is a long poll: from then on its requests are neither waited on
+nor counted. A click that has changed nothing yet is watched for 1 s more, since
+handlers can wait before sending a request; clicks into text fields and native
+selects are not.
+Each action in the result carries `requests`: how many data requests the page
+sent after it. A click with an `unknown` effect and `requests: 0` did not reach
+a handler that does anything visible or remote. Jev's next decision sees these
+counts; the effect and constraint guards do not, so a form that checks a name
+as it is typed does not make its Add button look like a save. Analytics,
+advertising and error-monitoring beacons (Google Analytics and Ads, Amplitude,
+Segment, Sentry, Datadog RUM and similar) are not counted, waited on or listed
+as relevant evidence: a form interaction fires them whether or not anything is
+saved. Their URLs are recorded without query strings, which carry visitor ids
+and hashed emails. Link navigation, the submit button of an explicit GET search form
+and search Enter wait for route progress within `JEVSTEER_NAVIGATION_SETTLE_MS`;
+no browser input is replayed by this wait. Checkboxes, radios and fields inside
+that form, and same-page `#` links, are judged in place without that wait.
+A `wait` watches the page for up to `JEVSTEER_WAIT_MS` (default 5000, never more
+than the action settle budget) and ends as soon as the page changes. ccMonet's
+Profit and Loss report, for example, shows 6 to 10 s after Generate, after its
+requests have returned and with no spinner; one or two waits see it. A wait after
+which the page did not change, nothing on it is loading and the page sent no new
+request is marked `page_changed: false` in history. `JEVSTEER_MAX_IDLE_WAITS`
+(default 2) such waits in a row stop the milestone as `stuck`. A page that keeps
+sending requests, such as one polling badge counters, stops after one more wait
+than that with nothing visible changing. `JEVSTEER_MAX_WAITS` (default 12)
+bounds all waits.
+
+With `JEVSTEER_LOG=1`, stderr gets one row per round: Jev's scores, the chosen
+action, `observe_ms` (watching the previous input or wait), `decide_ms` and
+`requests`. A guarded input adds a `guards` row with the effect and constraint
+verdicts and the target's scope and context. `explain: true` returns the round
+rows, guard verdicts included, in the result.
 `browser_open` can return `navigation_unconfirmed` with a `tab_id` when its
 acknowledgement is lost and fresh DOM metadata cannot confirm the exact requested
 URL. Inspect that tab before another navigation. Redirects to a different URL

@@ -31,7 +31,7 @@ export async function send(driver, id, action, beforeDispatch) {
 export async function mcpFixture(page, testInfo, decider, options = {}) {
   const { driver, id } = await driverFor(page, options.driver);
   const runtime = new JevSteerRuntime({
-    driver, decider, observation: { maxMs: 500, quietMs: 0, pollMs: 20 },
+    driver, decider, observation: { maxMs: 500, quietMs: 0, pollMs: 20, reviewQuietMs: 0 },
     journal: new ActionJournal({ dir: testInfo.outputPath('journal') }),
     reviews: new HostReviewStore({ dir: testInfo.outputPath('reviews') }),
     leases: new TabLeaseManager({ dir: testInfo.outputPath('leases') }),

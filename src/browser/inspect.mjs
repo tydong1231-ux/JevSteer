@@ -36,7 +36,10 @@ export function inspectBusinessDOM(patterns) {
     const names = [label, e.name, e.id, e.autocomplete].join(' ');
     const secret = e.type === 'password' || legacySecret.test(names) || sensitiveName(names);
     const blockers = [];
-    for (let p = e; p; p = p.parentElement) if (p.matches(':disabled,[aria-disabled=true],[inert]')) blockers.push({ tag: p.tagName.toLowerCase(), role: p.getAttribute('role'), id: p.id, aria_disabled: p.getAttribute('aria-disabled'), native_disabled: p.matches(':disabled') });
+    // A dnd-kit item's aria-disabled only turns dragging off (see snapshot.mjs).
+    const dragOnly = (p) => !p.matches(':disabled,[inert]') && (/\b(sortable|draggable)\b/i.test(p.getAttribute('aria-roledescription') || '')
+      || /(^|\s)DndDescribedBy-\d+(\s|$)/.test(p.getAttribute('aria-describedby') || ''));
+    for (let p = e; p; p = p.parentElement) if (p.matches(':disabled,[aria-disabled=true],[inert]')) blockers.push({ tag: p.tagName.toLowerCase(), role: p.getAttribute('role'), id: p.id, aria_disabled: p.getAttribute('aria-disabled'), native_disabled: p.matches(':disabled'), ...(dragOnly(p) ? { drag_only: true } : {}) });
     return {
       tag: e.tagName.toLowerCase(), role: e.getAttribute('role'), type: e.type,
       label,

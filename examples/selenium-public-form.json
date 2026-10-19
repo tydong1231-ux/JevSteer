@@ -1,5 +1,6 @@
 {
   "goal": "Configure and submit Selenium's public test form with synthetic QA values, reviewing controls before submission and the received result afterward",
+  "start_url": "https://www.selenium.dev/selenium/web/web-form.html",
   "verification_mode": "host",
   "review_mode": "strict",
   "constraints": ["Use only the public Selenium test form and synthetic values. Do not fill Password, upload a file or change disabled/readonly fields."],
