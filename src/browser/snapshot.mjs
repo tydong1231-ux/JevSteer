@@ -453,19 +453,36 @@ export function readDOM(elements, nodes) {
     }
     return [];
   })();
+  // The field whose popup holds `e`, and the popup's box.
   const popupOwner = (e) => {
     const option = role(e) === 'option' && !closest(e, 'select');
-    const linked = lists.find(([c, roots]) => option && c.contains(e) || roots.some((r) => r.contains(e)));
-    if (linked) return linked[0];
+    for (const [c, roots] of lists) {
+      if (option && c.contains(e)) return [c, c];
+      const root = roots.find((r) => r.contains(e));
+      if (root) return [c, root];
+    }
     const box = option && openBoxes.length === 1 && ancestors(e).slice(1).find(floating);
-    if (box && !box.contains(openBoxes[0]) && drawnFor(box, openBoxes[0])) return openBoxes[0];
-    return popupBoxes.some((b) => b.contains(e)) ? focused : undefined;
+    if (box && !box.contains(openBoxes[0]) && drawnFor(box, openBoxes[0])) return [openBoxes[0], box];
+    const result = popupBoxes.find((b) => b.contains(e));
+    return result ? [focused, result] : [];
   };
   // Whose popup each element is in, asked once per element.
   const owners = new Map();
-  const ownerOf = (e) => {
+  const popupOf = (e) => {
     if (!owners.has(e)) owners.set(e, popupOwner(e));
     return owners.get(e);
+  };
+  const ownerOf = (e) => popupOf(e)[0];
+  // The open popup an element is in: a field's popup (see popupOwner), else
+  // the outermost box around it with a popup's role (antd draws a popover's
+  // body as a tooltip, a dropdown as a menu). A click that only closed what
+  // was open took away the controls of such boxes alone (see closedOnly).
+  const POPUP_ROLES = '[role=tooltip],[role=menu],[role=listbox],[role=dialog],[role=alertdialog]';
+  const layerOf = (e) => {
+    let outer = popupOf(e)[1];
+    if (outer) return outer;
+    for (let p = closest(e, POPUP_ROLES); p; p = parent(p) && closest(parent(p), POPUP_ROLES)) outer = p;
+    return outer;
   };
   // Whether an open combobox's list holds options the page does not draw.
   // A virtual list (antd's) puts only the options in view in the page, in a
@@ -571,6 +588,8 @@ export function readDOM(elements, nodes) {
       expanded: e.hasAttribute('aria-expanded') ? e.getAttribute('aria-expanded') === 'true' : undefined,
       // The ordinal of the field whose popup holds this element (see popupOwner).
       popup_of: ((owner) => (owner ? all.indexOf(owner) : undefined))(ownerOf(e)),
+      // The number of the open popup's box it is in (see layerOf, nodeOf).
+      layer: ((box) => (box ? nodeOf(box) : undefined))(layerOf(e)),
       // Where an open combobox's list holds more options than it shows.
       more_options: moreOptions(e),
       // The ordinal of the field this clear button empties (see clearedField).

@@ -73,6 +73,37 @@ test("a combobox's twins can be told apart leaving out which one is open, as an 
   assert.equal(twinsOf(open.elements[0], open, { ignore: ["expanded"] }).distinct, false);
 });
 
+// Codex on 440e142: two blank invoice lines with no key of their own hold
+// fields alike in everything but their line.
+test("fields alike but for their table line are the node seen on that line, while it is there and on that line", () => {
+  const price = (i, node, row, extra = {}) => ({ i, ...doc, node, tag: "input", role: "textbox", label: "Unit Price", column: "Unit Price", row, context: "", value: "", ...extra });
+  const lines = page(price(0, "t:1", 1), price(1, "t:2", 2));
+  const twins = twinsOf(lines.elements[1], lines);
+  assert.deepEqual({ ...twins, key: undefined }, { count: 2, key: undefined, distinct: true, node: "t:2", row: 2 });
+  assert.equal(pickTwin(twins, lines.elements), lines.elements[1]);
+  // The page rebuilt the lines: neither node is the one seen.
+  assert.equal(pickTwin(twins, [price(0, "t:3", 1), price(1, "t:4", 2)]), undefined);
+  // It moved the line up: the node seen is on another line now.
+  assert.equal(pickTwin(twins, [price(0, "t:2", 1), price(1, "t:1", 2)]), undefined);
+  assert.equal(pickTwin(twins, [price(0, "t:2", 1)]), undefined);
+  // Nor is it picked once it shows something else.
+  assert.equal(pickTwin(twins, [price(0, "t:1", 1), price(1, "t:2", 2, { value: "50" })]), undefined);
+  // Without node numbers (Kapture), off a table, or on the same line of two
+  // tables, nothing observed tells them apart.
+  const kapture = page(price(0, undefined, 1), price(1, undefined, 2));
+  assert.equal(twinsOf(kapture.elements[1], kapture).distinct, false);
+  const loose = page(price(0, "t:1", undefined, { column: undefined }), price(1, "t:2", undefined, { column: undefined }));
+  assert.equal(twinsOf(loose.elements[1], loose).distinct, false);
+  assert.equal(twinsOf(loose.elements[1], loose).node, undefined);
+  const twoTables = page(price(0, "t:1", 2), price(1, "t:2", 2), price(2, "t:3", 1));
+  assert.equal(twinsOf(twoTables.elements[1], twoTables).distinct, false);
+  assert.equal(twinsOf(twoTables.elements[2], twoTables).distinct, true);
+  // Twins told apart by what they show are found by it, as before.
+  const filled = page(price(0, "t:1", 1, { value: "100" }), price(1, "t:2", 2));
+  assert.equal(twinsOf(filled.elements[1], filled).node, undefined);
+  assert.equal(pickTwin(twinsOf(filled.elements[1], filled), [price(0, "t:9", 1), price(1, "t:8", 2, { value: "100" })]).i, 0);
+});
+
 test("of two links to one address, the one clicked is the node Jev saw; links rebuilt since are not told apart", () => {
   const link = (i, node, extra = {}) => ({ i, ...doc, node, tag: "a", role: "link", label: "100", text: "100", href: "/w/index.php?limit=100", context: "(20 | 50 | 100)", ...extra });
   const base = "https://en.wikipedia.org/w/index.php?action=history";

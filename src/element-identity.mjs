@@ -60,21 +60,30 @@ export function twinKey(e, ignore = []) {
 // Identical controls, such as unnamed selects in one filter row: where `el`
 // is one of several on `page`, what tells it from the others. Never their
 // order: a page can swap equal nodes without anything observed changing, so
-// order cannot show which node was chosen. `distinct` is false when nothing
-// observed tells `el` from another; then it is refused (see pickTwin).
+// order cannot show which node was chosen. Fields alike in all that on
+// different lines of a table, such as two blank "Unit Price" fields, are
+// told apart by the line Jev saw each on. A line number is an order, so the
+// one chosen is then the node seen on that line (`node`, Playwright driver),
+// while it is still there and still on that line. `distinct` is false when
+// nothing observed tells `el` from another; then it is refused (see pickTwin).
 export function twinsOf(el, page, { ignore = [] } = {}) {
   const twins = page.elements.filter((e) => e.frame_id === el.frame_id && e.document_id === el.document_id && sameIdentity(el, e, page.url));
   if (twins.length < 2 || !twins.includes(el)) return undefined;
   const key = twinKey(el, ignore);
-  return { count: twins.length, key, ...(ignore.length ? { ignore } : {}), distinct: twins.filter((e) => twinKey(e, ignore) === key).length === 1 };
+  const alike = twins.filter((e) => twinKey(e, ignore) === key);
+  const evidence = { count: twins.length, key, ...(ignore.length ? { ignore } : {}) };
+  if (alike.length === 1) return { ...evidence, distinct: true };
+  const byRow = el.node != null && el.row != null && alike.filter((e) => e.row === el.row).length === 1;
+  return { ...evidence, distinct: byRow, ...(byRow ? { node: el.node, row: el.row } : {}) };
 }
 
 // The one of `matches` that still shows what the chosen twin showed, if it
 // was told apart from the others then and only one shows it now. That holds
-// when only one match is left too: it may be the other twin.
+// when only one match is left too: it may be the other twin. One told apart
+// by its table line is the node seen on it, still on that line.
 export function pickTwin(twins, matches) {
   if (!twins?.distinct) return undefined;
-  const same = matches.filter((e) => twinKey(e, twins.ignore) === twins.key);
+  const same = matches.filter((e) => twinKey(e, twins.ignore) === twins.key && (twins.node == null || e.node === twins.node && e.row === twins.row));
   return same.length === 1 ? same[0] : undefined;
 }
 

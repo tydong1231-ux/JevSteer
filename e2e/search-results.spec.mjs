@@ -4,9 +4,10 @@
 // "Search results list CP-MEIJI CO.,LTD." stayed unmet at done 0.10. The
 // markup follows the outerHTML the Mac captured.
 import { test, expect } from '@playwright/test';
-import { driverFor, mcpFixture } from './helpers.mjs';
+import { driverFor, mcpFixture, send } from './helpers.mjs';
 import { scriptedDecider, decision } from '../test/helpers/runtime.mjs';
 import { toModelPage } from '../src/page-model.mjs';
+import { closedOnly } from '../src/action-effect.mjs';
 
 const bills = `
   <header style="display:flex;gap:24px;align-items:center;height:56px">
@@ -286,6 +287,70 @@ test('a click that only closed the search results is marked closed_only, and Jev
     expect(await page.evaluate(() => window.opened)).toBe('2');
     expect(result.status).toBe('host_review_required');
   } finally { await mcp.close(); }
+});
+
+// Codex on 440e142: only a click that closed an open popup is closed_only.
+// ccMonet's bill filter is antd's popover ("Filter records", Mac probe),
+// drawn at the end of the body, its body a tooltip; here a click outside it
+// closes it and goes no further. A button that collapses a section of the
+// page shows no state of its own: a second click would open it again.
+const filterAndSection = `<style>
+    .ant-popover { position: absolute; top: 40px; left: 320px; background: #fff; padding: 12px; border: 1px solid #ccc; }
+    .ant-popover-hidden { display: none; }
+  </style>
+  <main>
+    <h1>Vendor Bills</h1>
+    <button type="button" id="filter">Filter</button>
+    <button type="button" id="toggle" aria-label="Advanced search"><svg width="12" height="12"></svg></button>
+    <div id="advanced"><label>Reference <input id="ref"></label> <label>Memo <input id="memo"></label></div>
+    <table><thead><tr><th>Vendor</th><th>Total</th></tr></thead><tbody>
+      <tr data-row-key="2"><td class="cursor-pointer" id="cp">CP-MEIJI CO.,LTD.</td><td>฿ 1,732.00</td></tr>
+    </tbody></table>
+  </main>
+  <div><div class="ant-popover ant-popover-hidden" id="pop"><div class="ant-popover-content"><div class="ant-popover-inner" role="tooltip">
+    <div class="ant-popover-title">Filter records</div>
+    <div class="ant-popover-inner-content"><button type="button">+ Add Filter</button> <input aria-label="Value" value="CP-MEIJI"></div>
+  </div></div></div></div>
+  <script>
+    window.opened = [];
+    const pop = document.querySelector('#pop');
+    document.querySelector('#filter').addEventListener('click', () => pop.classList.remove('ant-popover-hidden'));
+    document.querySelector('#toggle').addEventListener('click', () => { const section = document.querySelector('#advanced'); section.hidden = !section.hidden; });
+    document.querySelector('#cp').addEventListener('click', () => window.opened.push('2'));
+    document.addEventListener('click', (e) => {
+      if (!pop.classList.contains('ant-popover-hidden') && !pop.contains(e.target) && e.target.id !== 'filter') { pop.classList.add('ant-popover-hidden'); e.stopPropagation(); }
+    }, true);
+  </script>`;
+
+test('only a click that closed an open popup is marked closed_only, not one that collapsed a section of the page', async ({ page }) => {
+  await page.setContent(filterAndSection);
+  const { driver, id } = await driverFor(page);
+  const clickOn = async (label) => {
+    const before = await driver.observe(id);
+    const el = before.elements.find((e) => e.label === label);
+    const action = { tool: 'click', target: el.i, el, observedUrl: before.url };
+    expect((await send(driver, id, action)).state).toBe('dispatched_ack');
+    const after = await driver.observe(id);
+    return { before, after, closed: closedOnly(before, after, action) };
+  };
+  try {
+    await clickOn('Filter');
+    let step = await clickOn('CP-MEIJI CO.,LTD.');
+    const layers = step.before.elements.filter((e) => e.layer != null);
+    expect(layers.map((e) => e.label)).toEqual(['+ Add Filter', 'Value']);
+    expect(new Set(layers.map((e) => e.layer)).size).toBe(1);
+    expect(step.closed).toMatchObject({ controls_gone: 2 });
+    expect(await page.evaluate(() => window.opened)).toEqual([]);
+    // With nothing open, the click opens the bill.
+    step = await clickOn('CP-MEIJI CO.,LTD.');
+    expect(step.closed).toBeUndefined();
+    expect(await page.evaluate(() => window.opened)).toEqual(['2']);
+    step = await clickOn('Advanced search');
+    const fields = (observed) => observed.elements.filter((e) => ['Reference', 'Memo'].includes(e.label));
+    expect(fields(step.before).map((e) => e.layer)).toEqual([undefined, undefined]);
+    expect(fields(step.after)).toEqual([]);
+    expect(step.closed).toBeUndefined();
+  } finally { await driver.close(); }
 });
 
 test('on a page too large for one decision, what the focused box\'s popup shows is offered whichever group Jev picks, marked as its', async ({ page }, testInfo) => {

@@ -146,6 +146,8 @@ export class PlaywrightDriver {
     const twins = action.observed?.twins;
     const link = () => action.tool === 'click' && equivalentLink(original, matches, fresh.url);
     const pick = twins ? link() || pickTwin(twins, matches) : matches.length === 1 ? matches[0] : link();
+    // One told apart by its table line: the page rebuilt that node, or moved it to another line.
+    if (!pick && twins?.node != null) throw new Error(`STALE_TARGET: the control chosen on line ${twins.row} of its table is gone or on another line now, and identical controls are never told apart by their order`);
     if (!pick && matches.length === 1) throw new Error('STALE_TARGET: one of identical controls is left, and nothing shows it is the one chosen');
     if (!pick) throw new Error(`STALE_TARGET: ambiguous: ${matches.length} identical controls`);
     if (pick.disabled || action.tool === 'type' && pick.readonly) throw new Error('STALE_TARGET: disabled or read-only');
@@ -436,6 +438,8 @@ function assertStillListed(action, option, page) {
   const owners = page.elements.filter((e) => e.frame_id === listedIn.frame_id && e.document_id === listedIn.document_id && sameIdentity(listedIn, e, page.url));
   const twins = action.observed?.owner_twins;
   const owner = twins ? pickTwin(twins, owners) : owners.length === 1 ? owners[0] : undefined;
+  // A combobox told apart by its table line is gone or on another line now.
+  if (!owner && twins?.node != null) throw new Error(NOT_LISTED);
   if (!owner && owners.length > 1) throw new Error("STALE_TARGET: ambiguous: the option's combobox has identical twins");
   if (!owner || owner.expanded !== true || option.popup_of !== owner.i) throw new Error(NOT_LISTED);
   action.listed_owner = owner;

@@ -3,7 +3,7 @@
 // "Select date", line inputs under a table header. Markup follows what a
 // read-only probe of that form showed (2026-10-19).
 import { test, expect } from '@playwright/test';
-import { driverFor, mcpFixture } from './helpers.mjs';
+import { driverFor, mcpFixture, send } from './helpers.mjs';
 import { twinsOf } from '../src/element-identity.mjs';
 import { scriptedDecider, decision } from '../test/helpers/runtime.mjs';
 
@@ -81,6 +81,63 @@ test('fields in table rows carry the number of their row', async ({ page }) => {
     // A line's delete button is no field: it has no row of its own.
     expect(elements.filter((e) => e.label === 'Delete line').map((e) => e.row)).toEqual([undefined, undefined]);
   } finally { await driver.close(); }
+});
+
+// Codex on 440e142: two blank lines with no key or line number of their own
+// hold fields alike in everything but their line.
+const blankLines = `<table><thead><tr><th>Description</th><th>Unit Price</th></tr></thead>
+  <tbody id="lines">${[1, 2].map(() => '<tr><td><input class="desc"></td><td><input class="price"></td></tr>').join('')}</tbody></table>`;
+const prices = (page) => page.locator('.price').evaluateAll((list) => list.map((e) => e.value));
+
+test('a field alike but for its table line is the node seen on that line, until the page rebuilds or moves the line', async ({ page }) => {
+  await page.setContent(blankLines);
+  const { driver, id } = await driverFor(page);
+  const chooseLine2 = async () => {
+    const seen = await driver.observe(id);
+    const fields = seen.elements.filter((e) => e.label === 'Unit Price');
+    expect(fields.map((e) => [e.row, e.value])).toEqual([[1, ''], [2, '']]);
+    const twins = twinsOf(fields[1], seen);
+    expect(twins).toMatchObject({ count: 2, distinct: true, node: fields[1].node, row: 2 });
+    return { tool: 'type', target: fields[1].i, el: fields[1], value: '50', observedUrl: seen.url, observed: { twins } };
+  };
+  const moved = 'STALE_TARGET: the control chosen on line 2 of its table is gone or on another line now';
+  try {
+    expect((await send(driver, id, await chooseLine2())).state).toBe('dispatched_ack');
+    expect(await prices(page)).toEqual(['', '50']);
+    // The page rebuilt the lines after Jev looked: no node is the one seen.
+    await page.setContent(blankLines);
+    let action = await chooseLine2();
+    await page.evaluate(() => { const lines = document.querySelector('#lines'); lines.replaceWith(lines.cloneNode(true)); });
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow(moved);
+    // It moved line 2 up: the node seen is on line 1 now.
+    await page.setContent(blankLines);
+    action = await chooseLine2();
+    await page.evaluate(() => { const [one, two] = document.querySelectorAll('#lines tr'); one.before(two); });
+    await expect(driver.assertTargetFresh(id, action)).rejects.toThrow(moved);
+    expect(await prices(page)).toEqual(['', '']);
+  } finally { await driver.close(); }
+});
+
+test('Jev fills the same field on two blank lines of a table', async ({ page }, testInfo) => {
+  await page.setContent(blankLines);
+  const price = (state, row) => state.page.elements.find((e) => e.label === 'Unit Price' && e.row === row)?.i;
+  const steps = scriptedDecider([
+    (state) => decision({ tool: 'type', target: price(state, 1) }),
+    (state) => decision({ tool: 'type', target: price(state, 2) }),
+    { tool: 'none', done: 0.99 },
+  ]);
+  const decider = async (state, questions) => {
+    if (!questions.selected_value) return steps(state, questions);
+    const key = { 1: 'price_1', 2: 'price_2' }[state.selected_field.table_row] || '__none__';
+    return { answers: { selected_value: { choice: key, probabilities: { [key]: 0.95 } } }, ms: 1, tokens: 1 };
+  };
+  const mcp = await mcpFixture(page, testInfo, decider);
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Set the unit price of line 1 to 100 and of line 2 to 50', values: { price_1: '100', price_2: '50' }, verification_mode: 'host', max_actions: 4, evidence_level: 'none' });
+    expect(result.status).toBe('host_review_required');
+    expect(result.actions.map((a) => [a.action, a.error ?? a.detail])).toEqual([['type', undefined], ['type', undefined]]);
+    expect(await prices(page)).toEqual(['100', '50']);
+  } finally { await mcp.close(); }
 });
 
 test('a separate header table names body cells; a search icon names a search box; text elsewhere names nothing', async ({ page }) => {

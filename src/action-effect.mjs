@@ -97,7 +97,11 @@ export function verifyActionEffect(before, after, action) {
 // words at most (a field's placeholder shows again once it loses focus); the
 // page sent no request, and the click's target is still there, as it was:
 // a toggle that shows its own popup open (aria-expanded) or changes its own
-// state took the click itself.
+// state took the click itself. Each control that went was in an open popup
+// (`layer`, Playwright driver: a field's popup, or a box with a popup's role
+// such as antd's popover), and no control is left in it: it closed. A
+// section that a button collapses without showing any state of its own is
+// no popup, and a second click would open it again (Codex on 440e142).
 // Returns how many controls went, and a few of them.
 export function closedOnly(before, after, action) {
   if (action?.tool !== "click" || !before || !after || before.url !== after.url) return undefined;
@@ -115,6 +119,8 @@ export function closedOnly(before, after, action) {
   }
   // What is still counted in `left` was not there before.
   if (!gone.length || [...left.values()].some((n) => n > 0)) return undefined;
+  const popups = new Set(gone.map((e) => e.layer));
+  if (popups.has(undefined) || popups.has(null) || after.elements.some((e) => e.layer != null && popups.has(e.layer))) return undefined;
   const words = new Set(squash(before.text, 6000).split(" "));
   if (squash(after.text, 6000).split(" ").filter((w) => w && !words.has(w)).length > 3) return undefined;
   return { controls_gone: gone.length, such_as: gone.slice(0, 3).map((e) => brief(e)) };

@@ -435,8 +435,10 @@ test("the constraint guard takes the host's checked guidance as fact, and a refu
 // ccMonet (Mac rerun on f462b95): with a filter popup left open, or the
 // global search's results showing, a click on a bill's vendor cell only closed
 // them. The page sent no request and no bill opened; Jev waited three times.
+// The filter popup is antd's popover, whose body is a tooltip: the snapshot
+// numbers it as the popup (`layer`) its controls are in.
 const vendorCell = { i: 0, selector: "#cp", tag: "td", label: "CP-MEIJI CO.,LTD.", record_key: "2" };
-const filterPopup = [{ i: 1, selector: "#add", tag: "button", label: "+ Add Filter" }, { i: 2, selector: "#field", tag: "input", role: "combobox" }];
+const filterPopup = [{ i: 1, selector: "#add", tag: "button", label: "+ Add Filter", layer: "t:7" }, { i: 2, selector: "#field", tag: "input", role: "combobox", layer: "t:7" }];
 const billsWithPopup = { url: "https://erp.test/bills", title: "Vendor Bills", text: "Vendor Bills Filter + Add Filter CP-MEIJI CO.,LTD. ฿ 1,732.00", elements: [vendorCell, ...filterPopup] };
 
 test("a click that only closed what was open, sending no request, is told apart from one that did something", () => {
@@ -456,7 +458,14 @@ test("a click that only closed what was open, sending no request, is told apart 
     ["took its target away", { ...after, elements: [] }],
     ["closed nothing", { ...billsWithPopup, requests_since_input: 0 }],
     ["changed its target's state", { ...after, elements: [{ ...vendorCell, selected: true }] }],
+    ["left a control in the popup", { ...after, elements: [vendorCell, filterPopup[0]] }],
   ]) assert.equal(closedOnly(billsWithPopup, page, click), undefined, what);
+  // Codex on 440e142: a button that collapses a section, showing no state of
+  // its own, took controls away that were in no popup. A second click would
+  // open the section again.
+  const section = billsWithPopup.elements.map((e) => ({ ...e, layer: undefined }));
+  assert.equal(closedOnly({ ...billsWithPopup, elements: section }, after, click), undefined);
+  assert.equal(closedOnly({ ...billsWithPopup, elements: [section[0], section[1], filterPopup[1]] }, after, click), undefined);
   // A toggle that showed its own popup open took the click: it closed that popup.
   const toggle = { ...vendorCell, expanded: true };
   assert.equal(closedOnly({ ...billsWithPopup, elements: billsWithPopup.elements.map((e) => (e === vendorCell ? toggle : e)) }, { ...after, elements: [{ ...vendorCell, expanded: false }] }, { tool: "click", el: toggle }), undefined);

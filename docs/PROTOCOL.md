@@ -164,7 +164,13 @@ unnamed selects in one filter row, "Status" and "Vendor"). The control that
 still shows what the chosen one showed is the one used, wherever the page has
 moved it, also when only one of them is left: it may be the other. Order never
 decides: a page can swap equal nodes without anything observed changing.
-Controls that nothing observed tells apart are refused
+Fields alike in all of that on different lines of a table, such as the blank
+"Unit Price" fields of two new invoice lines, are told apart by the line Jev saw
+each on (`row`). A line number is an order, so the field used is the node Jev
+saw on that line (Playwright driver), while it is still there and still on that
+line; after the page rebuilds the line or moves it, the choice is refused
+(`STALE_TARGET: the control chosen on line N of its table is gone or on another
+line now`) and Jev looks again. Controls that nothing observed tells apart are refused
 before input (`STALE_TARGET: ambiguous`); Jev gets one more look, then the
 milestone stops as `ambiguous` for the host. A refused choice sends no input, so
 on the unchanged page it is not reported as a page error.
@@ -328,7 +334,11 @@ done question tells it to check each of them against the page as it is now,
 A click that did nothing but close what was open (a popup, a menu, a list) is
 marked `closed_only` in Jev's history: the address stayed, the page sent no
 request, controls went and none came, at most a few new words showed, and its
-target is still there as it was. A toggle that showed its own popup open, or
+target is still there as it was. Each control that went was in an open popup,
+and none is left in it (Playwright driver): a field's popup (`popup_of`), or a
+box with a popup's role (tooltip, menu, listbox, dialog), as antd draws its
+popover. A button that collapses a section of the page, showing no state of
+its own, is not marked: a second click would open the section again. A toggle that showed its own popup open, or
 whose expanded, checked or selected state changed, took the click itself and
 is not marked. Otherwise the page did not pass the click on to its target, so
 Jev's operation question tells it to click again if that target is still the
