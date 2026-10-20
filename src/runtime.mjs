@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createBrowserDriver, KaptureDriver } from "./browser/index.mjs";
 import { DriverActionError } from "./browser/driver.mjs";
 import { TabLeaseManager } from "./lease.mjs";
@@ -143,6 +143,13 @@ function typedFieldsOn(page, confirmedTypes) {
 // search text cleared when an option was picked shows that option instead.
 function emptiedAfterTyping({ typed, current }) {
   return String(typed.value ?? "") !== "" && current.value === "" && !current.display && !sensitiveField(current);
+}
+
+// A secret field shows "[REDACTED]" whatever it holds. The snapshot's
+// digest of its live value says whether it still holds what was typed.
+function holdsTypedSecret({ typed, current }) {
+  return current.value === "[REDACTED]" && !!current.value_hash
+    && current.value_hash === createHash("sha256").update(String(typed.value ?? "")).digest("hex");
 }
 
 // A select-like combobox clears its search text once an option is picked,
@@ -447,6 +454,22 @@ const UNREQUESTED_TAKE_OUT = "This EXACT proposed_action clicks an option that i
 function riskScore(answer, fallback) {
   const p = Number(answer?.noul ?? fallback);
   return Number.isFinite(p) ? p : 1;
+}
+
+// The rules a constraint block can name: each item of task.constraints,
+// split into its sentences. A host often writes several rules as one item.
+// On ccMonet, "Demo company only. Create only this one sales invoice and
+// reconcile only this one deposit. Do not send emails or e-invoices, ..."
+// blocked Approve at 0.55 to 0.62, and the block named the whole item, so
+// the host could not tell which fact would settle it (Mac runs on 7519fff
+// and ebc7159). A sentence ends at ".", "!", "?" or ";" after two letters or
+// digits and before a capital or digit ("e.g. Foo" and "No. 5" stay whole),
+// or at a CJK full stop. The guard still judges task.constraints as given;
+// only the naming uses these rules.
+const RULE_END = /(?<=[\p{Ll}\p{N}]{2}[)"'’”]?[.!?;])\s+(?=["'(‘“]?[\p{Lu}\p{N}])|(?<=[。！？；])\s*/u;
+export function constraintRules(items) {
+  const rules = items.flatMap((item) => String(item).split(RULE_END).map((s) => s.trim()).filter(Boolean));
+  return rules.length > items.length && rules.length <= 16 ? rules : items;
 }
 
 export class JevSteerRuntime {
@@ -979,10 +1002,11 @@ export class JevSteerRuntime {
   // that the rejected one created nothing.
   // A block names the constraint the guard fears, so the host knows which
   // fact settles it: ccMonet's Save as Draft was blocked at 0.63, then 0.89,
-  // with nothing saying why (Mac rerun on 9a83708). With one constraint, it
-  // is that one. Returns the risk and that constraint.
+  // with nothing saying why (Mac rerun on 9a83708). It names one rule of
+  // task.constraints (see constraintRules); with only one, it is that one.
+  // Returns the risk and that rule.
   async checkConstraint(page, contract, action, history) {
-    const items = contract.constraints;
+    const items = constraintRules(contract.constraints);
     const { answers } = await this.call({
       page: { url: page.url, title: page.title, text: page.text.slice(0, 1800) },
       task: { ...contractForModel(contract), history: guardHistory(history) },
@@ -995,7 +1019,7 @@ export class JevSteerRuntime {
       ...(items.length > 1 ? {
         violated: {
           type: "choice",
-          instructions: `Which item of task.constraints is executing proposed_action most likely to violate? ${ACTED_ON} Choose none when it violates none of them.`,
+          instructions: `Which rule of task.constraints is executing proposed_action most likely to violate? The choices are those rules one by one; an item of task.constraints can hold several. ${ACTED_ON} Choose none when it violates none of them.`,
           criteria: { ...Object.fromEntries(items.map((item, index) => [String(index), item])), none: "None of them" },
         },
       } : {}),
@@ -1016,7 +1040,7 @@ export class JevSteerRuntime {
     const emptied = new Set();
     const hinted = new Map();
     for (const found of typedFieldsOn(page, confirmedTypes)) {
-      if (found.current.value === found.typed.value || sameDateText(found.current.value, found.typed.value) || sameNumberText(found.current.value, found.typed.value, { numeric: numericField(found.current) }) || showsTyped(found)) completed.add(found.current);
+      if (found.current.value === found.typed.value || sameDateText(found.current.value, found.typed.value) || sameNumberText(found.current.value, found.typed.value, { numeric: numericField(found.current) }) || showsTyped(found) || holdsTypedSecret(found)) completed.add(found.current);
       else if (found.typed.entry && emptiedAfterTyping(found)) emptied.add(found.typed.entry);
       if (!found.current.hint && found.typed.field.el?.hint) hinted.set(found.current, found.typed.field.el.hint);
     }

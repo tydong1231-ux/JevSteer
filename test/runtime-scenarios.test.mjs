@@ -547,6 +547,47 @@ test("a constraint block names the constraint the guard fears, and the guards ju
   assert.deepEqual(Object.keys(asked.find((a) => a.questions.violates).questions), ["violates"]);
 });
 
+// ccMonet's Approve was blocked at 0.55 to 0.62 against one item that held
+// several rules, and the block named the whole item (Mac runs on 7519fff and
+// ebc7159).
+test("a constraint block names the one rule the guard fears, also when the host wrote several rules as one item", async () => {
+  const approve = { i: 0, selector: "#approve", tag: "button", role: "button", label: "Approve" };
+  const item = "Demo company only. Create only this one sales invoice and reconcile only this one deposit. Do not send emails or e-invoices, do not record other payments, do not delete anything.";
+  const rules = ["Demo company only.", "Create only this one sales invoice and reconcile only this one deposit.", "Do not send emails or e-invoices, do not record other payments, do not delete anything."];
+  let guard;
+  const decider = async (state, questions) => {
+    if (questions.violates) {
+      guard = { questions, constraints: state.task.constraints };
+      return { answers: { violates: { noul: 0.62 }, violated: { choice: "0", probabilities: { 0: 0.7, 1: 0.1, 2: 0.1, none: 0.1 } } }, ms: 1, tokens: 1 };
+    }
+    if (questions.action_side_effect) return { answers: { action_side_effect: { noul: 0.7 }, action_irreversible: { noul: 0.1 } }, ms: 1, tokens: 1 };
+    return { answers: decision(), ms: 1, tokens: 1 };
+  };
+  const result = await memoryRuntime(new MemoryKapture({ title: "New Invoice", text: "New Invoice Approve", elements: [approve] }), decider)
+    .run("Approve the sales invoice for JevSteer QA, 30,000.00", { constraints: [item], maxActions: 3, evidenceLevel: "none" });
+  assert.equal(result.status, "constraint_blocked");
+  assert.equal(result.pending.constraint, "Demo company only.");
+  assert.match(result.info, /^The selected browser action may violate the task constraint "Demo company only\.", so execution stopped before acting\./);
+  // The guard judges the constraints as the host wrote them; only the
+  // question that names one is asked rule by rule.
+  assert.deepEqual(guard.constraints, [item]);
+  assert.deepEqual(guard.questions.violated.criteria, { 0: rules[0], 1: rules[1], 2: rules[2], none: "None of them" });
+});
+
+test("constraint rules: sentences of each item, with abbreviations, numbers and single rules kept whole", async () => {
+  const { constraintRules } = await import("../src/runtime.mjs");
+  assert.deepEqual(constraintRules(["Demo company only. Do not send emails."]), ["Demo company only.", "Do not send emails."]);
+  assert.deepEqual(constraintRules(["Demo company only.", "Do not save. Keep it open!"]), ["Demo company only.", "Do not save.", "Keep it open!"]);
+  assert.deepEqual(constraintRules(["Name it e.g. Foo, and pay No. 5 only."]), ["Name it e.g. Foo, and pay No. 5 only."]);
+  assert.deepEqual(constraintRules(["The amount is 50.00. Do not save; do not submit."]), ["The amount is 50.00.", "Do not save; do not submit."]);
+  assert.deepEqual(constraintRules(["Keep \"Draft\". Then stop."]), ["Keep \"Draft\".", "Then stop."]);
+  assert.deepEqual(constraintRules(["只在演示公司操作。不要发送邮件。"]), ["只在演示公司操作。", "不要发送邮件。"]);
+  assert.deepEqual(constraintRules(["Do not save"]), ["Do not save"]);
+  // Too many rules to choose among: the items as written.
+  const many = [Array.from({ length: 17 }, (_, i) => `Rule ${i} holds.`).join(" ")];
+  assert.deepEqual(constraintRules(many), many);
+});
+
 // ccMonet refused a Save as Draft ("Please fill in all required fields :
 // Due Date"). With the date typed, the save was blocked at 0.82 to 0.92
 // against "Do not create duplicates", whatever the host's guidance said.

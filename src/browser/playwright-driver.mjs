@@ -5,7 +5,7 @@ import { sameIdentity, equivalentLink, pickTwin } from '../element-identity.mjs'
 import { FIELDISH, SELECTISH } from '../page-model.mjs';
 import { isDateText } from '../date-text.mjs';
 import { observeUntilReady, observationSignature } from '../observation.mjs';
-import { captureSnapshot, readDOM, FIELD, INTERACTIVE } from './snapshot.mjs';
+import { captureSnapshot, readDOM, secretNodes, FIELD, INTERACTIVE } from './snapshot.mjs';
 import { PageEvents } from './events.mjs';
 import { sessionIdentity, physicalPageId } from './sessions.mjs';
 import { dispatchInput } from './driver.mjs';
@@ -315,7 +315,10 @@ export class PlaywrightDriver {
   async inspect(ref) {
     const record = await this.record(ref);
     if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
-    return { page_id: record.pageId, session_id: this.sessionId, ...(await record.page.evaluate(inspectBusinessDOM, SENSITIVE_PATTERNS)) };
+    const main = this.frameInfo(record.page.mainFrame());
+    const secret = secretNodes(main);
+    const arg = { patterns: SENSITIVE_PATTERNS, ...(secret?.size ? { registry: main.nodes.handle, secret: [...secret] } : {}) };
+    return { page_id: record.pageId, session_id: this.sessionId, ...(await record.page.evaluate(inspectBusinessDOM, arg)) };
   }
   async startEvents(ref) { await this.record(ref); return { monitoring: true }; }
   async stopEvents() {}

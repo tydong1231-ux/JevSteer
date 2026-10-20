@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { buildTargetSpace, availableTools, listToScroll } from "../src/decision-space.mjs";
 import { FIELDISH, brief } from "../src/page-model.mjs";
 import { rememberField } from "../src/element-identity.mjs";
@@ -357,6 +358,30 @@ test("Enter chosen for a typed box known only by its hint goes to that box", asy
   assert.deepEqual([action.tool, action.target, action.el?.selector, action.p_target], ["press_enter", 0, "#search", 1]);
   // Described as Jev saw it, in history and to the guards.
   assert.equal(brief(action.el), 'textbox "Search contacts, vendor bills..."');
+});
+
+// A field can be secret only by the text drawn over it, which goes once it
+// holds a value. The snapshot keeps it secret (Codex on ebc7159).
+test("a secret field known only by its hint stays secret once typed: Jev never sees its value, and is not offered it for TYPE again", async () => {
+  const digest = (value) => createHash("sha256").update(value).digest("hex");
+  const box = { i: 0, selector: "#token", tag: "input", type: "text", role: "textbox", label: "", hint: "API token", value: "[REDACTED]", value_hash: digest(""), secret: true };
+  const before = { url: "https://erp.test/settings", title: "Settings", text: "Integrations", metrics: {}, elements: [box, { i: 1, selector: "#name", tag: "input", role: "textbox", label: "Integration name", value: "" }] };
+  const typed = [{ field: rememberField(box, before), url: before.url, value: "tok-123" }];
+  const typedBox = { ...box, value_hash: digest("tok-123") };
+  delete typedBox.hint;
+  const page = { ...before, elements: [typedBox, before.elements[1]] };
+  let seen;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    seen = { state, questions };
+    return { answers: { tool: { choice: "type", probabilities: { type: 0.9 } }, type_target: choice(questions.type_target.criteria, "1") }, ms: 1, tokens: 1 };
+  } });
+  await runtime.decide(page, normalizeTaskContract({ goal: "Connect the integration" }), { api_token: "tok-123", name: "Books" }, [], null, null, typed);
+  assert.doesNotMatch(JSON.stringify(seen), /tok-123/);
+  assert.deepEqual(Object.keys(seen.questions.type_target.criteria), ["1", "__none__"]);
+  // A field it holds something else in is offered again, and still hidden.
+  await runtime.decide({ ...page, elements: [{ ...typedBox, value_hash: digest("other") }, before.elements[1]] }, normalizeTaskContract({ goal: "Connect the integration" }), { api_token: "tok-123", name: "Books" }, [], null, null, typed);
+  assert.deepEqual(Object.keys(seen.questions.type_target.criteria), ["0", "1"]);
+  assert.doesNotMatch(JSON.stringify(seen), /tok-123/);
 });
 
 test("on a page too large for one decision, the groups Jev picks from show a typed box by its hint", async () => {

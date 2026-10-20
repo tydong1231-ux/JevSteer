@@ -2,6 +2,7 @@
 // antd Select under a "Customer" caption, date pickers whose placeholder is
 // "Select date", line inputs under a table header. Markup follows what a
 // read-only probe of that form showed (2026-10-19).
+import { createHash } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 import { driverFor, mcpFixture, send } from './helpers.mjs';
 import { twinsOf } from '../src/element-identity.mjs';
@@ -238,6 +239,34 @@ test('text drawn over an unnamed field is its hint, never its name', async ({ pa
     // The hint goes away once the field holds text; the name stays the same.
     await page.fill('.ant-input', 'CHAIN1019');
     expect((await fields())[0]).toEqual(['textbox', '', undefined]);
+  } finally { await driver.close(); }
+});
+
+// A field can be secret only by the text drawn over it ("API token"), and
+// that text goes once the field holds a value. The snapshot keeps the same
+// node secret, and so does the host's business inspection (Codex on
+// ebc7159). A field whose hint names nothing secret stays readable.
+test('a field secret only by the text drawn over it stays secret once that text goes', async ({ page }) => {
+  const drawn = (cls, tip) => `<div class="box" style="position:relative;width:360px;margin:8px"><input class="${cls}" type="text" style="width:300px"><div class="tip" style="position:absolute;left:8px;top:2px;pointer-events:none;color:#999">${tip}</div></div>`;
+  await page.setContent(`${drawn('token', 'API token')}${drawn('search', 'Search contacts')}
+    <script>for (const input of document.querySelectorAll('input')) input.addEventListener('input', () => { input.nextElementSibling.style.display = input.value ? 'none' : ''; });</script>`);
+  const { driver, id } = await driverFor(page);
+  const digest = (value) => createHash('sha256').update(value).digest('hex');
+  try {
+    const fields = async () => (await driver.observe(id)).elements.filter((e) => e.role === 'textbox');
+    const [token, search] = await fields();
+    expect([token.hint, token.secret, token.value, search.hint, search.secret, search.value]).toEqual(['API token', true, '[REDACTED]', 'Search contacts', undefined, '']);
+    await page.fill('.token', 'tok-123');
+    await page.fill('.search', 'Acme');
+    const observed = await driver.observe(id);
+    const [typedToken, typedSearch] = observed.elements.filter((e) => e.role === 'textbox');
+    // The text that made it secret is gone; the node stays secret.
+    expect([typedToken.hint, typedToken.secret, typedToken.value, typedToken.value_hash]).toEqual([undefined, true, '[REDACTED]', digest('tok-123')]);
+    expect([typedSearch.hint, typedSearch.secret, typedSearch.value]).toEqual([undefined, undefined, 'Acme']);
+    expect(JSON.stringify(observed)).not.toContain('tok-123');
+    const inspected = await driver.inspect(id);
+    expect(inspected.controls.map((c) => c.value)).toEqual(['[REDACTED]', 'Acme']);
+    expect(JSON.stringify(inspected)).not.toContain('tok-123');
   } finally { await driver.close(); }
 });
 

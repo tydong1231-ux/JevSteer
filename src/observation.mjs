@@ -34,9 +34,11 @@ export function observationSignature(page) {
   // around it changing: whether a form is complete, or a record locked, can
   // rest on it (Codex on 3fa0a57). A multi-select's chosen options are read
   // apart too (display_items): "Doe, John" is one option, or two. They stop
-  // at 20, and the host reads all `display` shows (Codex on 7519fff).
+  // at 20, and the host reads all `display` shows (Codex on 7519fff). A
+  // secret field's value reads "[REDACTED]" whatever it holds: the digest of
+  // its live value stands for it.
   const state = [page.url, page.title, page.text, page.loading, page.elements.map((e) =>
-    [e.tag, e.role, e.label, e.hint, e.column, e.row, e.context, e.scope, e.value, e.display, e.display_items, e.checked, e.expanded, e.selected, e.disabled, e.readonly, e.required, e.invalid, e.error_mark, e.options?.filter((o) => o.selected).map((o) => o.value)])];
+    [e.tag, e.role, e.label, e.hint, e.column, e.row, e.context, e.scope, e.value, e.value === "[REDACTED]" ? e.value_hash : undefined, e.display, e.display_items, e.checked, e.expanded, e.selected, e.disabled, e.readonly, e.required, e.invalid, e.error_mark, e.options?.filter((o) => o.selected).map((o) => o.value)])];
   if (page.page_id) state.push(page.page_id, page.frames, page.elements.map((e) => [e.form_key, e.record_key]));
   // What a focused field's popup says (search results) is read apart from
   // the page text, also past that text's cutoff, and a review can rest on it.

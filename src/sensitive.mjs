@@ -23,6 +23,12 @@ export function sensitiveName(value) {
   return long.test(name) || long.test(words) || short.test(words);
 }
 
+// A field is secret by its type, by what names it (its label, name or
+// placeholder, the text drawn over it when it has no name, its table column),
+// or because the snapshot marked it so: a field seen as secret stays secret
+// once the text that named it goes, as text drawn over a field does when it
+// holds a value (Codex on ebc7159).
 export function sensitiveField(element) {
-  return element?.type === "password" || sensitiveName([element?.label, element?.name, element?.placeholder].filter(Boolean).join(" "));
+  return element?.secret === true || element?.type === "password"
+    || sensitiveName([element?.label, element?.name, element?.placeholder, element?.hint, element?.column].filter(Boolean).join(" "));
 }

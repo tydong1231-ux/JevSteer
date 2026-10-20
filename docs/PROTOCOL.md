@@ -72,10 +72,13 @@ that control is used. On ccMonet's Manual Match, the tick of the invoice to
 match was judged a write, and the run stopped for a host review before Confirm
 match. Without such a fact, a control there may save on its own and is judged
 as any other, so an autosaving toggle keeps its replay barrier.
-With more than one constraint, the constraint request also says which one the
-action would most likely break. A `constraint_blocked` stop names it in `info`
-and as `pending.constraint` (with one constraint, it is that one), so the host
-knows which fact settles the doubt.
+With more than one constraint rule, the constraint request also says which one
+the action would most likely break. A rule is a sentence of a constraint: an
+item that holds several sentences ("Demo company only. Do not send emails.")
+is offered sentence by sentence, while the guard still judges the constraints
+as written. A `constraint_blocked` stop names that rule in `info` and as
+`pending.constraint` (with one rule, it is that one), so the host knows which
+fact settles the doubt.
 
 A TYPE or SELECT (also an option chosen from an open list, or clicked there)
 gets one more question with the effect questions: does it set a field the task
@@ -150,6 +153,17 @@ remain browser inputs.
 bounded visible main-frame business table cells, control values and disabled
 ancestry without Jev inference or browser input. Secret-like controls are
 redacted; financial evidence remains private. Limits/truncation are explicit.
+
+A control is secret by its type (password), or by what names it: its label,
+name or placeholder, the text drawn over it when it has no name of its own
+(`hint`, such as "API token"), or its table column. That text goes once the
+field holds a value, so a snapshot marks a field it saw as secret (`secret:
+true`) and keeps that mark on the same node for as long as its document lives:
+its value stays "[REDACTED]" to Jev, the guards, the host's review and
+`browser_inspect`. The digest of its live value (`value_hash`) stands for it:
+a typed secret field is confirmed, and not offered for TYPE again, by it, and
+a review ticket binds it, so a ticket goes stale when the field's value
+changes.
 Visible virtual rows are not evidence of the entire dataset, and this reader
 does not assert server persistence or create an acceptance receipt. Tab discovery
 does not install event collectors on unrelated pages.

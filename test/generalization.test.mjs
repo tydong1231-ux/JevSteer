@@ -158,6 +158,12 @@ test("observation recognizes values and toggle state but ignores generated selec
   const tags = Array.from({ length: 25 }, (_, n) => `T${n + 1}`);
   const many = (shown) => page([{ ...a.elements[0], display: shown.join(", "), display_items: shown.slice(0, 20) }]);
   assert.notEqual(observationSignature(many(tags)), observationSignature(many([...tags.slice(0, 24), "T99"])));
+  // A secret field reads "[REDACTED]" whatever it holds: the digest of its
+  // live value tells a change apart (Codex on ebc7159).
+  const secret = page([{ ...a.elements[0], label: "API token", value: "[REDACTED]", value_hash: "1".repeat(64), secret: true }]);
+  assert.notEqual(observationSignature(secret), observationSignature(page([{ ...secret.elements[0], value_hash: "2".repeat(64) }])));
+  // Another field's digest adds nothing to what its value says.
+  assert.equal(observationSignature(a), observationSignature(page([{ ...a.elements[0], value_hash: "3".repeat(64) }])));
 });
 
 test("unrelated live text cannot authorize a duplicate server submission", async () => {

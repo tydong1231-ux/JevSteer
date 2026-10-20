@@ -711,6 +711,16 @@ async function nodeRegistry(frame, info) {
   return info.nodes.handle;
 }
 
+// The nodes of a frame's document that a snapshot saw as secret fields, by
+// their registry numbers. A field can be secret only by the text drawn over
+// it ("API token"), and that text goes once the field holds a value: the
+// value would then reach Jev and the host's review. The same node stays
+// secret for as long as its document lives (Codex on ebc7159).
+export function secretNodes(info) {
+  if (!info?.nodes?.handle || info.nodes.revision !== info.revision) return undefined;
+  return (info.nodes.secret ||= new Set());
+}
+
 // A frame fixed outside the window stays out of view however the page
 // scrolls: no one sees what it says. ccMonet parks a status page widget at
 // left -9999px until an incident is posted; its text changed as it loaded,
@@ -760,12 +770,16 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
     catch (error) { if (frame.isDetached()) continue; throw error; }
     if (info.revision !== revision) throw new Error('SNAPSHOT_CHANGED: document navigated during capture');
     const documentId = `${info.id}:${revision}:${data.documentKey}`;
+    // The nodes of this document seen as secret fields (see secretNodes).
+    const secret = secretNodes(info);
     for (const e of data.elements) {
       const selector = `pw-ref:${snapshotId}:${info.id}:${e.ordinal}`;
       const { popup_of: _, clears: __, ...described } = e;
       const target = { ...described, selector, snapshot_id: snapshotId, page_id: pageId, session_id: sessionId, frame_id: info.id, document_id: documentId, identity_version: 2 };
       target.value_hash = createHash('sha256').update(String(e.value ?? '')).digest('hex');
-      if (sensitiveField(target)) {
+      if (secret?.has(target.node) || sensitiveField(target)) {
+        if (target.node) secret?.add(target.node);
+        target.secret = true;
         target.value = '[REDACTED]'; target.text = '';
         if (target.display) target.display = '[REDACTED]';
         delete target.display_items;
