@@ -20,6 +20,12 @@ physical Page therefore share the journal and lease key.
 
 Playwright observations include immutable snapshot IDs and per-target page,
 frame, document, form and record context. DOM positions only locate candidates.
+A child frame is observed when its owner element is visible, also below the
+fold, since a scroll reaches it. A frame fixed outside the window (it, or a box
+it sits in, is `position: fixed` and drawn wholly outside the viewport) stays
+out of view however the page scrolls, so it is left out with the frames inside
+it: ccMonet parks a status page widget at left -9999px until an incident is
+posted, and its text, which changed as it loaded, made a review ticket stale.
 Before input, the driver requires unique semantic identity and the same document,
 then pins that node for a single dispatch. It checks the pinned node again after
 the durable journal hook. Detachment or recycled record identity fails closed;
@@ -172,7 +178,15 @@ placeholder) is reported as `hint`: it tells Jev what an unnamed field is for,
 but it is never the field's name, because it goes away once the field holds a
 value. A field in a table cell also reports its column header as `column`; such
 a field belongs to its row's item, such as an invoice line, and the value
-chooser is told so. A select-like combobox whose input holds only search text
+chooser is told so. It also reports which row of its table it is in as `row`,
+counted as a person counts the rows they see: header rows and rows drawn with
+no height (antd's measure row) do not count, and a grid that draws only the
+rows in view numbers them by `aria-rowindex`. Jev's target heads, the guards
+and the run history give it as `table_row`/`row`, and the value chooser hears
+where this run already entered each value ("100 (this run already entered it
+in textbox "Unit Price" in table row 1)"), so line 2 of ccMonet's invoice,
+whose lines have no key of their own, takes its own item's price. The row is
+not part of a control's identity: rows can be reordered. A select-like combobox whose input holds only search text
 (antd, react-select) reports the value it shows as `display`, and Jev's target
 heads give it as `shows`: unnamed selects, such as ccMonet's filter row
 ("Status", "Is", "Draft"), are told apart by it. A field this run
@@ -181,6 +195,19 @@ typed that now shows an option holding the typed text as whole words ("Acme" in
 a word ("US" in "Australia", "1" in "10") is another option, so the field can
 be typed in again. In scripts written without spaces between words (Chinese,
 Japanese, Thai) each character stands alone.
+
+A list that draws only the options in view (antd's virtual list, as on
+ccMonet's bill filter, whose field list held "Vendor" below them) leaves room
+for the others in the box it scrolls in. Its open combobox then reports
+`more_options` (`below`, `above`, or `above and below`); a list that draws all
+its options reports none, though it may scroll. When exactly one open
+combobox has options below, Jev is told so with the operation choice, and
+SCROLL turns that list instead of the page: the pointer goes over the middle
+of the box the list scrolls in (so no option is first scrolled into view) and
+the wheel turns by 80% of what the box shows, so the options shown next
+overlap these. The run log names the combobox, with `scrolled: "its open
+list"`. A `browser_act` SCROLL with an element turns the box around that
+element that scrolls the same way, or the page under it.
 
 antd draws a select's options in a portal at the end of `<body>`, as divs with
 `aria-selected` and no role, and keeps `role=option` copies in a 0×0 listbox

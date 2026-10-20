@@ -68,6 +68,8 @@ function modelElement(e, multiFrame) {
   // What a select-like combobox shows while its input holds only search text.
   if (!secret) put("display", e.display && squash(e.display, 160));
   put("column", e.column && squash(e.column, 60));
+  put("row", e.row);
+  put("more_options", e.more_options);
   if (typeof e.checked === "boolean" && (e.checked || CHECKABLE_TYPES.has(String(e.type || "").toLowerCase()) || CHECKABLE_ROLES.has(e.role))) out.checked = e.checked;
   for (const flag of ["disabled", "readonly", "contenteditable", "invalid"]) if (e[flag]) out[flag] = true;
   if (e.options) out.options = e.options.map((o) => {

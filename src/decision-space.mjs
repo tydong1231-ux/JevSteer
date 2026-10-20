@@ -27,7 +27,8 @@ export function eligibleFor(e, tool) {
 export function clearedField(field) {
   const shows = !sensitiveField(field) && squash(field.display || field.value, 80);
   const column = field.column && squash(field.column, 60) !== squash(field.label, 60) ? ` in column "${squash(field.column, 60)}"` : "";
-  return `[${field.i}] ${brief(field)}${column}${shows ? ` showing "${shows}"` : ""}`;
+  const row = field.row ? ` in table row ${field.row}` : "";
+  return `[${field.i}] ${brief(field)}${column}${row}${shows ? ` showing "${shows}"` : ""}`;
 }
 
 function describe(candidate, pool) {
@@ -47,6 +48,7 @@ function describe(candidate, pool) {
   if (e.context) result.record_context = squash(e.context, 180);
   if (e.scope) result.scope = squash(e.scope, 180);
   if (e.column) result.table_column = squash(e.column, 60);
+  if (e.row) result.table_row = e.row;
   if (e.value != null && !sensitiveField(e)) result.current_value = squash(e.value, 80);
   // What a select shows while its input holds nothing (antd draws the chosen
   // option apart from its input). ccMonet's filter row has three unnamed
@@ -73,6 +75,17 @@ export function listingCombobox(o, pool = []) {
   if (o?.role !== "option" || o.popup_of == null || !o.selector) return undefined;
   const e = pool.find((x) => x.i === o.popup_of);
   return SELECTISH(e) && e.tag !== "select" && e.expanded === true ? e : undefined;
+}
+
+// The open list SCROLL turns: the one open combobox whose list holds more
+// options below than it shows (more_options, see the snapshot), and an
+// option it shows, from which the driver finds the box the list scrolls in.
+// With no such list, or several, SCROLL scrolls the page.
+export function listToScroll(pool = []) {
+  const open = pool.filter((e) => SELECTISH(e) && e.tag !== "select" && e.expanded === true && /below/.test(e.more_options || ""));
+  if (open.length !== 1) return undefined;
+  const option = pool.filter((o) => o.popup_of === open[0].i && o.role === "option" && o.selector).at(-1);
+  return option ? { list: open[0], option } : undefined;
 }
 
 // A head with one target would give it every time, fitting or not: after the

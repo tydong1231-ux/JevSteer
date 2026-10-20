@@ -937,6 +937,131 @@ test('a realistic TYPE into a searchable select that shows a value clicks that v
   } finally { await driver.close(); }
 });
 
+// ccMonet's filter field list (Mac rerun, 2026-10-20) is antd's virtual
+// list: it draws only the options in view, in a holder that turns the wheel
+// itself (overflow hidden). "Vendor" lay below them, and Jev, offered no
+// fitting option, chose TYPE on a select that takes no typing.
+const FIELDS = ['Status', 'Bill No.', 'Bill Date', 'Due Date', 'Currency', 'Amount', 'Tax', 'Total', 'Paid', 'Balance', 'Category', 'Project', 'Created By', 'Updated At', 'Vendor', 'Reference'];
+const virtualFilter = () => `<style>
+    body { font: 14px sans-serif; }
+    .ant-popover { position: absolute; top: 60px; left: 20px; background: #fff; padding: 12px; }
+    .ant-select { position: relative; display: inline-flex; width: 160px; height: 32px; box-sizing: border-box; }
+    .ant-select-single .ant-select-selector { display: flex; position: relative; width: 100%; height: 100%; padding: 0 11px; border: 1px solid #d9d9d9; box-sizing: border-box; }
+    .ant-select-single .ant-select-selector .ant-select-selection-search { position: absolute; top: 0; bottom: 0; inset-inline-start: 11px; inset-inline-end: 11px; }
+    .ant-select-single .ant-select-selector .ant-select-selection-search-input { width: 100%; height: 30px; border: 0; padding: 0; }
+    .ant-select .ant-select-selection-item { flex: 1; position: relative; line-height: 30px; }
+    .ant-select .ant-select-arrow { position: absolute; top: 50%; inset-inline-end: 11px; height: 12px; margin-top: -6px; pointer-events: none; }
+    .ant-select-dropdown { position: absolute; z-index: 1050; background: #fff; padding: 4px; }
+    .ant-select-dropdown-hidden { display: none; }
+    .rc-virtual-list-holder { max-height: 256px; overflow-y: hidden; overflow-anchor: none; }
+    .ant-select-item-option { height: 32px; box-sizing: border-box; padding: 5px 12px; cursor: pointer; }
+  </style>
+  <h1>Bills</h1>
+  <div class="ant-popover"><div class="ant-popover-inner" role="tooltip">
+    <div class="ant-popover-title">Filter records</div>
+    <div class="filter-row">${antdSelect({ id: 'field', shown: 'Status' })}</div>
+  </div></div>
+  <div class="ant-select-dropdown ant-select-dropdown-hidden" id="field_dropdown"><div>
+    <div role="listbox" id="field_list" style="height:0;width:0;overflow:hidden"></div>
+    <div class="rc-virtual-list" style="position:relative"><div class="rc-virtual-list-holder"><div style="height:${FIELDS.length * 32}px;position:relative;overflow:hidden"><div class="rc-virtual-list-holder-inner" style="display:flex;flex-direction:column;position:absolute;left:0;right:0;top:0"></div></div></div></div>
+  </div></div>
+  <script>
+    const fields = ${JSON.stringify(FIELDS)};
+    const input = document.getElementById('field');
+    const box = input.closest('.ant-select');
+    const dropdown = document.getElementById('field_dropdown');
+    const holder = dropdown.querySelector('.rc-virtual-list-holder');
+    const inner = dropdown.querySelector('.rc-virtual-list-holder-inner');
+    let chosen = 'Status';
+    const draw = () => {
+      const first = Math.floor(holder.scrollTop / 32);
+      inner.style.transform = 'translateY(' + first * 32 + 'px)';
+      inner.replaceChildren(...fields.slice(first, first + 9).map((name) => {
+        const option = document.createElement('div');
+        option.className = 'ant-select-item ant-select-item-option';
+        option.title = name;
+        option.setAttribute('aria-selected', String(name === chosen));
+        option.innerHTML = '<div class="ant-select-item-option-content">' + name + '</div>';
+        return option;
+      }));
+    };
+    const setOpen = (open) => {
+      input.setAttribute('aria-expanded', String(open));
+      dropdown.classList.toggle('ant-select-dropdown-hidden', !open);
+      const r = box.getBoundingClientRect();
+      Object.assign(dropdown.style, { top: r.bottom + scrollY + 4 + 'px', left: r.left + scrollX + 'px', width: r.width + 'px' });
+      if (open) draw();
+    };
+    box.querySelector('.ant-select-selector').addEventListener('mousedown', (e) => {
+      if (e.target !== input) e.preventDefault();
+      setOpen(input.getAttribute('aria-expanded') !== 'true');
+    });
+    holder.addEventListener('wheel', (e) => { e.preventDefault(); holder.scrollTop += e.deltaY; draw(); }, { passive: false });
+    inner.addEventListener('click', (e) => {
+      const option = e.target.closest('.ant-select-item-option');
+      if (!option) return;
+      chosen = option.title;
+      box.querySelector('.ant-select-selection-item').textContent = chosen;
+      setOpen(false);
+    });
+  </script>`;
+
+test('an open list that draws only the options in view says it holds more, and SCROLL on an option turns that list', async ({ page }) => {
+  await page.setContent(virtualFilter());
+  await page.click('.ant-select-selection-item');
+  const { driver, id: tab } = await driverFor(page);
+  try {
+    const seen = await driver.observe(tab);
+    const field = seen.elements.find((e) => e.role === 'combobox');
+    const options = (observed) => observed.elements.filter((e) => e.role === 'option' && e.popup_of === field.i).map((e) => e.label);
+    expect(field.more_options).toBe('below');
+    expect(options(seen)).toEqual(FIELDS.slice(0, 9));
+    const last = seen.elements.filter((e) => e.role === 'option').at(-1);
+    const action = { tool: 'scroll', target: last.i, el: last, observedUrl: seen.url };
+    expect((await driver.perform(tab, action, action.el)).state).toBe('dispatched_ack');
+    // 80% of the 256px list: the options shown next overlap these.
+    expect(await page.locator('.rc-virtual-list-holder').evaluate((h) => h.scrollTop)).toBe(205);
+    const after = await driver.observe(tab);
+    expect(after.elements.find((e) => e.role === 'combobox').more_options).toBe('above and below');
+    expect(options(after)).toEqual(FIELDS.slice(6, 15));
+    // A closed list says nothing.
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => document.querySelector('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+    expect((await driver.observe(tab)).elements.find((e) => e.role === 'combobox').more_options).toBeUndefined();
+  } finally { await driver.close(); }
+});
+
+test('Jev scrolls an open virtual list to an option it does not show yet, and chooses it', async ({ page }, testInfo) => {
+  await page.setContent(virtualFilter());
+  const field = pick((e) => e.role === 'combobox');
+  const seen = {};
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'select', target: field(state) }),
+    (state, questions) => {
+      seen.offered = state.page.elements.filter((e) => e.role === 'option').map((e) => e.label);
+      seen.more = state.page.elements.find((e) => e.role === 'combobox').more_options;
+      seen.tool = questions.tool;
+      return decision({ tool: 'scroll', target: null });
+    },
+    (state) => {
+      seen.history = state.task.history.at(-1);
+      return decision({ tool: 'select', target: `${field(state)}>${pick((e) => e.role === 'option' && e.label === 'Vendor')(state)}` });
+    },
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Filter bills by Vendor', verification_mode: 'host', max_actions: 4, evidence_level: 'none' });
+    expect(result.status).toBe('host_review_required');
+    expect(seen.offered).not.toContain('Vendor');
+    expect(seen.more).toBe('below');
+    expect(seen.tool.criteria.scroll).toMatch(/^Scroll the open list of \[\d+\] combobox "Filter records" down, to show more of its options$/);
+    expect(seen.tool.instructions).toMatch(/holds more options below the ones page\.elements show \(more_options\): if the option task\.goal needs is not among them, choose SCROLL\.$/);
+    expect(seen.history).toMatchObject({ action: 'scroll', element: 'combobox "Filter records"', target_role: 'combobox', scrolled: 'its open list' });
+    expect(result.actions.map((a) => [a.action, a.error])).toEqual([['select', undefined], ['scroll', undefined], ['click', undefined]]);
+    await expect(page.locator('.ant-select-selection-item')).toHaveText('Vendor');
+  } finally { await mcp.close(); }
+});
+
 // What lies over a field is clicked in its place only when it is part of the
 // field's own box and no control of its own: here a button drawn over the
 // field takes no click, and the refusal names it.

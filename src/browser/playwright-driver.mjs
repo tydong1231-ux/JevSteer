@@ -164,6 +164,10 @@ export class PlaywrightDriver {
     // own box drawn over it, pinned too (see ownPart); null when the field
     // itself takes the click.
     let part;
+    // The box a SCROLL on a target turns, and where and how far (see
+    // scrollerOf); null when nothing around the target scrolls.
+    let scroller;
+    let wheel;
     return dispatchInput(async () => {
       if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
       if (!['click', 'type', 'press_enter', 'press_key', 'select', 'hover', 'scroll', 'back', 'wait', 'none'].includes(action.tool)) throw new Error('UNSUPPORTED_ACTION');
@@ -204,6 +208,16 @@ export class PlaywrightDriver {
         // open list covers fails here, before the journal, not after.
         else if (action.tool === 'select' && current.tag !== 'select') await at.click({ trial: true, timeout });
         else if (part) await part.click({ trial: true, timeout });
+        // SCROLL on a target turns the box around it that scrolls, such as
+        // an open list, with the pointer over the middle of that box. With
+        // none, the wheel turns over the target.
+        else if (action.tool === 'scroll') {
+          const found = await handle.evaluateHandle(scrollerOf);
+          scroller = found.asElement();
+          if (!scroller) await found.dispose();
+          wheel = scroller ? await scroller.evaluate(wheelOver) : undefined;
+          await (scroller || handle).hover({ ...(wheel ? { position: wheel.at } : {}), trial: true, timeout });
+        }
         return handle;
       } catch (error) { await handle.dispose(); throw error; }
     }, beforeDispatch, async (handle, mark) => {
@@ -279,13 +293,17 @@ export class PlaywrightDriver {
           if (handle) await handle.press(key, { timeout }); else await record.page.keyboard.press(key);
           break;
         }
-        case 'scroll': mark(); await record.page.mouse.wheel(0, 600); break;
+        case 'scroll':
+          mark();
+          if (handle) await (scroller || handle).hover({ ...(wheel ? { position: wheel.at } : {}), timeout });
+          await record.page.mouse.wheel(0, wheel?.by || 600);
+          break;
         case 'back': mark(); await record.page.goBack({ waitUntil: 'domcontentloaded', timeout }); break;
         case 'wait': await new Promise((r) => setTimeout(r, 150)); break;
         case 'none': break;
       }
       return { input_mode: ['click', 'hover'].includes(action.tool) ? 'pointer' : 'keyboard' };
-    }).finally(() => Promise.all([owner, part].map((h) => h?.dispose().catch(() => {}))));
+    }).finally(() => Promise.all([owner, part, scroller].map((h) => h?.dispose().catch(() => {}))));
   }
   async screenshot(ref, { format = 'png' } = {}) {
     const record = await this.record(ref);
@@ -493,6 +511,25 @@ function listsOption(box, [option, field]) {
   }
   const r = p.getBoundingClientRect(), f = at.getBoundingClientRect();
   return r.width * r.height > 0 && r.left < f.right && r.right > f.left && Math.max(r.top - f.bottom, f.top - r.bottom) <= 64;
+}
+
+// The nearest box around a target that scrolls, such as an open list.
+// antd's virtual list draws only the options in view and turns the wheel
+// itself (overflow hidden). Null when there is none.
+function scrollerOf(target) {
+  const up = (e) => e.parentElement || e.getRootNode()?.host;
+  for (let p = up(target); p && p !== document.body && p !== document.documentElement; p = up(p)) {
+    if (/auto|scroll|hidden/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight + 1) return p;
+  }
+  return null;
+}
+
+// Where the pointer goes to turn a box's wheel, from the top left corner of
+// its padding box: the middle of what it shows, so that no part of what it
+// scrolls is brought into view first. How far: most of what it shows, so
+// that what it shows next overlaps this.
+function wheelOver(box) {
+  return { at: { x: box.clientWidth / 2, y: box.clientHeight / 2 }, by: Math.max(24, Math.round(box.clientHeight * 0.8)) };
 }
 
 // Resolves after the page has drawn two more frames. A hidden tab draws none,

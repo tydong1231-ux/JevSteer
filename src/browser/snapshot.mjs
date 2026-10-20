@@ -154,16 +154,20 @@ export function readDOM(elements, nodes) {
     return clean(walk(n), 200).replace(/^[*\s]+|[*:：\s]+$/g, '');
   };
   const headings = new Map();
-  // The leaf header cell of each column: from the table's thead, a thead of
-  // a separate header table (antd with a fixed header), or a first row of th.
+  // The leaf header cell of each column: from the table's thead, a first row
+  // of th, or a thead of a separate header table (antd with a fixed header).
   const tableHeadings = (table) => {
     if (headings.has(table)) return headings.get(table);
     let rows = table.tHead?.rows;
-    for (let up = table.parentElement, depth = 0; !rows?.length && up && depth < 4; up = up.parentElement, depth++) {
-      const head = [...up.querySelectorAll('thead')].find((h) => !table.contains(h) && h.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING);
-      rows = head?.rows;
-    }
     if (!rows?.length && table.rows[0] && [...table.rows[0].cells].every((c) => c.tagName === 'TH')) rows = [table.rows[0]];
+    // A header table of its own (antd's, Element's): drawn just before the
+    // table or a box it is in, up to 4 levels out, heading no rows of its
+    // own. Another table's head, or one further away, heads nothing here.
+    for (let at = table, depth = 0; !rows?.length && at && depth < 4; at = at.parentElement, depth++) {
+      const before = at.previousElementSibling;
+      const head = before && [...(before.matches('thead') ? [before] : before.querySelectorAll('thead'))].at(-1);
+      if (head && ![...(head.closest('table')?.tBodies || [])].some((b) => b.rows.length)) rows = head.rows;
+    }
     const grid = [];
     [...(rows || [])].forEach((row, r) => {
       let c = 0;
@@ -208,6 +212,35 @@ export function readDOM(elements, nodes) {
     }
     const words = head ? labelText(head) : '';
     return words.length <= 60 ? words : '';
+  };
+  // Which row of its table a field's row is, counted as a person counts the
+  // rows they see: a header row, or a row drawn with no height (antd's
+  // measure row), does not count. ccMonet's invoice lines have no key of
+  // their own, and fields of two lines read alike ("Unit Price"): the line
+  // number tells them apart.
+  const GRID = '[role=grid],[role=table],[role=treegrid]';
+  const shownRows = new Map();
+  const rowNumber = (e) => {
+    const cell = closest(e, 'td,[role=cell],[role=gridcell]');
+    const row = cell && closest(cell, 'tr,[role=row]');
+    const table = row && (row.tagName === 'TR' ? row.closest('table') : closest(row, GRID));
+    if (!table) return undefined;
+    if (!shownRows.has(table)) {
+      const rows = row.tagName === 'TR' ? [...table.rows] : [...table.querySelectorAll('[role=row]')].filter((r) => closest(r, GRID) === table);
+      const head = (r) => r.parentElement?.tagName === 'THEAD'
+        || (r.tagName === 'TR' ? [...r.cells].every((c) => c.tagName === 'TH') : !!r.querySelector('[role=columnheader]') && !r.querySelector('[role=gridcell],[role=cell]'));
+      shownRows.set(table, {
+        heads: rows.filter(head).length,
+        rows: rows.filter((r) => !head(r) && r.getAttribute('aria-hidden') !== 'true' && r.getBoundingClientRect().height > 1),
+      });
+    }
+    const { heads, rows } = shownRows.get(table);
+    // A grid that draws only the rows in view numbers each of them, its
+    // header rows included (aria-rowindex).
+    const index = Number(row.getAttribute('aria-rowindex'));
+    if (Number.isInteger(index) && index > heads) return index - heads;
+    const at = rows.indexOf(row);
+    return at < 0 ? undefined : at + 1;
   };
   // A label sits just above its field or just before it on the same line. A
   // logo or title further along a toolbar does not name the search box in it.
@@ -428,6 +461,35 @@ export function readDOM(elements, nodes) {
     if (box && !box.contains(openBoxes[0]) && drawnFor(box, openBoxes[0])) return openBoxes[0];
     return popupBoxes.some((b) => b.contains(e)) ? focused : undefined;
   };
+  // Whose popup each element is in, asked once per element.
+  const owners = new Map();
+  const ownerOf = (e) => {
+    if (!owners.has(e)) owners.set(e, popupOwner(e));
+    return owners.get(e);
+  };
+  // Whether an open combobox's list holds options the page does not draw.
+  // A virtual list (antd's) puts only the options in view in the page, in a
+  // box that scrolls (antd's turns its own wheel: overflow hidden), and
+  // leaves room for the others above and below them: ccMonet's filter field
+  // list held "Vendor" below them (Mac rerun, 2026-10-20). A list that draws
+  // all its options leaves no such room, though it may scroll.
+  const moreOptions = (c) => {
+    if (!openBoxes.includes(c)) return undefined;
+    const drawn = all.filter((o) => role(o) === 'option' && ownerOf(o) === c && visible(o));
+    for (let p = drawn.length ? parent(drawn[0]) : null; p && p !== document.body && p !== document.documentElement && !p.contains(c); p = parent(p)) {
+      if (!/auto|scroll|hidden/.test(getComputedStyle(p).overflowY) || p.scrollHeight <= p.clientHeight + 1) continue;
+      // Where the drawn options start and end in what the box scrolls.
+      const box = p.getBoundingClientRect();
+      const first = drawn[0].getBoundingClientRect();
+      const last = drawn.at(-1).getBoundingClientRect();
+      const top = first.top - box.top - p.clientTop + p.scrollTop;
+      const bottom = last.bottom - box.top - p.clientTop + p.scrollTop;
+      const above = top > first.height / 2;
+      const below = p.scrollHeight - bottom > last.height / 2;
+      return above && below ? 'above and below' : below ? 'below' : above ? 'above' : undefined;
+    }
+    return undefined;
+  };
   // What the focused field's popup says, for Jev to read as that field's.
   const popupText = (() => {
     const own = focused && lists.find(([c]) => c === focused);
@@ -483,6 +545,10 @@ export function readDOM(elements, nodes) {
     const [local, localReview] = read(record || parent(e), 500, true);
     const [own, ownReview] = read(e, 180, true);
     const label = name(e);
+    // The table column a field sits in: such a field belongs to its row's
+    // item (an invoice line), not to the document. A field's clear button
+    // sits in its column too.
+    const column = (e.matches(TYPABLE) || e.matches(CLEAR)) && cellHeader(e) || undefined;
     const ariaOff = ancestors(e).filter((p) => p.getAttribute('aria-disabled') === 'true');
     const descriptor = {
       ordinal: index, node: nodeOf(e), tag: e.tagName.toLowerCase(), role: role(e), type: e.getAttribute('type') || (e.tagName === 'INPUT' ? e.type : undefined),
@@ -493,17 +559,20 @@ export function readDOM(elements, nodes) {
       download: e.matches('a[href]') && e.hasAttribute('download') || undefined,
       value: 'value' in e ? String(e.value) : e.isContentEditable ? e.innerText : undefined,
       display: shown(e),
-      // The table column a field sits in: such a field belongs to its row's
-      // item (an invoice line), not to the document. A field's clear button
-      // sits in its column too.
-      column: (e.matches(TYPABLE) || e.matches(CLEAR)) && cellHeader(e) || undefined,
+      column,
+      // Which row of its table the field is in (see rowNumber), when the
+      // table heads its columns: the rows of a table that only lays a form
+      // out hold no items.
+      row: column && rowNumber(e) || undefined,
       // What text drawn over an unnamed field says it is for.
       hint: (!label || label === e.getAttribute('name')) && hintText(e) || undefined,
       checked: 'checked' in e ? e.checked : e.hasAttribute('aria-checked') ? e.getAttribute('aria-checked') === 'true' : undefined,
       selected: e.hasAttribute('aria-selected') ? e.getAttribute('aria-selected') === 'true' : undefined,
       expanded: e.hasAttribute('aria-expanded') ? e.getAttribute('aria-expanded') === 'true' : undefined,
       // The ordinal of the field whose popup holds this element (see popupOwner).
-      popup_of: ((owner) => (owner ? all.indexOf(owner) : undefined))(popupOwner(e)),
+      popup_of: ((owner) => (owner ? all.indexOf(owner) : undefined))(ownerOf(e)),
+      // Where an open combobox's list holds more options than it shows.
+      more_options: moreOptions(e),
       // The ordinal of the field this clear button empties (see clearedField).
       clears: ((field) => (field && all.includes(field) ? all.indexOf(field) : undefined))(clearedField(e)),
       disabled: e.matches(':disabled') || ariaOff.some((p) => !dragOnly(p)),
@@ -567,14 +636,34 @@ async function nodeRegistry(frame, info) {
   return info.nodes.handle;
 }
 
+// A frame fixed outside the window stays out of view however the page
+// scrolls: no one sees what it says. ccMonet parks a status page widget at
+// left -9999px until an incident is posted; its text changed as it loaded,
+// and a review ticket went stale (Mac rerun, 2026-10-20).
+function fixedOutOfView(owner) {
+  const view = owner.ownerDocument.defaultView;
+  let fixed = false;
+  for (let e = owner; e && !fixed; e = e.parentElement || e.getRootNode()?.host) fixed = view.getComputedStyle(e).position === 'fixed';
+  const box = owner.getBoundingClientRect();
+  return fixed && (box.right <= 0 || box.bottom <= 0 || box.left >= view.innerWidth || box.top >= view.innerHeight);
+}
+
 export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scope, maxElements = 2000 }) {
   const snapshotId = randomUUID();
   const refs = new Map();
   const frames = [];
+  // Frames no one sees, and the frames inside them. page.frames() lists a
+  // frame after the frame it is in.
+  const unseen = new Set();
   for (const frame of page.frames()) {
     if (frame !== page.mainFrame()) {
       const owner = await frame.frameElement().catch(() => null);
-      try { if (!owner || !await owner.isVisible()) continue; } finally { await owner?.dispose(); }
+      try {
+        if (!owner || unseen.has(frame.parentFrame()) || !await owner.isVisible() || await owner.evaluate(fixedOutOfView).catch(() => false)) {
+          unseen.add(frame);
+          continue;
+        }
+      } finally { await owner?.dispose(); }
     }
     const info = frameInfo(frame);
     const revision = info.revision;

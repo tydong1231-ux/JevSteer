@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTargetSpace, availableTools } from "../src/decision-space.mjs";
+import { buildTargetSpace, availableTools, listToScroll } from "../src/decision-space.mjs";
 import { FIELDISH, brief } from "../src/page-model.mjs";
 import { rememberField } from "../src/element-identity.mjs";
 import { OfflineRuntime as JevSteerRuntime } from "./helpers/runtime.mjs";
@@ -127,6 +127,50 @@ test("unnamed selects are told apart in the target heads by what they show", () 
   const shows = (tool) => Object.fromEntries(Object.entries(space.questions[`${tool}_target`].criteria).map(([key, c]) => [key, c.shows]));
   assert.deepEqual(shows("select"), { 0: "Status", 1: "Is", 2: "Draft", 3: undefined });
   assert.deepEqual(shows("click"), { 0: "Status", 1: "Is", 2: "Draft", 3: undefined });
+});
+
+// ccMonet's filter field list draws only the options in view; "Vendor" lay
+// below them (Mac rerun, 2026-10-20).
+test("SCROLL turns the one open list that holds more options below, over an option it shows", async () => {
+  const field = { i: 0, selector: "#field", tag: "input", role: "combobox", label: "", display: "Status", expanded: true, more_options: "below" };
+  const options = [1, 2, 3].map((i) => ({ i, selector: `#o${i}`, tag: "div", role: "option", label: `Field ${i}`, popup_of: 0, selected: i === 1 }));
+  const p = { url: "https://erp.test/bills", title: "Bills", text: "Filter records", elements: [field, ...options] };
+  assert.deepEqual(listToScroll(p.elements), { list: field, option: options[2] });
+  for (const other of [{ more_options: "above" }, { more_options: undefined }, { expanded: false }]) {
+    assert.equal(listToScroll([{ ...field, ...other }, ...options]), undefined);
+  }
+  // Two such lists: which one is not known.
+  assert.equal(listToScroll([field, ...options, { ...field, i: 4, selector: "#op" }, { ...options[0], i: 5, selector: "#p5", popup_of: 4 }]), undefined);
+
+  let tool;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    tool = questions.tool;
+    const answers = Object.fromEntries(Object.entries(questions).map(([name, q]) => [name, q.type === "noul" ? { noul: 0.01 } : choice(q.criteria, "scroll")]));
+    return { answers, ms: 1, tokens: 1 };
+  } });
+  const answer = await runtime.decide(p, normalizeTaskContract({ goal: "Filter bills by Vendor" }), {}, []);
+  assert.equal(tool.criteria.scroll, 'Scroll the open list of [0] combobox down, to show more of its options');
+  assert.match(tool.instructions, /The open list of \[0\] combobox holds more options below the ones page\.elements show \(more_options\): if the option task\.goal needs is not among them, choose SCROLL\.$/);
+  const action = runtime.resolve(p, answer, {});
+  assert.deepEqual([action.tool, action.target, action.el.selector, action.scrolls.selector], ["scroll", 3, "#o3", "#field"]);
+  // With no such list, SCROLL scrolls the page, and Jev is told nothing more.
+  const plain = { ...p, elements: [{ ...field, more_options: undefined }, ...options] };
+  const again = await runtime.decide(plain, normalizeTaskContract({ goal: "Filter bills by Vendor" }), {}, []);
+  assert.equal(tool.criteria.scroll, "Scroll down to reveal or load more content");
+  assert.doesNotMatch(tool.instructions, /more_options/);
+  assert.deepEqual([runtime.resolve(plain, again, {}).target, runtime.resolve(plain, again, {}).scrolls], [null, undefined]);
+});
+
+test("fields of two table rows are told apart in the target heads by their row", () => {
+  const space = buildTargetSpace([
+    { i: 0, selector: "#price-1", tag: "input", role: "textbox", label: "Unit Price", column: "Unit Price", row: 1, value: "100" },
+    { i: 1, selector: "#price-2", tag: "input", role: "textbox", label: "Unit Price", column: "Unit Price", row: 2, value: "" },
+    { i: 2, selector: "#tracking-2", tag: "input", role: "combobox", label: "", column: "Tracking Category", row: 2, value: "", display: "Woodlands" },
+    { i: 3, selector: "#clear-2", tag: "span", role: "button", label: "close-circle", clears: 2, column: "Tracking Category", row: 2 },
+  ]);
+  const type = space.questions.type_target.criteria;
+  assert.deepEqual([type["0"].table_row, type["1"].table_row], [1, 2]);
+  assert.equal(space.questions.click_target.criteria["3"].clears, '[2] combobox in column "Tracking Category" in table row 2 showing "Woodlands"');
 });
 
 test("an open combobox offers the options its popup lists for SELECT; choosing one clicks it", () => {
@@ -280,6 +324,39 @@ test("the value chooser sees a field's table column and hint", async () => {
   assert.equal(value, undefined);
   assert.equal(selected.table_column, "Preferred Name");
   assert.equal(selected.hint, "Select product");
+});
+
+// ccMonet's invoice lines have no key of their own, and line 2's Unit Price
+// got line 1's price: nothing told the chooser which line it was filling.
+test("the value chooser sees a field's table row and where each value was already entered", async () => {
+  let seen;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    seen = { state, question: questions.selected_value };
+    return { answers: { selected_value: choice(questions.selected_value.criteria, "price_b") }, ms: 1, tokens: 4 };
+  } });
+  const price = { i: 4, selector: "#price-2", tag: "input", role: "textbox", label: "Unit Price", column: "Unit Price", row: 2, value: "" };
+  const history = [
+    { action: "type", element: 'textbox "Description"', row: 1, value: "item_a" },
+    { action: "type", element: 'textbox "Unit Price"', row: 1, value: "price_a" },
+    { action: "type", element: 'textbox "Description"', row: 2, value: "item_b" },
+    { action: "type", element: 'textbox "Quantity"', row: 2, value: "qty_b", error: "the target never became ready for input; no input was sent" },
+    { action: "type", element: 'textbox "Reference"', value: "reference", record: "Invoice draft" },
+  ];
+  const values = { item_a: "Consulting", price_a: "100", item_b: "Support", price_b: "50", qty_b: "1", reference: "PO-7" };
+  const value = await runtime.chooseFieldValue({ url: "https://erp.test", title: "Invoice", text: "Invoice", elements: [price] },
+    normalizeTaskContract({ goal: "Create an invoice with two lines" }), values, history, price);
+  assert.equal(value, "price_b");
+  assert.equal(seen.state.selected_field.table_row, 2);
+  assert.deepEqual(seen.question.criteria, {
+    item_a: 'Consulting (this run already entered it in textbox "Description" in table row 1)',
+    price_a: '100 (this run already entered it in textbox "Unit Price" in table row 1)',
+    item_b: 'Support (this run already entered it in textbox "Description" in table row 2)',
+    // An attempt that sent nothing entered nothing.
+    price_b: "50", qty_b: "1",
+    reference: 'PO-7 (this run already entered it in textbox "Reference" in record Invoice draft)',
+    __none__: "None of the provided values belongs in this selected field; do not guess.",
+  });
+  assert.match(seen.question.instructions, /table_row says which row of its table the field is in/);
 });
 
 test("exact host field assertions bind start and end values without another model choice", async () => {

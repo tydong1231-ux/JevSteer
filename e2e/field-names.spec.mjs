@@ -39,6 +39,50 @@ test('unlabeled antd fields take the caption before them, and line inputs their 
   } finally { await driver.close(); }
 });
 
+// ccMonet's invoice lines (Mac probe, 2026-10-20): a dnd-kit sortable grid
+// whose rows are buttons, with no key Jev reads; line 2's Unit Price got
+// line 1's price. Rows are counted as a person sees them.
+test('fields in table rows carry the number of their row', async ({ page }) => {
+  const line = (n, item) => `<tr data-index="${n - 1}" class="flex w-full" role="button" tabindex="0" aria-roledescription="sortable" style="position:relative"><td>${n}</td><td><input value="${item}"></td><td><input class="price"></td><td><button aria-label="Delete line">x</button></td></tr>`;
+  await page.setContent(`
+    <table id="lines"><thead class="grid relative"><tr class="flex relative"><th>#</th><th>Description</th><th>Unit Price</th><th></th></tr></thead>
+      <tbody class="relative grid">${line(1, 'Consulting')}${line(2, 'Support')}</tbody></table>
+    <div class="ant-table-container">
+      <div class="ant-table-header"><table><thead class="ant-table-thead"><tr><th>Account</th><th>Amount</th></tr></thead></table></div>
+      <div class="ant-table-body"><table><tbody class="ant-table-tbody"><tr aria-hidden="true" class="ant-table-measure-row"><td style="padding:0"></td><td style="padding:0"></td></tr>
+        <tr data-row-key="a"><td><input id="account-a"></td><td><input id="amount-a"></td></tr><tr style="display:none"><td><input id="gone"></td><td></td></tr><tr data-row-key="b"><td><input id="account-b"></td><td><input id="amount-b"></td></tr></tbody></table></div>
+    </div>
+    <table id="week"><tr><th>Day</th><th>Hours</th></tr><tr><th scope="row">Mon</th><td><input id="mon"></td></tr><tr><th scope="row">Tue</th><td><input id="tue"></td></tr></table>
+    <div role="grid" aria-rowcount="80" id="virtual">
+      <div role="rowgroup"><div role="row" aria-rowindex="1"><span role="columnheader">Code</span></div></div>
+      <div role="rowgroup"><div><div role="row" aria-rowindex="37"><span role="gridcell"><input id="code-36"></span></div></div><div><div role="row" aria-rowindex="38"><span role="gridcell"><input id="code-37"></span></div></div></div>
+    </div>
+    <div role="grid" id="wrapped">
+      <div role="row"><span role="columnheader">Note</span></div>
+      <div><div role="row"><span role="gridcell"><input id="note-1"></span></div></div><div><div role="row"><span role="gridcell"><input id="note-2"></span></div></div>
+    </div>
+    <table id="layout"><tr><td>Memo</td><td><input id="memo"></td></tr><tr><td>Terms</td><td><input id="terms"></td></tr></table>
+    <input id="outside">`);
+  const { driver, id } = await driverFor(page);
+  try {
+    const { elements } = await driver.observe(id);
+    const rows = elements.filter((e) => e.role === 'textbox').map((e) => [e.label, e.row]);
+    expect(rows).toEqual([
+      ['Description', 1], ['Unit Price', 1], ['Description', 2], ['Unit Price', 2],
+      ['Account', 1], ['Amount', 1], ['Account', 2], ['Amount', 2],
+      ['Hours', 1], ['Hours', 2],
+      ['Code', 36], ['Code', 37],
+      ['Note', 1], ['Note', 2],
+      // A table that only lays a form out heads no columns: its rows hold no
+      // items. The header table of another table, further up, heads nothing here.
+      ['Memo', undefined], ['Terms', undefined],
+      ['', undefined],
+    ]);
+    // A line's delete button is no field: it has no row of its own.
+    expect(elements.filter((e) => e.label === 'Delete line').map((e) => e.row)).toEqual([undefined, undefined]);
+  } finally { await driver.close(); }
+});
+
 test('a separate header table names body cells; a search icon names a search box; text elsewhere names nothing', async ({ page }) => {
   await page.setContent(`
     <div style="display:flex;gap:300px"><span>ccMonet</span><span class="ant-input-affix-wrapper"><span class="ant-input-prefix"><span role="img" aria-label="search" class="anticon anticon-search"><svg width="12" height="12"></svg></span></span><input class="ant-input" type="text" value=""></span></div>
@@ -178,11 +222,11 @@ test('Jev is told which field a clear button empties, and so are the guards and 
   try {
     const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Empty the Tracking Category of the Consulting line', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
     expect(result.status).toBe('host_review_required');
-    const field = `[${seen.field}] combobox "Tracking Category" showing "Woodlands"`;
-    expect(seen.offered).toMatchObject({ control: `[${seen.clear}] button "close-circle"`, clears: field, record: 'line-1', table_column: 'Tracking Category' });
+    const field = `[${seen.field}] combobox "Tracking Category" in table row 1 showing "Woodlands"`;
+    expect(seen.offered).toMatchObject({ control: `[${seen.clear}] button "close-circle"`, clears: field, record: 'line-1', table_column: 'Tracking Category', table_row: 1 });
     expect(seen.instructions).toContain('A target marked clears is that field\'s clear button: a click empties the field.');
-    expect(seen.guarded).toMatchObject({ tool: 'click', element: 'button "close-circle"', clears: field });
-    expect(seen.history).toMatchObject({ action: 'click', element: 'button "close-circle"', clears: field });
+    expect(seen.guarded).toMatchObject({ tool: 'click', element: 'button "close-circle"', clears: field, table_column: 'Tracking Category', table_row: 1 });
+    expect(seen.history).toMatchObject({ action: 'click', element: 'button "close-circle"', clears: field, row: 1 });
     expect(result.actions.map((a) => [a.action, a.element, a.effect?.status])).toEqual([['click', 'button "close-circle"', 'changed']]);
     // Only that line's category is empty now.
     await expect(page.locator('.ant-select-selection-item')).toHaveText(['SGD', 'Urgent', 'Widget', 'Woodlands']);

@@ -326,6 +326,19 @@ test("exact constraint guard sees the chosen native option, never a secret one",
   assert.equal(seen.selected_option, undefined);
 });
 
+test("the exact guards see which table column and row a field is in", async () => {
+  let seen;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state) => {
+    seen = state.proposed_action;
+    return { answers: {}, ms: 1, tokens: 1 };
+  });
+  const el = { i: 1, selector: "#price-2", tag: "input", role: "textbox", label: "", hint: "0.00", column: "Unit Price", row: 2, value: "" };
+  const page = { url: "https://fixture.test/invoice", title: "Invoice", text: "Unit Price", elements: [el] };
+  const contract = { goal: "Add two invoice lines", success_criteria: [], constraints: ["Do not change line 1"], guidance: [] };
+  await runtime.checkActionEffects(page, contract, { tool: "type", el, value: "100", valueKey: "price_a" }, []);
+  assert.deepEqual([seen.table_column, seen.table_row, seen.value_key], ["Unit Price", 2, "price_a"]);
+});
+
 // Status and Resolution list the same "Closed". Status is open; its list
 // floats apart from it, so the option's own section and context say nothing
 // about which field it sets.

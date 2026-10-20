@@ -202,6 +202,40 @@ test('Frame and open Shadow DOM targets retain form ownership and are operable',
   } finally { await driver.close(); }
 });
 
+// ccMonet's status page widget (Mac probe, 2026-10-20): a cross-site iframe,
+// aria-hidden, position:fixed at left -9999px until an incident is posted.
+// Its text changed as it loaded, and a host review ticket went stale.
+test('a frame fixed outside the window, and frames inside it, are not observed; frames a scroll reaches are', async ({ page }) => {
+  const doc = (text, extra = '') => `<p id=t>${text}</p><a href="#latest">View latest updates</a>${extra}`.replace(/"/g, '&quot;');
+  await page.setContent(`<h1>Bills</h1>
+    <iframe id="status" title="Status" aria-hidden="true" style="position:fixed;left:-9999px;bottom:20px;width:320px;height:115px;z-index:9999"
+      srcdoc="${doc('Status embed installed', `<iframe srcdoc='<button>Inner</button>'></iframe>`)}"></iframe>
+    <div style="position:fixed;top:0;left:0;width:0;height:0"><iframe id="parked" style="position:absolute;left:0;top:-500px;height:100px" srcdoc="${doc('Parked above')}"></iframe></div>
+    <iframe id="chat" style="position:fixed;right:8px;bottom:8px;width:200px;height:120px" srcdoc="${doc('Chat with us')}"></iframe>
+    <iframe id="below" style="position:absolute;top:3000px;left:0;height:100px" srcdoc="${doc('Below the fold')}"></iframe>`);
+  for (const id of ['status', 'parked', 'chat', 'below']) await page.frameLocator(`#${id}`).locator('#t').waitFor();
+  await page.frameLocator('#status').frameLocator('iframe').locator('button').waitFor();
+  const { driver, id } = await driverFor(page);
+  try {
+    const before = await driver.observe(id);
+    expect(before.text).not.toContain('Status embed');
+    expect(before.text).not.toContain('Parked above');
+    expect(before.text).toContain('Chat with us');
+    expect(before.text).toContain('Below the fold');
+    expect(before.elements.map((e) => e.label)).toEqual(['View latest updates', 'View latest updates']);
+    expect(before.metrics.frame_count).toBe(3);
+    // What the widget says as it loads changes nothing Jev or a ticket sees.
+    await page.frameLocator('#status').locator('#t').evaluate((p) => { p.textContent = 'Status embed installed correctly'; });
+    const after = await driver.observe(id);
+    expect(after.text).toBe(before.text);
+    // Once the widget slides into view, it is seen.
+    await page.locator('#status').evaluate((f) => { f.style.left = 'auto'; f.style.right = '8px'; });
+    const shown = await driver.observe(id);
+    expect(shown.text).toContain('Status embed installed correctly');
+    expect(shown.elements.filter((e) => e.label === 'Inner')).toHaveLength(1);
+  } finally { await driver.close(); }
+});
+
 test('modal excludes background controls; occluded inputs never reach the journal hook', async ({ page }) => {
   await page.setContent('<button>Background save</button><dialog open aria-label="Editor"><button>Save</button></dialog>');
   const { driver, id } = await driverFor(page);
