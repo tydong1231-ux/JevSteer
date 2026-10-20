@@ -14,7 +14,11 @@ export function eligibleFor(e, tool) {
   // An ARIA listbox is a container, not one specific choice. Clicking its
   // center can select an unrelated child option at that coordinate.
   if (e.role === "listbox" && e.tag !== "select") return false;
-  const identifiableField = !!squash(e.label || e.placeholder || e.hint || e.name || e.text);
+  // An unnamed select is told apart by what it shows (see describe): the
+  // field select of ccMonet's bill filter takes typing, but only "Status"
+  // tells it from the operator and value beside it (Mac rerun on 9a83708).
+  const shows = SELECTISH(e) && e.tag !== "select" && !sensitiveField(e) ? e.display : "";
+  const identifiableField = !!squash(e.label || e.placeholder || e.hint || e.name || e.text || shows);
   if (tool === "type") return FIELDISH(e) && identifiableField && !e.type_completed;
   // SELECT on an open combobox would only close its list again. Its listed
   // options are offered instead (see listedOptions).

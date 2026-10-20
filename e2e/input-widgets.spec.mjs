@@ -942,7 +942,10 @@ test('a realistic TYPE into a searchable select that shows a value clicks that v
 // itself (overflow hidden). "Vendor" lay below them, and Jev, offered no
 // fitting option, chose TYPE on a select that takes no typing.
 const FIELDS = ['Status', 'Bill No.', 'Bill Date', 'Due Date', 'Currency', 'Amount', 'Tax', 'Total', 'Paid', 'Balance', 'Category', 'Project', 'Created By', 'Updated At', 'Vendor', 'Reference'];
-const virtualFilter = () => `<style>
+// `search`: the field select takes typing, and its list then shows only the
+// fields that match what is typed, as rc-select's does. `row`: an operator
+// and a value select stand beside it, as on ccMonet, so no label names it.
+const virtualFilter = ({ search = false, row = false } = {}) => `<style>
     body { font: 14px sans-serif; }
     .ant-popover { position: absolute; top: 60px; left: 20px; background: #fff; padding: 12px; }
     .ant-select { position: relative; display: inline-flex; width: 160px; height: 32px; box-sizing: border-box; }
@@ -959,14 +962,15 @@ const virtualFilter = () => `<style>
   <h1>Bills</h1>
   <div class="ant-popover"><div class="ant-popover-inner" role="tooltip">
     <div class="ant-popover-title">Filter records</div>
-    <div class="filter-row">${antdSelect({ id: 'field', shown: 'Status' })}</div>
+    <div class="filter-row">${antdSelect({ id: 'field', shown: 'Status', search })}${row ? `${antdSelect({ id: 'op', shown: 'Is' })}${antdSelect({ id: 'value', shown: 'Draft' })}` : ''}</div>
   </div></div>
   <div class="ant-select-dropdown ant-select-dropdown-hidden" id="field_dropdown"><div>
     <div role="listbox" id="field_list" style="height:0;width:0;overflow:hidden"></div>
     <div class="rc-virtual-list" style="position:relative"><div class="rc-virtual-list-holder"><div style="height:${FIELDS.length * 32}px;position:relative;overflow:hidden"><div class="rc-virtual-list-holder-inner" style="display:flex;flex-direction:column;position:absolute;left:0;right:0;top:0"></div></div></div></div>
   </div></div>
   <script>
-    const fields = ${JSON.stringify(FIELDS)};
+    const all = ${JSON.stringify(FIELDS)};
+    let fields = all;
     const input = document.getElementById('field');
     const box = input.closest('.ant-select');
     const dropdown = document.getElementById('field_dropdown');
@@ -997,11 +1001,24 @@ const virtualFilter = () => `<style>
       setOpen(input.getAttribute('aria-expanded') !== 'true');
     });
     holder.addEventListener('wheel', (e) => { e.preventDefault(); holder.scrollTop += e.deltaY; draw(); }, { passive: false });
+    // Typing narrows the list; the chosen value is not drawn meanwhile.
+    const search = (query) => {
+      fields = all.filter((name) => name.toLowerCase().includes(query.toLowerCase()));
+      holder.firstElementChild.style.height = fields.length * 32 + 'px';
+      holder.scrollTop = 0;
+      box.querySelector('.ant-select-selection-item').style.visibility = query ? 'hidden' : '';
+    };
+    input.addEventListener('input', () => {
+      search(input.value);
+      if (input.getAttribute('aria-expanded') === 'true') draw(); else setOpen(true);
+    });
     inner.addEventListener('click', (e) => {
       const option = e.target.closest('.ant-select-item-option');
       if (!option) return;
       chosen = option.title;
       box.querySelector('.ant-select-selection-item').textContent = chosen;
+      input.value = '';
+      search('');
       setOpen(false);
     });
   </script>`;
@@ -1062,6 +1079,37 @@ test('Jev scrolls an open virtual list to an option it does not show yet, and ch
   } finally { await mcp.close(); }
 });
 
+// On ccMonet's bill filter, the field select takes typing, and only what it
+// shows ("Status") tells it from the operator and value selects beside it:
+// it was never offered for TYPE (Mac rerun on 9a83708). Typed into, its list
+// narrows to Vendor, which Jev then chooses.
+test('Jev types into an unnamed select known by what it shows, and chooses the option its list narrows to', async ({ page }, testInfo) => {
+  await page.setContent(virtualFilter({ search: true, row: true }));
+  const seen = {};
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state, questions) => {
+      seen.typable = Object.values(questions.type_target.criteria).filter((c) => typeof c === 'object').map((c) => [c.control, c.shows]);
+      return decision({ tool: 'type', target: pick((e) => e.role === 'combobox' && e.display === 'Status')(state) });
+    },
+    (state) => {
+      seen.options = state.page.elements.filter((e) => e.role === 'option').map((e) => e.label);
+      const field = state.page.elements.find((e) => e.role === 'combobox' && e.value === 'Vendor');
+      return decision({ tool: 'select', target: `${field.i}>${pick((e) => e.role === 'option' && e.label === 'Vendor')(state)}` });
+    },
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Filter bills by Vendor', values: { filter_field: 'Vendor' }, verification_mode: 'host', max_actions: 4, evidence_level: 'none' });
+    expect(seen.typable).toEqual([[expect.stringMatching(/^\[\d+\] combobox$/), 'Status']]);
+    expect(seen.options).toEqual(['Vendor']);
+    expect(result.actions.map((a) => [a.action, a.value, a.error])).toEqual([['type', 'filter_field', undefined], ['click', undefined, undefined]]);
+    expect(result.status).toBe('host_review_required');
+    await expect(page.locator('#field_dropdown')).toHaveClass(/ant-select-dropdown-hidden/);
+    await expect(page.locator('.ant-select-selection-item').first()).toHaveText('Vendor');
+    await expect(page.locator('#field')).toHaveValue('');
+  } finally { await mcp.close(); }
+});
+
 // What lies over a field is clicked in its place only when it is part of the
 // field's own box and no control of its own: here a button drawn over the
 // field takes no click, and the refusal names it.
@@ -1105,3 +1153,56 @@ for (const [what, cover, named] of [
     } finally { await mcp.close(); }
   });
 }
+
+// antd's Segmented draws each option's radio at 0×0 and opacity 0, under the
+// label a person clicks: on ccMonet's reconciliation page, a click on
+// "Reconcile by Bank Account 99" never became ready for input (Mac run on
+// 3fa0a57). What lies at the radio's point is the page's own: here the
+// option's text, in a Tailwind cursor-pointer box filling the label, which
+// counts as a control of its own. A label whose middle is another control
+// (a link) is not clicked in the radio's place.
+const segmented = ({ link = false } = {}) => `<style>
+    .ant-segmented { display: inline-block; padding: 2px; background: #eee; }
+    .ant-segmented-group { display: flex; position: relative; }
+    .ant-segmented-item { position: relative; cursor: pointer; border-radius: 6px; }
+    .ant-segmented-item-selected { background: #fff; }
+    .ant-segmented-item-label { min-height: 28px; line-height: 28px; }
+    .ant-segmented-item-input { position: absolute; inset-block-start: 0; inset-inline-start: 0; width: 0; height: 0; opacity: 0; pointer-events: none; }
+    .cursor-pointer { cursor: pointer; padding: 0 11px; }
+    a { display: block; padding: 0 11px; }
+  </style>
+  <h1>Bank Reconciliation</h1>
+  <div class="ant-segmented"><div class="ant-segmented-group">
+    <label class="ant-segmented-item ant-segmented-item-selected"><input class="ant-segmented-item-input" type="radio" name="view" value="all" checked><div class="ant-segmented-item-label" title="All Transactions"><div class="cursor-pointer">All Transactions</div></div></label>
+    <label class="ant-segmented-item"><input class="ant-segmented-item-input" type="radio" name="view" value="account"><div class="ant-segmented-item-label" title="Reconcile by Bank Account">${link ? '<a href="#help" onclick="window.helped = true">Reconcile by Bank Account <sup>99</sup></a>' : '<div class="cursor-pointer">Reconcile by Bank Account <sup>99</sup></div>'}</div></label>
+  </div></div>
+  <div id="view">All Transactions</div>
+  <script>
+    for (const input of document.querySelectorAll('.ant-segmented-item-input')) input.addEventListener('change', () => {
+      for (const item of document.querySelectorAll('.ant-segmented-item')) item.classList.toggle('ant-segmented-item-selected', item.contains(document.querySelector('.ant-segmented-item-input:checked')));
+      document.querySelector('#view').textContent = input.value === 'account' ? 'Reconcile by Bank Account' : 'All Transactions';
+    });
+  </script>`;
+const byAccount = pick((e) => e.role === 'radio' && /^Reconcile by Bank Account/.test(e.label));
+
+test('a radio drawn as nothing is clicked through its own label, as a person clicks it', async ({ page }, testInfo) => {
+  await page.setContent(segmented());
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([(state) => decision({ tool: 'click', target: byAccount(state) }), { tool: 'none', done: 0.99 }]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Show the reconciliation by bank account', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(result.actions.map((a) => [a.action ?? a.recovery, a.error ?? a.detail])).toEqual([['click', undefined]]);
+    await expect(page.locator('#view')).toHaveText('Reconcile by Bank Account');
+    await expect(page.locator('input[value=account]')).toBeChecked();
+  } finally { await mcp.close(); }
+});
+
+test('a radio drawn as nothing whose label is a link in the middle is not clicked through that label', async ({ page }, testInfo) => {
+  await page.setContent(segmented({ link: true }));
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([(state) => decision({ tool: 'click', target: byAccount(state) })]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Show the reconciliation by bank account', verification_mode: 'host', max_actions: 2, evidence_level: 'none' });
+    expect(result.actions.map((a) => a.error ?? a.detail)).toContain('the target never became ready for input (it is not visible); no input was sent');
+    expect(await page.evaluate(() => window.helped)).toBeUndefined();
+    await expect(page.locator('input[value=account]')).not.toBeChecked();
+  } finally { await mcp.close(); }
+});

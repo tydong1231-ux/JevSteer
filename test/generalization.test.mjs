@@ -460,6 +460,56 @@ test("P2: manual recovery journals before clicking and stays pending after trans
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
 });
 
+// ccMonet opens every invoice on one address: a host's click on option "HQ"
+// for one invoice, resolved applied, refused "HQ" on the next invoice, by
+// hand and in a run, and a milestone goal that named no invoice refused
+// Approve on the next one (Mac rerun of 3fa0a57). A goal names the
+// operation and its record; the same goal is still refused.
+test("a manual input given a goal is refused again under that goal only, as a run's write is", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const clicks = () => k.commands.filter((c) => c.command === "click").length;
+  const first = await runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "  Approve the sales invoice for ABC PTE LTD,\n 5,000.00 " });
+  assert.match(first.info, /the same input on this page is then refused as a replay under this goal\. If it only changed the page \(a field set before saving, a list opened\), resolve not_applied\.$/);
+  await runtime.resolveAction({ tabId: "test", actionId: first.action_id, resolution: "applied", evidence: "The invoice shows Approved" });
+  // The same goal, by hand or as a run's goal, is refused, with how another record is told apart.
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "Approve the sales invoice for ABC PTE LTD, 5,000.00" }),
+    /ACTION_ALREADY_APPLIED: the confirmed action must not be replayed manually\. If the page now shows another record \(another invoice on the same address\), name that record in goal, so this operation is told apart from the confirmed one\. For the same record, keep the goal as it is\.$/);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }),
+    /replayed manually\. If the page now shows another record, pass goal naming that record and the operation\.$/);
+  const resumed = await runtime.run("Approve the sales invoice for ABC PTE LTD, 5,000.00", { evidenceLevel: "none" });
+  assert.equal(resumed.status, "action_failed");
+  assert.match(resumed.info, /Inspect the existing record\. If the page now shows another record \(another invoice on the same address\), name that record in this milestone's goal/);
+  assert.equal(clicks(), 1);
+  // Another record's goal is another operation.
+  const next = await runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "Approve the sales invoice for JevSteer QA CHAIN1020A, 50.00" });
+  assert.equal(next.status, "action_unconfirmed");
+  assert.equal(clicks(), 2);
+  await runtime.resolveAction({ tabId: "test", actionId: next.action_id, resolution: "applied", evidence: "The invoice shows Approved" });
+  // A run under a goal no record holds clicks.
+  runtime.decider = scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 });
+  const other = await runtime.run("Approve the sales invoice for Third Co, 1.00", { evidenceLevel: "none" });
+  assert.equal(clicks(), 3);
+  assert.equal(other.pending_actions.length, 1);
+});
+
+test("a manual input given no goal, once applied, refuses the same input on the page under any goal", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const bare = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.match(bare.info, /refused as a replay under any goal, since none was given\./);
+  await runtime.resolveAction({ tabId: "test", actionId: bare.action_id, resolution: "applied", evidence: "The invoice shows Approved" });
+  const note = "It was confirmed by a manual action given no goal, so it refuses this input on this page under any goal.";
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "Approve the sales invoice for Third Co, 1.00" }),
+    (error) => error.message.endsWith(note));
+  const run = await runtime.run("Approve the sales invoice for Third Co, 1.00", { evidenceLevel: "none" });
+  assert.equal(run.status, "action_failed");
+  assert(run.info.endsWith(note), run.info);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+});
+
 test("P2: a lost manual click ACK retains a recoverable durable journal record", async () => {
   const dir = await mkdtemp(join(tmpdir(), "jevsteer-manual-"));
   try {

@@ -383,23 +383,42 @@ async function ownPartOf(handle, timeout) {
 // the field itself on top there, or anything else, there is none (null), and
 // the browser's own check decides. `field` is FIELD. Like the browser's check,
 // it reads into open shadow roots, and so does its count of fields in a box.
-// Given what it found before (`expected`, a part or null), it says whether it
-// finds the same now.
+// A radio or checkbox drawn at no size takes no click (the browser counts it
+// as not visible), and what lies at its point need not be its own: antd's
+// Segmented draws each option's radio at 0×0 under the label a person clicks
+// (ccMonet's reconciliation page, Mac run on 3fa0a57). Its part is then one
+// of its own labels, drawn, whose middle, where a click lands, is no other
+// control (`CONTROL`): a click there is a click on the radio. With no such
+// label there is none. Given what it found before (`expected`, a part or
+// null), it says whether it finds the same now.
 function ownPart(target, [field, interactive, expected]) {
   const parent = (e) => e.parentElement || e.getRootNode()?.host;
   const fieldsIn = (root) => [...root.querySelectorAll('*')].reduce((n, e) => n + (e.matches(field) ? 1 : 0) + (e.shadowRoot ? fieldsIn(e.shadowRoot) : 0), 0);
-  const lands = () => {
-    if (!target.isConnected || !target.matches(field)) return null;
-    const rect = target.getClientRects()[0];
-    if (!rect) return null;
-    const x = (Math.max(rect.left, 0) + Math.min(rect.right, innerWidth)) / 2;
-    const y = (Math.max(rect.top, 0) + Math.min(rect.bottom, innerHeight)) / 2;
+  const CONTROL = 'a[href],button,input,textarea,select,summary,[contenteditable=true],[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option],[role=combobox],[role=textbox],[role=searchbox],[role=spinbutton],[role=slider]';
+  const hitAt = (x, y) => {
     let hit = document.elementFromPoint(x, y);
     while (hit?.shadowRoot) {
       const inner = hit.shadowRoot.elementFromPoint(x, y);
       if (!inner || inner === hit) break;
       hit = inner;
     }
+    return hit;
+  };
+  const middle = (rect) => [(Math.max(rect.left, 0) + Math.min(rect.right, innerWidth)) / 2, (Math.max(rect.top, 0) + Math.min(rect.bottom, innerHeight)) / 2];
+  // The browser clicks a label at its middle, after scrolling it into view.
+  // A label whose middle is out of view now is not checked, so not used.
+  const labelled = () => [...(target.labels || [])].find((label) => {
+    const rect = label.getClientRects()[0];
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    for (let p = hitAt((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2); p !== label; p = parent(p)) if (!p || p.matches(CONTROL)) return false;
+    return true;
+  }) || null;
+  const lands = () => {
+    if (!target.isConnected || !target.matches(field)) return null;
+    const rect = target.getClientRects()[0];
+    if (!rect) return null;
+    if ((rect.width <= 0 || rect.height <= 0) && /^(radio|checkbox)$/i.test(target.type || '')) return labelled();
+    const hit = hitAt(...middle(rect));
     if (!hit) return null;
     for (let p = hit; p; p = parent(p)) if (p === target) return null;
     let box;

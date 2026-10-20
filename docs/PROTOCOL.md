@@ -232,7 +232,16 @@ whose lines have no key of their own, takes its own item's price. The row is
 not part of a control's identity: rows can be reordered. A select-like combobox whose input holds only search text
 (antd, react-select) reports the value it shows as `display`, and Jev's target
 heads give it as `shows`: unnamed selects, such as ccMonet's filter row
-("Status", "Is", "Draft"), are told apart by it. A field this run
+("Status", "Is", "Draft"), are told apart by it. An unnamed one that takes
+typing (the field select of that row) is offered for TYPE by it, and the
+value chooser and the guards hear it as `shows` too. A secret field's is never
+given. A select that already shows the value Jev would type, as one of a
+multi-select's tags or as all it shows (ccMonet's Tracking Category showing
+"Changi"), gets nothing typed: typing it there again would only put it into
+the select's search box. Jev looks again with that in its history
+(`recovery: "reobserve"`, `reason: "already_shown"`), and the third such choice
+stops the milestone as `needs_guidance`. A value that a shown option holds
+only as part of its text ("Changi" in "Changi Airport") is still typed. A field this run
 typed that now shows an option holding the typed text as whole words ("Acme" in
 "Acme Ltd") is not offered for TYPE again. An option that holds it only inside
 a word ("US" in "Australia", "1" in "10") is another option, so the field can
@@ -250,7 +259,12 @@ of the box the list scrolls in (so no option is first scrolled into view) and
 the wheel turns by 80% of what the box shows, so the options shown next
 overlap these. The run log names the combobox, with `scrolled: "its open
 list"`. A `browser_act` SCROLL with an element turns the box around that
-element that scrolls the same way, or the page under it.
+element that scrolls the same way, or the page under it. An open combobox that
+takes typing (a select with search, whose input is not read-only) lists only
+the options that match what is typed there: Jev is told to TYPE the option's
+text into it, as `values` or `guidance` give it, rather than scroll its list
+(on ccMonet's invoice Jev scrolled the Customer list instead), and to SCROLL
+only to look through options whose text they do not give.
 
 antd draws a select's options in a portal at the end of `<body>`, as divs with
 `aria-selected` and no role, and keeps `role=option` copies in a 0×0 listbox
@@ -326,7 +340,13 @@ link, a clear button, an option). A control drawn over the field is never
 clicked in its place, and anything outside the box still refuses the click as
 above. After the journal is written, the click must still land on the same
 part, or on the field itself if it did before; otherwise nothing is sent
-(`STALE_TARGET`).
+(`STALE_TARGET`). A radio or checkbox drawn at no size takes no click (the
+browser counts it as not visible), and what lies at its point need not be its
+own: antd's Segmented draws each option's radio at 0×0 under the label a
+person clicks (ccMonet's reconciliation view). Such a click lands on one of its
+own labels instead, drawn, whose middle is no other control (a link, a
+button, another field), so the click is a click on the radio. With no such
+label the click is refused as above (`it is not visible`).
 A target that never becomes ready for another reason stops the run as
 `action_failed`, with nothing pending, and the error says what the browser
 waited for: `the target never became ready for input (it kept moving); no
@@ -521,8 +541,19 @@ even after `pending_actions` becomes empty. Confirmed low-risk link/navigation
 operations remain repeatable. A `not_applied` resolution permits retry. Replay
 markers are not evicted by routine 100-record journal cleanup. For automated
 runs a genuinely different milestone goal may reuse the same UI control, but
-a new `run_id` cannot bypass the same operation. Manual recovery mutations
-have no semantic goal hash and retain a broader same-action guard.
+a new `run_id` cannot bypass the same operation. A `browser_act` input may
+carry `goal`, the business operation it belongs to, naming its record as a
+milestone goal does; its marker then holds that goal only, as a run's does,
+and a run under the same goal is refused by it. A manual input given no goal
+has no semantic goal hash and keeps the broader guard: once applied, the same
+input on that page is refused under any goal, by hand or in a run.
+
+A page that shows one record after another on the same address (an invoice
+drawer over a list) gives each record's controls the same identity. A goal
+that names no record ("Approve the invoice") then refuses Approve on the next
+invoice; name the record in each write's goal ("Approve the sales invoice for
+JevSteer QA CHAIN1020A, 50.00"), and keep the same goal for the same record.
+The refusal says so, and says when a manual input with no goal holds it.
 Then resume the semantic milestone. Successful independent verification resolves
 pending records only when the run, milestone **and full originating contract
 digest** match. Goal/criteria changes cannot certify an earlier unknown action.
@@ -534,6 +565,9 @@ Guarded `browser_act` actions return `action_unconfirmed` with an `action_id`
 even when the HTTP command acknowledged success, because text fields may
 autosave and a Save click may commit asynchronously. The host must inspect the
 actual outcome and call `browser_resolve_action` before relying on a retry.
+`applied` says the site itself changed (a save, a submission, an autosave);
+an input that only changed the page (a field set before saving, a list
+opened) is `not_applied`, so the same input stays possible on the next record.
 An error after browser dispatch likewise returns the journal ID rather than
 hiding the uncertain mutation. `press_key` Escape, on an element or on none, is
 journaled the same way. It usually only closes a menu, popup or dialog, but a
@@ -569,7 +603,10 @@ assertions, missing values or duplicate matching entries stop for guidance rathe
 than guessing. Without one, a value whose name is the field's label or name in
 other words (`due_date` for "Due Date", `unitPrice` for "Unit Price") goes into
 a field off any table line without a question; the lines of a table hold
-different items, each with values of its own. Otherwise the model chooses:
+different items, each with values of its own. The model is asked instead when
+this run already entered that value somewhere, or when a field on a table line
+has that name as its label, name or column: on ccMonet's invoice the line's
+`description` also went into the header's Description. Otherwise the model chooses:
 where `guidance` says which field a value or a kind of text goes into, that
 comes first, then the selected field's explicit label/name. When no value
 belongs in the field Jev chose (ccMonet's Due Date, which a milestone did not

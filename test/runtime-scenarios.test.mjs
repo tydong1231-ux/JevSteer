@@ -386,6 +386,23 @@ test("the guards see the text a TYPE enters, never a secret one, and are told gu
   assert.equal(seen.value, undefined);
 });
 
+// The bill filter's selects have no names: what each shows tells the guards
+// which one an action uses, as it tells Jev (Mac rerun on 9a83708).
+test("the guards see what an unnamed select shows, never a secret field's", async () => {
+  let seen;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state) => { seen = state.proposed_action; return { answers: {}, ms: 1, tokens: 1 }; });
+  const field = { i: 0, selector: "#field", tag: "input", type: "search", role: "combobox", label: "", value: "", display: "Status", expanded: true };
+  const page = { url: "https://erp.test/bills", title: "Bills", text: "Bills Filter records", elements: [field] };
+  const contract = { goal: "Filter bills by vendor", success_criteria: [], constraints: ["Change no bill"], guidance: [] };
+  const action = { tool: "type", el: field, valueKey: "filter_field", value: "Vendor" };
+  await runtime.checkActionEffects(page, contract, action, []);
+  assert.deepEqual([seen.element, seen.shows, seen.value], ["combobox", "Status", "Vendor"]);
+  await runtime.checkConstraint(page, contract, action, []);
+  assert.equal(seen.shows, "Status");
+  await runtime.checkActionEffects(page, contract, { ...action, el: { ...field, type: "password" } }, []);
+  assert.equal(seen.shows, undefined);
+});
+
 test("a task value the guard finds in a field it does not belong in is not typed, and Jev is told which value", async () => {
   const picker = { i: 0, selector: "#product-1", tag: "input", role: "combobox", label: "Preferred Name", column: "Preferred Name", row: 1, value: "" };
   const description = { i: 1, selector: "#desc-1", tag: "textarea", role: "textbox", label: "Description", column: "Description", row: 1, value: "" };
@@ -429,7 +446,8 @@ test("the exact guards see an option chosen from an open list as a SELECT on its
   assert.deepEqual([action.tool, action.chosen_as, action.el.selector], ["click", "select", "#closed"]);
   await runtime.checkActionEffects(page, contract, action, []);
   await runtime.checkConstraint(page, contract, action, []);
-  const asSelect = { tool: "select", element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", selected_option: { text: "Closed" } };
+  // What the combobox shows ("Open") comes with it, as the target heads give it.
+  const asSelect = { tool: "select", element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", shows: "Open", selected_option: { text: "Closed" } };
   // A SELECT sets a field: the guards also ask whether the task calls for it.
   assert.deepEqual(seen, { "action_irreversible,action_side_effect,action_unrequested": asSelect, violates: asSelect });
   // A CLICK on an option names its combobox, and whether the option is chosen
@@ -441,7 +459,7 @@ test("the exact guards see an option chosen from an open list as a SELECT on its
     await runtime.checkConstraint(page, contract, click, []);
     assert.deepEqual(seen.violates, {
       tool: "click", element: `option "${option.label}"`, context: "Open Closed",
-      option_of: { element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42" }, selected,
+      option_of: { element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", shows: "Open" }, selected,
     });
   }
   // A secret field's option is not named.
@@ -813,6 +831,38 @@ test("a field no task value belongs in gets nothing typed, and Jev looks again; 
   assert.deepEqual(result.pending, { question: "Which value belongs in the selected field?", field: 'textbox "Reference"' });
   assert.equal(result.actions.filter((a) => a.reason === "no_value").length, 2);
   assert.equal(typed(k), 0);
+});
+
+// ccMonet's invoice line (Mac run on 3fa0a57): a new run typed "Changi" into
+// a Tracking Category that already showed the tag "Changi", and stopped.
+test("a select that already shows the value gets nothing typed, and Jev looks again; one who insists is stopped", async () => {
+  const tracking = (display) => ({ i: 0, selector: "#tracking", tag: "input", type: "search", role: "combobox", label: "Tracking Category", column: "Tracking Category", row: 1, value: "", display });
+  const values = { tracking_category: "changi" };
+  const typed = (k) => k.commands.filter((c) => ["fill", "clear", "type"].includes(c.command)).length;
+  let k = new MemoryKapture({ elements: [tracking("HQ, Changi")] });
+  let told;
+  const steps = scriptedDecider([() => decision({ tool: "type", target: 0 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  let result = await memoryRuntime(k, steps).run("Tag line 1 with Changi", { values, maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "already_shown", false]);
+  assert.equal(told.detail, `combobox "Tracking Category" in table row 1 already shows the value of tracking_category, so nothing was typed: typing it again would only put it into the select's search box. The field is set; go on with the next step.`);
+  assert.equal(result.status, "completed_verified");
+  assert.equal(typed(k), 0);
+  // Jev chooses it three times: the third stops the run for guidance.
+  k = new MemoryKapture({ elements: [tracking("Changi")] });
+  const insists = scriptedDecider([() => decision({ tool: "type", target: 0 })]);
+  result = await memoryRuntime(k, insists).run("Tag line 1 with Changi", { values, maxActions: 6, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev kept choosing to type into a select that already shows the value of tracking_category \(last: combobox "Tracking Category" in table row 1\), so nothing was typed\./);
+  assert.equal(result.pending.question, "What is the next step, now that this field shows its value?");
+  assert.equal(result.actions.filter((a) => a.reason === "already_shown").length, 2);
+  assert.equal(typed(k), 0);
+  // Another option, or one with the value only as part of its text, is not
+  // the value: the select is typed into to find it.
+  for (const display of ["HQ", "Changi Airport"]) {
+    k = new MemoryKapture({ elements: [tracking(display)] });
+    await memoryRuntime(k, scriptedDecider([{ tool: "type", target: 0 }, { tool: "none", done: 0.99 }])).run("Tag line 1 with Changi", { values, maxActions: 3, evidenceLevel: "none" });
+    assert.ok(typed(k) > 0, display);
+  }
 });
 
 test("Playwright rounds wait on full observations, not the URL/title metadata poll", async () => {

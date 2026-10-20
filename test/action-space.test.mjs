@@ -129,10 +129,35 @@ test("unnamed selects are told apart in the target heads by what they show", () 
   assert.deepEqual(shows("click"), { 0: "Status", 1: "Is", 2: "Draft", 3: undefined });
 });
 
+// ccMonet's bill filter: the field select takes typing, and only what it
+// shows ("Status") tells it from the operator and value beside it. It was
+// never offered for TYPE (Mac rerun on 9a83708).
+test("an unnamed select that takes typing is a TYPE target known by what it shows, and the value chooser hears it", async () => {
+  const field = { i: 0, selector: "#field", tag: "input", type: "search", role: "combobox", label: "", value: "", display: "Status", expanded: true };
+  const space = buildTargetSpace([
+    field,
+    { i: 1, selector: "#op", tag: "input", type: "search", role: "combobox", label: "", value: "", display: "Is", readonly: true, expanded: false },
+    { i: 2, selector: "#blank", tag: "input", type: "search", role: "combobox", label: "", value: "", expanded: false },
+    { i: 3, selector: "#pin", tag: "input", type: "password", role: "combobox", label: "", value: "", display: "1234", expanded: false },
+  ]);
+  assert.deepEqual(space.candidates.type.map((c) => c.key), ["0"]);
+  assert.deepEqual(space.questions.type_target.criteria["0"], { control: "[0] combobox", current_value: "", shows: "Status" });
+  let seen;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    seen = { state, question: questions.selected_value };
+    return { answers: { selected_value: choice(questions.selected_value.criteria, "filter_field") }, ms: 1, tokens: 4 };
+  } });
+  const value = await runtime.chooseFieldValue({ url: "https://erp.test/bills", title: "Bills", text: "Bills Filter records", elements: [field] },
+    normalizeTaskContract({ goal: "Filter bills by vendor" }), { filter_field: "Vendor", vendor: "CP-MEIJI CO.,LTD." }, [], field);
+  assert.equal(value, "filter_field");
+  assert.equal(seen.state.selected_field.shows, "Status");
+  assert.match(seen.question.instructions, /a select with no label is known by what it shows now \(shows\)\./);
+});
+
 // ccMonet's filter field list draws only the options in view; "Vendor" lay
 // below them (Mac rerun, 2026-10-20).
 test("SCROLL turns the one open list that holds more options below, over an option it shows", async () => {
-  const field = { i: 0, selector: "#field", tag: "input", role: "combobox", label: "", display: "Status", expanded: true, more_options: "below" };
+  const field = { i: 0, selector: "#field", tag: "input", role: "combobox", label: "", display: "Status", expanded: true, more_options: "below", readonly: true };
   const options = [1, 2, 3].map((i) => ({ i, selector: `#o${i}`, tag: "div", role: "option", label: `Field ${i}`, popup_of: 0, selected: i === 1 }));
   const p = { url: "https://erp.test/bills", title: "Bills", text: "Filter records", elements: [field, ...options] };
   assert.deepEqual(listToScroll(p.elements), { list: field, option: options[2] });
@@ -159,6 +184,34 @@ test("SCROLL turns the one open list that holds more options below, over an opti
   assert.equal(tool.criteria.scroll, "Scroll down to reveal or load more content");
   assert.doesNotMatch(tool.instructions, /more_options/);
   assert.deepEqual([runtime.resolve(plain, again, {}).target, runtime.resolve(plain, again, {}).scrolls], [null, undefined]);
+});
+
+// ccMonet's invoice (Mac run on 3fa0a57): Jev scrolled the open Customer
+// list instead of typing the customer's name into its search, and stopped.
+test("an open combobox that takes typing is named to Jev as one to type an option's text into, rather than scroll", async () => {
+  const customer = { i: 0, selector: "#customer", tag: "input", role: "combobox", label: "Customer", value: "", expanded: true, more_options: "below" };
+  const options = [1, 2].map((i) => ({ i, selector: `#o${i}`, tag: "div", role: "option", label: `Customer ${i}`, popup_of: 0 }));
+  let tool;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    tool = questions.tool;
+    const answers = Object.fromEntries(Object.entries(questions).map(([name, q]) => [name, q.type === "noul" ? { noul: 0.01 } : choice(q.criteria, "none")]));
+    return { answers, ms: 1, tokens: 1 };
+  } });
+  const look = (field) => runtime.decide({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice", elements: [{ ...customer, ...field }, ...options] },
+    normalizeTaskContract({ goal: "Bill JevSteer QA CHAIN1020A" }), { customer: "JevSteer QA CHAIN1020A", amount: "50" }, []);
+  const note = '[0] combobox "Customer" is open and takes typing: it lists the options that match what is typed there. To reach an option its open list does not show, TYPE the option\'s text (as task.values or task.guidance give it) into the combobox, rather than scrolling the list.';
+  await look({});
+  assert.ok(tool.instructions.endsWith(`${note} Choose SCROLL only to look through options whose text they do not give.`), tool.instructions);
+  assert.doesNotMatch(tool.instructions, /more_options/);
+  await look({ more_options: undefined });
+  assert.ok(tool.instructions.endsWith(note), tool.instructions);
+  // One that takes no typing (antd's select without search keeps its input
+  // read-only), or a closed one, is not named. Its list is scrolled.
+  for (const [other, scrolled] of [[{ readonly: true }, true], [{ expanded: false }, false]]) {
+    await look(other);
+    assert.doesNotMatch(tool.instructions, /takes typing/);
+    assert.equal(/more_options/.test(tool.instructions), scrolled);
+  }
 });
 
 test("fields of two table rows are told apart in the target heads by their row", () => {
@@ -365,6 +418,29 @@ test("a value named for the field it goes in is used without a question, for a f
   // So is a field two values are named for.
   assert.equal(await runtime.chooseFieldValue(p, contract, { dueDate: "2026/11/19", due_date: "2026/11/20" }, [], due), undefined);
   assert.deepEqual(asked, ["Unit Price", "Due Date"]);
+});
+
+// The line's description, typed into its Description, also went into the
+// invoice's own Description without a question (Mac rerun of 3fa0a57).
+test("a value named for an off-table field is asked about once this run entered it, or when a table column bears the name", async () => {
+  const asked = [];
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    asked.push(questions.selected_value.criteria.description);
+    return { answers: { selected_value: choice(questions.selected_value.criteria, "__none__") }, ms: 1, tokens: 4 };
+  } });
+  const contract = normalizeTaskContract({ goal: "Fill the invoice line" });
+  const values = { description: "QA test service", unit_price: "50" };
+  const header = { i: 0, selector: "#notes", tag: "textarea", role: "textbox", label: "Description", value: "" };
+  const line = { i: 1, selector: "#desc-1", tag: "textarea", role: "textbox", label: "Description", column: "Description", row: 1, value: "" };
+  const alone = { url: "https://erp.test", title: "Invoice", text: "Invoice", elements: [header] };
+  assert.equal(await runtime.chooseFieldValue(alone, contract, values, [], header), "description");
+  assert.deepEqual(asked, []);
+  // A table column bears the name too.
+  assert.equal(await runtime.chooseFieldValue({ ...alone, elements: [header, line] }, contract, values, [], header), undefined);
+  // This run already entered the value.
+  const typed = [{ action: "type", element: 'textbox "Description"', row: 1, value: "description" }];
+  assert.equal(await runtime.chooseFieldValue(alone, contract, values, typed, header), undefined);
+  assert.deepEqual(asked, ["QA test service", 'QA test service (this run already entered it in textbox "Description" in table row 1)']);
 });
 
 // ccMonet's invoice (Mac rerun on 9a83708): with the guidance "Line item text
