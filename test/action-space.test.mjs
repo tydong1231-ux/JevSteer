@@ -175,7 +175,9 @@ test("SCROLL turns the one open list that holds more options below, over an opti
   } });
   const answer = await runtime.decide(p, normalizeTaskContract({ goal: "Filter bills by Vendor" }), {}, []);
   assert.equal(tool.criteria.scroll, 'Scroll the open list of [0] combobox down, to show more of its options');
-  assert.match(tool.instructions, /The open list of \[0\] combobox holds more options below the ones page\.elements show \(more_options\): if the option task\.goal needs is not among them, choose SCROLL\.$/);
+  // It shows a value and was open before this run: Jev is also told when its
+  // list is no step of its own.
+  assert.match(tool.instructions, /The open list of \[0\] combobox holds more options below the ones page\.elements show \(more_options\): if the option task\.goal needs is not among them, choose SCROLL\. \[0\] combobox was left open before this run and already shows a value: when task\.goal needs nothing more there, /);
   const action = runtime.resolve(p, answer, {});
   assert.deepEqual([action.tool, action.target, action.el.selector, action.scrolls.selector], ["scroll", 3, "#o3", "#field"]);
   // With no such list, SCROLL scrolls the page, and Jev is told nothing more.
@@ -219,6 +221,37 @@ test("an open combobox that takes typing is named to Jev as one to type an optio
     assert.doesNotMatch(tool.instructions, /takes typing/);
     assert.equal(/more_options/.test(tool.instructions), scrolled);
     assert.ok(clear.instructions.endsWith("multiple business transitions are similarly plausible."), clear.instructions);
+  }
+});
+
+// ccMonet's Tracking Category, a multi-select, keeps its list open once an
+// option is chosen. On the next milestone, Jev chose to close it with Escape
+// before Approve and did not find that a clear step (0.29 to 0.44), ten times
+// (Mac run on 7519fff).
+test("a list a field left open once it shows a value is no step of its own: Jev is told to click the next control", async () => {
+  const tracking = { i: 0, selector: "#tracking", tag: "input", type: "search", role: "combobox", label: "Tracking Category", column: "Tracking Category", row: 1, value: "", display: "Changi", expanded: true };
+  const options = ["Changi", "HQ"].map((label, n) => ({ i: n + 1, selector: `#o${n}`, tag: "div", role: "option", label, popup_of: 0, selected: label === "Changi" }));
+  const approve = { i: 3, selector: "#approve", tag: "button", role: "button", label: "Approve" };
+  let tool;
+  let clear;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    tool = questions.tool;
+    clear = questions.next_step_clear;
+    const answers = Object.fromEntries(Object.entries(questions).map(([name, q]) => [name, q.type === "noul" ? { noul: 0.01 } : choice(q.criteria, "none")]));
+    return { answers, ms: 1, tokens: 1 };
+  } });
+  const look = (field, history = []) => runtime.decide({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Approve", elements: [{ ...tracking, ...field }, ...options, approve] },
+    normalizeTaskContract({ goal: "Approve the sales invoice for JevSteer QA CHAIN1020A, 30,000.00" }), {}, history);
+  await look({});
+  const field = '[0] combobox "Tracking Category"';
+  assert.ok(tool.instructions.endsWith(`${field} was left open before this run and already shows a value: when task.goal needs nothing more there, do not close its list first; CLICK the next control task.goal needs, as a person would. That click also closes an open list; a click that only closed it is marked closed_only, and can be made again.`), tool.instructions);
+  assert.ok(clear.instructions.endsWith(`${field} was left open before this run and already shows a value: when task.goal needs nothing more there, an open list is no step of its own, and a click on the next control task.goal needs, which also closes the list, is a clear next step.`), clear.instructions);
+  // A closed one, an open one that shows no value yet, or one this run used
+  // (typed in, chose an option of, scrolled), is not named so.
+  for (const [other, history] of [[{ expanded: false }], [{ display: undefined }], [{}, [{ action: "click", element: 'option "Changi"', option_of: 'combobox "Tracking Category"' }]], [{}, [{ action: "type", element: 'combobox "Tracking Category"' }]]]) {
+    await look(other, history);
+    assert.doesNotMatch(tool.instructions, /left open/);
+    assert.doesNotMatch(clear.instructions, /left open/);
   }
 });
 
@@ -383,6 +416,8 @@ test("a typed number a text field shows cut short is offered for TYPE again; one
   for (const [field, typedText, shows, typable] of [
     [{ type: "text", role: "textbox", label: "Reference" }, "00123", "123", true],
     [{ type: "text", role: "textbox", label: "Discount" }, "10", "10%", true],
+    [{ type: "text", role: "textbox", label: "Version" }, "1.0", "1", true],
+    [{ type: "text", role: "textbox", label: "Amount" }, "50", "50.00", false],
     [{ type: "text", role: "textbox", label: "Unit Price" }, "5000", "5,000", false],
     [{ type: "number", role: "spinbutton", label: "Quantity" }, "00123", "123", false],
   ]) {

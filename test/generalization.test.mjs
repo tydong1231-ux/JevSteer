@@ -153,6 +153,11 @@ test("observation recognizes values and toggle state but ignores generated selec
   // "Doe, John" is one option, or two: a multi-select's options are read apart.
   const one = page([{ ...a.elements[0], display: "Doe, John" }]);
   assert.notEqual(observationSignature(one), observationSignature(page([{ ...one.elements[0], display_items: ["Doe", "John"] }])));
+  // The options read apart stop at 20; a later one the field shows still
+  // counts (Codex on 7519fff).
+  const tags = Array.from({ length: 25 }, (_, n) => `T${n + 1}`);
+  const many = (shown) => page([{ ...a.elements[0], display: shown.join(", "), display_items: shown.slice(0, 20) }]);
+  assert.notEqual(observationSignature(many(tags)), observationSignature(many([...tags.slice(0, 24), "T99"])));
 });
 
 test("unrelated live text cannot authorize a duplicate server submission", async () => {

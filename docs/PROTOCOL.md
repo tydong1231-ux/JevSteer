@@ -284,7 +284,16 @@ only to look through options whose text they do not give. The question whether
 the next step is clear, asked apart, is told that typing such an option's text
 into it is a clear next step: on ccMonet's invoice, Jev chose to type the
 Category the guidance gave into its open list but did not find that clear, and
-the run stopped for guidance three times.
+the run stopped for guidance three times. An open combobox that already shows a
+value, and that the run has not used (a multi-select keeps its list open once
+an option is chosen, and an earlier milestone left it so), is named to Jev with
+the operation choice and the next-step question: when the goal needs
+nothing more there, its open list is no step of its own, and Jev is told to
+CLICK the next control the goal needs, as a person would, since that click also
+closes the list. On ccMonet's invoice, Tracking Category kept its list open
+after the fill; on the Approve milestone, Jev chose to close it with Escape
+first, did not find that clear (0.29 to 0.44), and the run stopped for guidance
+ten times.
 
 antd draws a select's options in a portal at the end of `<body>`, as divs with
 `aria-selected` and no role, and keeps `role=option` copies in a 0×0 listbox
@@ -533,19 +542,20 @@ again after it had gone through): that input is not sent, and when the result
 goes to the host, `info` says which input Jev chose and that it was not sent.
 When the check fails, the milestone stops as `action_failed`, as before.
 
-When Jev half believes the goal reached (done 0.6 to 0.85, not from the host's
-assertions) and its next step is a click, or Enter, on a target it is sure of,
-right after an input that changed nothing remote (a ticked checkbox, a chosen
-option, a typed value), Jev is asked about that exact click
-(`applies_choice`): is it the control that applies that choice, such as the
-Save, Confirm, Submit or Match of the form, panel or dialog the choice was made
-in, and does the goal need the choice applied, not only made? At
+When Jev believes the goal reached, or half believes it (done 0.6 or more, not
+from the host's assertions), and its next step is a click, or Enter, on a
+target it is sure of, right after an input that changed nothing remote (a
+ticked checkbox, a chosen option, a typed value), Jev is asked about that exact
+click (`applies_choice`): is it the control that applies that choice, such as
+the Save, Confirm, Submit or Match of the form, panel or dialog the choice was
+made in, and does the goal need the choice applied, not only made? At
 `JEVSTEER_APPLIES_CHOICE_AT` (0.5) or above, the goal waits for that click,
 which goes through every guard like any input; the round shows
-`applies_choice`. A missing answer holds nothing back. On ccMonet's Manual
-Match, Jev ticked the invoice, half believed the deposit matched (0.61) and
-chose Confirm match (0.97), and the run stopped for a host review before that
-click. Told in the done questions that such a choice waits for its control,
+`applies_choice`. A missing answer holds nothing back. This holds however sure
+Jev is: a goal checked before that click fails, or passes on a choice not yet
+applied. On ccMonet's Manual Match, Jev ticked the invoice, half believed the
+deposit matched (0.61) and chose Confirm match (0.97), and the run stopped for
+a host review before that click. Told in the done questions that such a choice waits for its control,
 Jev still found the deposit matched, and judged a filled invoice not done
 (0.26) for its unused Save; the done questions ask only whether the page shows
 the goal reached.
@@ -665,16 +675,19 @@ separators (`2026/01/01`). Fast input also sends a Shift key press after
 filling, for widgets that parse fields on key events.
 
 A number field that groups the digits it takes (ccMonet's Unit Price shows a
-typed 5000 as `5,000`) is confirmed when it shows the same number with
-grouping marks between groups of three or zeros added after the decimal point
-(`field_value_number`), and is not offered for TYPE again. Only a field the
-page says holds a number (`type=number`, role `spinbutton`) may also drop
-leading zeros, a plus sign or a trailing percent sign: in a text field, `123`
-for a typed `00123` is a reference cut short, and `10%` for `10` another
-value, so the TYPE fails. A currency sign, a unit, another number, or a mark
-that does not part groups of three (`5.000` for 5000) is no match. The digits are compared as text, not as a
-JavaScript number, which keeps about 16 of them: a long account or reference
-number one digit off is no match either.
+typed 5000 as `5,000`) is confirmed when it shows the number typed with
+grouping marks added between groups of three, or zeros added after the
+decimal point (`5,000.00`; `1.50` for `1.5`) (`field_value_number`), and is
+not offered for TYPE again. A text field may only add these: it never takes
+away what was typed, so `123` for a typed `00123` (a reference cut short), `1`
+for `1.0` (a version cut short) or `10%` for `10` (another value) fails the
+TYPE. Only a field the page says holds a number (`type=number`, role
+`spinbutton`) compares the numbers both read as, dropping leading zeros, a
+plus sign, zeros after the point or a trailing percent sign. A currency sign,
+a unit, another number, or a mark that does not part groups of three (`5.000`
+for 5000) is no match. The digits are compared as text, not as a JavaScript
+number, which keeps about 16 of them: a long account or reference number one
+digit off is no match either.
 
 ## Runtime limits
 

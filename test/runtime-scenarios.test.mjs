@@ -801,21 +801,25 @@ const applying = (steps, applies, asked) => {
 };
 const reconcile = "Reconcile the 69,950.00 deposit of 2026/4/18 with invoice INVWIGG7";
 
-test("a goal Jev half believes reached waits for the click that applies the choice it just made", async () => {
-  const k = manualMatch();
-  const asked = [];
-  const steps = [{ tool: "click", target: 0 }, { tool: "click", target: 1, done: 0.61, done_change: 0.61, side_effect: 0.9 }, { tool: "none", done: 0.95 }];
-  const result = await memoryRuntime(k, applying(steps, 0.9, asked)).run(reconcile, { evidenceLevel: "none", explain: true });
-  assert.equal(result.status, "completed_verified");
-  // Confirm match was sent before the goal was checked, through the guards.
-  assert.deepEqual(clicked(k), ["#pick", "#confirm"]);
-  assert.deepEqual(asked.map((a) => a.element), ['button "Confirm match"']);
-  assert.match(asked[0].instructions, /^The last input in task\.history made a choice, such as ticking a checkbox, choosing an option or entering a value\. Such a choice, made in an open form, panel or dialog that has its own Save, Confirm or Submit control, can stay local until that control is used\. Is this EXACT proposed_action that control for the choice, .* and does task\.goal need the choice applied \(saved, submitted, confirmed or matched\), not only made\? Answer no when page shows the choice applied already/);
-  assert.equal(result.rounds[1].applies_choice, 0.9);
-  assert.equal(typeof result.rounds[1].side_effect_guard, "number");
+// However sure Jev is, a goal checked before that click fails, or passes on
+// a choice not yet applied (Codex on 7519fff).
+test("a goal Jev believes reached, or half believes it, waits for the click that applies the choice it just made", async () => {
+  for (const sure of [{ done: 0.61, done_change: 0.61 }, { done: 0.9 }]) {
+    const k = manualMatch();
+    const asked = [];
+    const steps = [{ tool: "click", target: 0 }, { tool: "click", target: 1, side_effect: 0.9, ...sure }, { tool: "none", done: 0.95 }];
+    const result = await memoryRuntime(k, applying(steps, 0.9, asked)).run(reconcile, { evidenceLevel: "none", explain: true });
+    assert.equal(result.status, "completed_verified", String(sure.done));
+    // Confirm match was sent before the goal was checked, through the guards.
+    assert.deepEqual(clicked(k), ["#pick", "#confirm"]);
+    assert.deepEqual(asked.map((a) => a.element), ['button "Confirm match"']);
+    assert.match(asked[0].instructions, /^The last input in task\.history made a choice, such as ticking a checkbox, choosing an option or entering a value\. Such a choice, made in an open form, panel or dialog that has its own Save, Confirm or Submit control, can stay local until that control is used\. Is this EXACT proposed_action that control for the choice, .* and does task\.goal need the choice applied \(saved, submitted, confirmed or matched\), not only made\? Answer no when page shows the choice applied already/);
+    assert.equal(result.rounds[1].applies_choice, 0.9);
+    assert.equal(typeof result.rounds[1].side_effect_guard, "number");
+  }
 });
 
-test("a goal Jev half believes reached is checked when its next click does not apply that choice, or Jev is sure, or the last input was a write", async () => {
+test("a goal Jev believes reached is checked when its next click does not apply that choice, or the last input was a write, or no input may follow", async () => {
   // The click does something else, or the answer is missing.
   for (const applies of [0.1, undefined]) {
     const k = manualMatch();
@@ -826,11 +830,9 @@ test("a goal Jev half believes reached is checked when its next click does not a
     assert.deepEqual(clicked(k), ["#pick"]);
     assert.equal(asked.length, 1);
   }
-  // Jev is sure the goal is reached; the last input already wrote; or the
-  // round may send no more input.
+  // The last input already wrote, or the round may send no more input.
   const half = { tool: "click", target: 1, done: 0.61, done_change: 0.61, side_effect: 0.9 };
   for (const [steps, maxActions] of [
-    [[{ tool: "click", target: 0 }, { tool: "click", target: 1, done: 0.9, side_effect: 0.9 }]],
     [[{ tool: "click", target: 0, side_effect: 0.9 }, half]],
     [[{ tool: "click", target: 0 }, half], 1],
   ]) {
