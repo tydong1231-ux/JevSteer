@@ -39,6 +39,41 @@ test('a field whose neighboring text changes on input is confirmed and not offer
   } finally { await mcp.close(); }
 });
 
+// ccMonet's Unit Price (antd InputNumber) shows the typed 5000 as "5,000";
+// the run stopped on a failed effect (Mac run on 9a83708).
+test('a number field that groups the digits typed in it is confirmed and not offered for TYPE again', async ({ page }, testInfo) => {
+  await page.setContent(`<h1>New invoice</h1><form id="invoice">
+    <div><label for="price">Unit Price</label><input id="price" inputmode="decimal"></div>
+    <div><label for="memo">Memo</label><input id="memo"></div>
+  </form><script>
+    price.addEventListener('input', () => {
+      const digits = price.value.replace(/[^0-9.]/g, '');
+      price.value = digits ? Number(digits).toLocaleString('en-US') : '';
+    });
+  </script>`);
+  let typeTargets;
+  let priceIndex;
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'type', target: lookup(state, 'Unit Price') }),
+    (state, questions) => {
+      priceIndex = String(lookup(state, 'Unit Price'));
+      typeTargets = Object.keys(questions.type_target?.criteria || {});
+      return decision({ tool: 'type', target: lookup(state, 'Memo') });
+    },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', {
+      tab_id: mcp.id, goal: 'Enter the price and a memo', values: { unit_price: '5000', memo: 'Deposit 2026/5/3' },
+      assertions: [{ type: 'field_equals', label: 'Memo', value: 'Deposit 2026/5/3' }],
+      verification_mode: 'host', max_actions: 4, evidence_level: 'none',
+    });
+    expect(result.status).toBe('host_review_required');
+    expect(result.actions.map((a) => [a.action, a.value, a.effect?.status])).toEqual([['type', 'unit_price', 'confirmed'], ['type', 'memo', 'confirmed']]);
+    expect(typeTargets).not.toContain(priceIndex);
+    await expect(page.locator('#price')).toHaveValue('5,000');
+  } finally { await mcp.close(); }
+});
+
 const invoiceRows = `<h1>New invoice</h1><form id="invoice"><table>
   <tr><th>Description</th><th>Line total</th></tr>
   ${[1, 2].map((n) => `<tr data-row-key="line-${n}"><td><input aria-label="Description" name="desc"></td><td><input aria-label="Quantity" name="qty" value="1"></td><td class="total">0.00</td></tr>`).join('')}

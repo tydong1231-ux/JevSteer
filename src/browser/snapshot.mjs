@@ -182,34 +182,36 @@ export function readDOM(elements, nodes) {
     headings.set(table, grid.at(-1) || []);
     return headings.get(table);
   };
-  const cellHeader = (e) => {
+  // The header cell of the column a field's table cell is in.
+  const headerCell = (e) => {
     const cell = closest(e, 'td,[role=cell],[role=gridcell]');
     const row = cell && closest(cell, 'tr,[role=row]');
-    if (!row) return '';
-    let head;
+    if (!row) return undefined;
     if (cell.tagName === 'TD' && row.tagName === 'TR') {
       const table = row.closest('table');
-      if (!table) return '';
+      if (!table) return undefined;
       const columns = tableHeadings(table);
       const width = [...row.cells].reduce((n, c) => n + Math.max(1, c.colSpan || 1), 0);
       // antd adds a scrollbar column to a separate header table.
-      if (columns.length < width || columns.length > width + 1) return '';
+      if (columns.length < width || columns.length > width + 1) return undefined;
       let index = 0;
       for (const c of row.cells) { if (c === cell) break; index += Math.max(1, c.colSpan || 1); }
-      head = columns[index];
-    } else {
-      const grid = closest(row, '[role=grid],[role=table],[role=treegrid]');
-      if (!grid) return '';
-      const cellsOf = (r) => [...r.querySelectorAll('[role=cell],[role=gridcell],[role=columnheader],[role=rowheader]')].filter((c) => closest(c, '[role=row]') === r);
-      if (!headings.has(grid)) {
-        const headRow = [...grid.querySelectorAll('[role=row]')].find((r) => r.querySelector('[role=columnheader]'));
-        headings.set(grid, headRow ? cellsOf(headRow) : []);
-      }
-      const heads = headings.get(grid);
-      const at = cell.getAttribute('aria-colindex');
-      const cells = cellsOf(row);
-      head = at ? heads.find((h) => h.getAttribute('aria-colindex') === at) : heads.length === cells.length ? heads[cells.indexOf(cell)] : undefined;
+      return columns[index];
     }
+    const grid = closest(row, '[role=grid],[role=table],[role=treegrid]');
+    if (!grid) return undefined;
+    const cellsOf = (r) => [...r.querySelectorAll('[role=cell],[role=gridcell],[role=columnheader],[role=rowheader]')].filter((c) => closest(c, '[role=row]') === r);
+    if (!headings.has(grid)) {
+      const headRow = [...grid.querySelectorAll('[role=row]')].find((r) => r.querySelector('[role=columnheader]'));
+      headings.set(grid, headRow ? cellsOf(headRow) : []);
+    }
+    const heads = headings.get(grid);
+    const at = cell.getAttribute('aria-colindex');
+    const cells = cellsOf(row);
+    return at ? heads.find((h) => h.getAttribute('aria-colindex') === at) : heads.length === cells.length ? heads[cells.indexOf(cell)] : undefined;
+  };
+  const cellHeader = (e) => {
+    const head = headerCell(e);
     const words = head ? labelText(head) : '';
     return words.length <= 60 ? words : '';
   };
@@ -256,26 +258,71 @@ export function readDOM(elements, nodes) {
   };
   // The nearest text before the field, in the boxes around it that hold no
   // other field: "Range [from] [to]" names neither. A label for another
-  // control in between ends the search.
-  const precedingLabel = (e) => {
+  // control in between ends the search. Returns the node that holds it.
+  const labelBefore = (e) => {
     let cur = e;
     for (let depth = 0; depth < 8; depth++) {
       const box = parent(cur);
-      if (!box || box === document.body || box === document.documentElement || fieldsIn(box) > 1) return '';
+      if (!box || box === document.body || box === document.documentElement || fieldsIn(box) > 1) return undefined;
       for (let n = cur.previousSibling; n; n = n.previousSibling) {
         if (n.nodeType === Node.ELEMENT_NODE) {
-          if (n.matches(FIELD) || n.querySelector(FIELD)) return '';
+          if (n.matches(FIELD) || n.querySelector(FIELD)) return undefined;
           const owner = n.matches('label') ? n : n.querySelector('label');
-          if (owner?.control && owner.control !== e) return '';
+          if (owner?.control && owner.control !== e) return undefined;
           if (n.matches(UNLABEL)) continue;
-          if (n.textContent.length > 300) return '';
+          if (n.textContent.length > 300) return undefined;
         } else if (n.nodeType !== Node.TEXT_NODE) continue;
         const words = labelText(n);
-        if (words) return words.length <= 60 && beside(n, cur) ? words : '';
+        if (words) return words.length <= 60 && beside(n, cur) ? n : undefined;
       }
       cur = box;
     }
-    return '';
+    return undefined;
+  };
+  const precedingLabel = (e) => {
+    const n = labelBefore(e);
+    return n ? labelText(n) : '';
+  };
+  // What the page marks on a field, as a person reads it. Required: its
+  // required attribute, or a mark on its label or its column's header: a
+  // "*" before or after the words, or a class saying so (antd's
+  // ant-form-item-required, a th.required). An error: a class saying so on
+  // the field or a box it is drawn in, up to its table cell, while the box
+  // holds no other field (antd's ant-select-status-error and
+  // ant-form-item-has-error, Bootstrap's is-invalid, a cell's error). On
+  // ccMonet's invoice, nothing else said Tracking Category was required: its
+  // header is th.required, and its cell took an error class when Save as
+  // Draft was refused (Mac run on 9a83708).
+  const REQUIRED_CLASS = /(?:^|[-_])required$/i;
+  const ERROR_CLASS = /(?:^|[-_])(?:error|invalid)$/i;
+  const NEGATED = /(?:^|[-_])(?:no|not|non|un)[-_]?(?:required|error|invalid)$/i;
+  const classed = (n, pattern) => [...(n?.classList || [])].some((c) => pattern.test(c) && !NEGATED.test(c));
+  const shownText = (n) => (n?.nodeType === Node.TEXT_NODE ? clean(n.textContent, 200) : n?.nodeType === Node.ELEMENT_NODE ? text(n, 200) : '');
+  const STARRED = /^[*＊]|[*＊]\s*[:：]?$/;
+  // A "*" of its own just before or after the label: "<b>*</b> Customer".
+  const starBeside = (n) => ['previousSibling', 'nextSibling'].some((step) => {
+    let s = n[step];
+    while (s?.nodeType === Node.TEXT_NODE && !s.textContent.trim()) s = s[step];
+    return !!s && /^[*＊]$/.test(shownText(s));
+  });
+  const marksRequired = (n, { beside: near = false } = {}) => !!n && (
+    n.nodeType === Node.ELEMENT_NODE && (classed(n, REQUIRED_CLASS) || [...n.querySelectorAll('[class]')].some((x) => classed(x, REQUIRED_CLASS)))
+    || STARRED.test(shownText(n)) || near && starBeside(n));
+  const requiredMark = (e) => {
+    if (!e.matches(FIELD)) return false;
+    if (e.required === true || e.getAttribute('aria-required') === 'true') return true;
+    const labels = [...(e.labels || []), closest(e, 'label'),
+      ...(e.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map((id) => e.getRootNode().getElementById?.(id))];
+    return labels.some((l) => marksRequired(l)) || marksRequired(headerCell(e)) || marksRequired(labelBefore(e), { beside: true });
+  };
+  const errorMark = (e) => {
+    if (!e.matches(FIELD)) return false;
+    for (let box = e, depth = 0; box && box !== document.body && depth < 10; box = parent(box), depth++) {
+      if (box !== e && fieldsIn(box) > 1) return false;
+      if (classed(box, ERROR_CLASS)) return true;
+      if (box.matches('td,th,[role=cell],[role=gridcell]')) return false;
+    }
+    return false;
   };
   // A search icon in the field's own box. An open antd Select shows a search
   // icon after its input, so only an icon before it names a combobox.
@@ -600,6 +647,9 @@ export function readDOM(elements, nodes) {
       drag_disabled: ariaOff.some(dragOnly) || undefined,
       readonly: e.readOnly === true || e.getAttribute('aria-readonly') === 'true', contenteditable: e.isContentEditable,
       invalid: e.getAttribute('aria-invalid') === 'true' || (e.willValidate && !e.validity.valid) || false,
+      // What the page marks on the field (see requiredMark, errorMark).
+      required: requiredMark(e) || undefined,
+      error_mark: errorMark(e) || undefined,
       validation_message: e.validationMessage || '', context: local, scope: scope || '',
       form_key: formKey || '', record_key: recordKey || '',
       form_action: getAction(e),

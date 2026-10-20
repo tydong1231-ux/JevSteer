@@ -71,7 +71,10 @@ function modelElement(e, multiFrame) {
   put("row", e.row);
   put("more_options", e.more_options);
   if (typeof e.checked === "boolean" && (e.checked || CHECKABLE_TYPES.has(String(e.type || "").toLowerCase()) || CHECKABLE_ROLES.has(e.role))) out.checked = e.checked;
-  for (const flag of ["disabled", "readonly", "contenteditable", "invalid"]) if (e[flag]) out[flag] = true;
+  for (const flag of ["disabled", "readonly", "contenteditable", "required"]) if (e[flag]) out[flag] = true;
+  // Invalid by the browser's own check, or marked so by the page (see the
+  // snapshot's errorMark).
+  if (e.invalid || e.error_mark) out.invalid = true;
   if (e.options) out.options = e.options.map((o) => {
     const option = { text: o.text };
     if (o.value !== o.text) option.value = o.value;
@@ -153,6 +156,8 @@ export function formatPage(page) {
       e.display && !sensitiveField(e) ? `shows=${JSON.stringify(squash(e.display, 80))}` : "",
       e.href ? `href=${JSON.stringify(squash(e.href, 120))}` : "",
       e.disabled ? "disabled" : "",
+      e.required ? "required" : "",
+      e.invalid || e.error_mark ? "invalid" : "",
       e.checked != null ? `checked=${e.checked}` : "",
     ].filter(Boolean);
     lines.push(`[${e.i}] <${e.tag}> ${attrs.join(" ")}`.trim());
@@ -179,7 +184,8 @@ export function pageDiff(before, after) {
     if (!current) continue;
     if (old.checked !== current.checked) changes.push(`${brief(current)} checked=${current.checked}`);
     if (old.value !== current.value) changes.push(`${brief(current)} field value changed`);
-    if (old.invalid !== current.invalid) changes.push(`${brief(current)} invalid=${current.invalid}`);
+    const invalid = (e) => !!(e.invalid || e.error_mark);
+    if (invalid(old) !== invalid(current)) changes.push(`${brief(current)} invalid=${invalid(current)}`);
     if (changes.length >= 12) break;
   }
   return changes.join("; ") || "no obvious visible change";

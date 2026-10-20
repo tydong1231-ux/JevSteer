@@ -155,7 +155,8 @@ test("observation recognizes values and toggle state but ignores generated selec
 test("unrelated live text cannot authorize a duplicate server submission", async () => {
   const k = new MemoryKapture(page());
   k.onCommand = () => { k.page.text = "A clock ticked; save outcome still unknown"; };
-  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  // Jev chooses Save again: the contract is checked first, and fails here.
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
   const result = await runtime.run("Save the record", { evidenceLevel: "none" });
   assert.equal(result.status, "action_failed");
   assert.equal(k.commands.length, 1);
@@ -183,13 +184,13 @@ test("lost click acknowledgement stays blocked across process restart and a new 
 test("changing the save button label cannot bypass an unresolved mutation", async () => {
   const k = new MemoryKapture(page());
   k.onCommand = () => { k.page.elements[0].label = "Retry save"; };
-  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }])).run("Save", { evidenceLevel: "none" });
+  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 })).run("Save", { evidenceLevel: "none" });
   assert.equal(result.status, "action_failed"); assert.equal(k.commands.length, 1);
 });
 
 test("an observed server rejection can explicitly authorize a new attempt", async () => {
   const k = new MemoryKapture(page());
-  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
   const first = await runtime.run("Save", { evidenceLevel: "none" });
   await runtime.resolveAction({ tabId: "test", actionId: first.pending_actions[0].action_id, resolution: "not_applied", evidence: "Server returned validation rejection; record is absent" });
   runtime.decider = scriptedDecider([{ side_effect: 0.9 }, { tool: "none", done: 0.99 }]);
@@ -368,7 +369,7 @@ test("P1: host-confirmed applied save remains replay-blocked across restarts and
   const dir = await mkdtemp(join(tmpdir(), "jevsteer-applied-"));
   try {
     const k = new MemoryKapture(page());
-    const first = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+    const first = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
     first.journal = new ActionJournal({ dir });
     const initial = await first.run("Save invoice REF-42", { runId: "first", evidenceLevel: "none" });
     assert.equal(initial.status, "action_failed");
@@ -400,7 +401,7 @@ test("P1: host-confirmed applied save remains replay-blocked across restarts and
 
 test("P1: confirmed not_applied permits retry, while verified remote writes stay protected", async () => {
   const k = new MemoryKapture(page());
-  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
   const first = await runtime.run("Save REF-42", { evidenceLevel: "none" });
   await runtime.resolveAction({
     tabId: "test", actionId: first.pending_actions[0].action_id,

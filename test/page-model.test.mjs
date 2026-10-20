@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { repeatsBlock, elementFingerprint, toModelPage, brief, formatPage } from "../src/page-model.mjs";
+import { repeatsBlock, elementFingerprint, toModelPage, brief, formatPage, pageDiff } from "../src/page-model.mjs";
 
 test("repeatsBlock detects repeated cycles", () => {
   assert.equal(repeatsBlock(["a", "b", "a", "b", "a", "b"], 2, 3), true);
@@ -41,6 +41,19 @@ test("model page leaves out empty and default fields without losing state", () =
     { i: 5, tag: "input", label: "Password", type: "password", value: "[REDACTED]" },
   ]);
   assert.equal(toModelPage({ ...page, metrics: { frame_count: 2 } }).elements[0].frame_id, "f1");
+});
+
+// ccMonet marks an invoice line's required fields on the column header, and
+// one a save refused by an error class on its cell (see the snapshot). That
+// mark is the page's; the browser's own check, which an effect check reads,
+// stays apart.
+test("a field the page marks required or wrong says so to Jev and the host", () => {
+  const tracking = { i: 0, selector: "#tracking", tag: "input", role: "combobox", label: "Tracking Category", column: "Tracking Category", value: "", required: true, invalid: false, error_mark: true };
+  const page = { url: "https://erp.test", title: "Invoice", text: "Invoice", metrics: {}, elements: [tracking] };
+  assert.deepEqual(toModelPage(page).elements, [{ i: 0, tag: "input", role: "combobox", label: "Tracking Category", value: "", column: "Tracking Category", required: true, invalid: true }]);
+  assert.match(formatPage(page), /\[0\] <input> role=combobox label="Tracking Category" required invalid$/);
+  assert.equal(pageDiff(page, { ...page, elements: [{ ...tracking, error_mark: false }] }), 'combobox "Tracking Category" invalid=false');
+  assert.equal(pageDiff(page, { ...page, elements: [{ ...tracking, error_mark: undefined, invalid: true }] }), "no obvious visible change");
 });
 
 test("a hint and a table column reach Jev; a hint names a field only when nothing else does", () => {

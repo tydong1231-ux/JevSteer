@@ -389,6 +389,7 @@ export function buildSemanticPage({ tab, domHtml, rawElements }) {
       scope: semanticScope($, index, node) || undefined,
       identity_version: 1,
       invalid: node?.attr("aria-invalid") === "true",
+      required: node?.attr("required") != null || node?.attr("aria-required") === "true" || undefined,
       expanded: ["true", "false"].includes(node?.attr("aria-expanded")) ? node.attr("aria-expanded") === "true" : undefined,
       selected: ["true", "false"].includes(node?.attr("aria-selected")) ? node.attr("aria-selected") === "true" : undefined,
       validation_message: (node?.attr("aria-errormessage") || "").split(/\s+/).map((id) => elementText(findById(index, id))).filter(Boolean).join(" ") || undefined,

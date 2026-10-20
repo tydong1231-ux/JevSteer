@@ -92,15 +92,15 @@ test("multiple value mapping is deferred until the selected field is known", asy
   const decider = async (state, questions) => {
     observed.push({ state, questions });
     assert.deepEqual(Object.keys(questions), ["selected_value"]);
-    return { answers: { selected_value: choice(questions.selected_value.criteria, "email") }, ms: 1, tokens: 4 };
+    return { answers: { selected_value: choice(questions.selected_value.criteria, "contact") }, ms: 1, tokens: 4 };
   };
   const runtime = new JevSteerRuntime({ decider });
   const p = page();
   const value = await runtime.chooseFieldValue(
     p, normalizeTaskContract({ goal: "Complete form" }),
-    { email: "hi@example.test", customer: "Northstar Inc." }, [], p.elements[1]
+    { contact: "hi@example.test", customer: "Northstar Inc." }, [], p.elements[1]
   );
-  assert.equal(value, "email");
+  assert.equal(value, "contact");
   assert.equal(observed[0].state.selected_field.label, "Email");
 });
 
@@ -171,6 +171,23 @@ test("fields of two table rows are told apart in the target heads by their row",
   const type = space.questions.type_target.criteria;
   assert.deepEqual([type["0"].table_row, type["1"].table_row], [1, 2]);
   assert.equal(space.questions.click_target.criteria["3"].clears, '[2] combobox in column "Tracking Category" in table row 2 showing "Woodlands"');
+});
+
+// ccMonet marks an invoice line's required fields on the column header, and
+// one a save refused by an error class on its cell (see the snapshot).
+test("the target heads say which fields the page marks required or invalid", () => {
+  const space = buildTargetSpace([
+    { i: 0, selector: "#name", tag: "input", role: "textbox", label: "Preferred Name", column: "Preferred Name", row: 1, value: "", required: true },
+    { i: 1, selector: "#tracking", tag: "input", role: "combobox", label: "Tracking Category", column: "Tracking Category", row: 1, value: "", required: true, invalid: false, error_mark: true },
+    { i: 2, selector: "#email", tag: "input", role: "textbox", label: "Email", value: "x", invalid: true },
+    { i: 3, selector: "#memo", tag: "input", role: "textbox", label: "Memo", value: "" },
+  ]);
+  const marks = (criteria) => Object.fromEntries(Object.entries(criteria).map(([key, c]) => [key, [!!c.required, !!c.invalid]]));
+  // The TYPE head is told guidance says which field a value goes into.
+  assert.match(space.questions.type_target.instructions, / Where task\.guidance says which field a value or a kind of text goes into \("Line item text goes into Description"\), type it there and in no other field, whatever another field's label suggests\./);
+  assert.doesNotMatch(space.questions.select_target.instructions, /Line item text/);
+  assert.deepEqual(marks(space.questions.type_target.criteria), { 0: [true, false], 1: [true, true], 2: [false, true], 3: [false, false] });
+  assert.deepEqual(marks(space.questions.select_target.criteria)["1"], [true, true]);
 });
 
 test("an open combobox offers the options its popup lists for SELECT; choosing one clicks it", () => {
@@ -324,6 +341,47 @@ test("the value chooser sees a field's table column and hint", async () => {
   assert.equal(value, undefined);
   assert.equal(selected.table_column, "Preferred Name");
   assert.equal(selected.hint, "Select product");
+});
+
+// ccMonet's invoice (Mac rerun on 9a83708): the value chooser turned down
+// due_date for Due Date, and the run stopped there.
+test("a value named for the field it goes in is used without a question, for a field off any table line", async () => {
+  const asked = [];
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    asked.push(state.selected_field.label);
+    return { answers: { selected_value: choice(questions.selected_value.criteria, "__none__") }, ms: 1, tokens: 4 };
+  } });
+  const contract = normalizeTaskContract({ goal: "Fill the invoice lines" });
+  const values = { due_date: "2026/11/19", unit_price: "100", memo: "QA" };
+  const due = { i: 0, selector: "#due", tag: "input", role: "textbox", label: "Due Date", value: "" };
+  const byName = { i: 1, selector: "#memo", tag: "textarea", role: "textbox", label: "Note", name: "memo", value: "" };
+  const price = { i: 2, selector: "#price", tag: "input", role: "textbox", label: "Unit Price", column: "Unit Price", row: 1, value: "" };
+  const p = { url: "https://erp.test", title: "Invoice", text: "Invoice", elements: [due, byName, price] };
+  assert.equal(await runtime.chooseFieldValue(p, contract, values, [], due), "due_date");
+  assert.equal(await runtime.chooseFieldValue(p, contract, values, [], byName), "memo");
+  assert.deepEqual(asked, []);
+  // A field on a table line is asked about: the lines hold different items.
+  assert.equal(await runtime.chooseFieldValue(p, contract, values, [], price), undefined);
+  // So is a field two values are named for.
+  assert.equal(await runtime.chooseFieldValue(p, contract, { dueDate: "2026/11/19", due_date: "2026/11/20" }, [], due), undefined);
+  assert.deepEqual(asked, ["Unit Price", "Due Date"]);
+});
+
+// ccMonet's invoice (Mac rerun on 9a83708): with the guidance "Line item text
+// goes into Description; Preferred Name picks a saved product.", the item
+// text still went into Preferred Name.
+test("the value chooser puts a value where task.guidance says it goes, whatever another field's label suggests", async () => {
+  let question;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    question = { guidance: state.task.guidance, instructions: questions.selected_value.instructions };
+    return { answers: { selected_value: choice(questions.selected_value.criteria, "__none__") }, ms: 1, tokens: 4 };
+  } });
+  const product = { i: 0, selector: "#product", tag: "input", role: "combobox", label: "Preferred Name", column: "Preferred Name", row: 1, value: "" };
+  const guidance = ["Line item text goes into Description; Preferred Name picks a saved product."];
+  await runtime.chooseFieldValue({ url: "https://erp.test", title: "Invoice", text: "Invoice", elements: [product] },
+    normalizeTaskContract({ goal: "Add the lines", guidance }), { item_a: "QA item A", price_a: "100" }, [], product);
+  assert.deepEqual(question.guidance, guidance);
+  assert.match(question.instructions, /task\.guidance comes from the host, who knows the site: where it says which field a value or a kind of text goes into \("Line item text goes into Description"\), that value belongs there and in no other field, whatever this field's label suggests\. Otherwise its explicit label and name are primary/);
 });
 
 // ccMonet's invoice lines have no key of their own, and line 2's Unit Price

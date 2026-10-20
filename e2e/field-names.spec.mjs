@@ -36,7 +36,62 @@ test('unlabeled antd fields take the caption before them, and line inputs their 
     expect(elements.find((e) => e.role === 'button').label).toBe('Delete line');
     // Line inputs belong to their row's item: Jev is told which column each is in.
     expect(fields.map((e) => e.column || '')).toEqual(['', '', '', '', '', '', 'Item', 'Quantity', 'Unit Price']);
+    // Their headers mark them required.
+    expect(fields.map((e) => !!e.required)).toEqual([false, false, false, false, false, false, true, true, true]);
   } finally { await driver.close(); }
+});
+
+// ccMonet's invoice lines say what a line needs only by marks (Mac run on
+// 9a83708): a required class on the column header, and an error class on the
+// cell of a field Save as Draft found empty, kept until the next save.
+// Elsewhere a "*" by the label or antd's classes mark them, and Bootstrap
+// marks a refused field with a class of its own.
+const markedForm = `<style>.ant-select-selection-search{display:block}.ant-select{border:1px solid #ccc;min-height:24px}</style>
+  <table><thead><tr><th class="required">Preferred Name</th><th>Description</th><th><div class="flex"><p class="required">Tracking Category</p></div></th><th class="not-required">Memo</th></tr></thead>
+  <tbody><tr data-row-key="line-1"><td class="cell-error"><input id="name"></td><td><textarea id="desc"></textarea></td><td class="cell-error">${select('tracking')}</td><td><input id="memo"></td></tr></tbody></table>
+  <div style="width:300px"><span>Customer *</span>${select('customer')}</div>
+  <div style="width:300px"><b>*</b><span>Due Date</span>${picker}</div>
+  <label for="email">Email</label><input id="email" required>
+  <div class="ant-form-item ant-form-item-has-error"><div class="ant-form-item-label"><label for="ref" class="ant-form-item-required">Reference</label></div><div class="ant-form-item-control"><input id="ref"></div></div>
+  <input id="code" aria-label="Code" class="form-control is-invalid">
+  <div class="no-error"><input id="note" aria-label="Note"></div>`;
+
+test('fields the page marks as required or wrong carry those marks', async ({ page }) => {
+  await page.setContent(markedForm);
+  const { driver, id } = await driverFor(page);
+  try {
+    const { elements } = await driver.observe(id);
+    const marks = Object.fromEntries(elements.filter((e) => e.label).map((e) => [e.label, [!!e.required, !!(e.invalid || e.error_mark)]]));
+    expect(marks).toEqual({
+      'Preferred Name': [true, true], Description: [false, false], 'Tracking Category': [true, true], Memo: [false, false],
+      Customer: [true, false], 'Due Date': [true, false], Email: [true, true], Reference: [true, true], Code: [false, true], Note: [false, false],
+    });
+    // A class mark is the page's: the browser's own check still passes.
+    expect(elements.find((e) => e.label === 'Preferred Name')).toMatchObject({ invalid: false, error_mark: true });
+  } finally { await driver.close(); }
+});
+
+test('Jev and the guards read the marks; a field typed while its cell still shows an error is confirmed', async ({ page }, testInfo) => {
+  await page.setContent(markedForm);
+  const seen = {};
+  const named = (state, label) => state.page.elements.find((e) => e.label === label);
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state, questions) => {
+      seen.model = named(state, 'Tracking Category');
+      seen.offered = questions.type_target?.criteria[String(named(state, 'Preferred Name').i)];
+      return decision({ tool: 'type', target: named(state, 'Preferred Name').i });
+    },
+    { tool: 'none', done: 0.99 },
+  ], { inspect: (state, questions) => { if (questions.action_side_effect) seen.guarded = state.proposed_action; } }));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Name line 1 QA item A', values: { item: 'QA item A' }, verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(result.status).toBe('host_review_required');
+    expect(seen.model).toMatchObject({ required: true, invalid: true });
+    expect(seen.offered).toMatchObject({ table_column: 'Preferred Name', required: true, invalid: true });
+    expect(seen.guarded).toMatchObject({ tool: 'type', element: 'textbox "Preferred Name"', required: true, invalid: true });
+    expect(result.actions.map((a) => [a.action, a.effect?.status])).toEqual([['type', 'confirmed']]);
+    await expect(page.locator('#name')).toHaveValue('QA item A');
+  } finally { await mcp.close(); }
 });
 
 // ccMonet's invoice lines (Mac probe, 2026-10-20): a dnd-kit sortable grid

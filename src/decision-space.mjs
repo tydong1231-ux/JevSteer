@@ -8,6 +8,9 @@ export const TARGETED_TOOLS = new Set(["click", "type", "press_enter", "select",
 
 export function eligibleFor(e, tool) {
   if (!e?.selector || e.disabled) return false;
+  // An option this run chose, still shown chosen in its open list: a click
+  // would take it out again (see decide).
+  if (e.choice_completed) return false;
   // An ARIA listbox is a container, not one specific choice. Clicking its
   // center can select an unrelated child option at that coordinate.
   if (e.role === "listbox" && e.tag !== "select") return false;
@@ -55,6 +58,10 @@ function describe(candidate, pool) {
   // selects told apart only by it: "Status", "Is", "Draft".
   if (e.display && !sensitiveField(e)) result.shows = squash(e.display, 80);
   if (e.checked != null) result.checked = e.checked;
+  // What the page marks on a field: it wants a value there, or refuses the
+  // one it holds (see the snapshot's requiredMark and errorMark).
+  if (e.required) result.required = true;
+  if (e.invalid || e.error_mark) result.invalid = true;
   if (e.options?.length && candidate.option == null) {
     result.selected = e.options.filter(o => o.selected).map(o => squash(o.text, 55)).slice(0, 3);
   }
@@ -126,7 +133,12 @@ export function buildTargetSpace(elements = [], pool = elements) {
     if (!choices.length) continue;
     const criteria = Object.fromEntries(choices.map(candidate => [candidate.key, describe(candidate, pool)]));
     if (choices.length === 1) criteria[NO_TARGET] = `None: the one offered target does not fit a ${tool.toUpperCase()} toward task.goal now.`;
-    const notes = (choices.some((c) => c.element.popup_of != null)
+    // On ccMonet's invoice the line's item text went into the product picker
+    // ("Preferred Name"), where guidance said Description (Mac rerun on
+    // 9a83708).
+    const notes = (tool === "type"
+      ? " Where task.guidance says which field a value or a kind of text goes into (\"Line item text goes into Description\"), type it there and in no other field, whatever another field's label suggests."
+      : "") + (choices.some((c) => c.element.popup_of != null)
       ? " A target marked in_popup_of is what that field's open popup shows now (its search results, suggestions or options): to open or choose one of those, use the one in the popup, since a click anywhere else closes it."
       : "") + (choices.some((c) => criteria[c.key]?.clears)
       ? " A target marked clears is that field's clear button: a click empties the field. Use it only to empty a field the task wants empty, such as one that holds a value the task does not ask for."

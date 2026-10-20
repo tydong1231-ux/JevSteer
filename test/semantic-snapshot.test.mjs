@@ -35,6 +35,15 @@ test("semantic snapshot enriches Kapture element metadata", () => {
   assert.equal(page.elements[1].role, "button");
 });
 
+test("semantic snapshot marks a field its required attribute or aria-required marks", () => {
+  const page = buildSemanticPage({
+    tab: { url: "https://example.test", title: "Example" },
+    domHtml: `<html><body><input id="a" aria-label="A" required><input id="b" aria-label="B" aria-required="true"><input id="c" aria-label="C" aria-required="false"></body></html>`,
+    rawElements: ["a", "b", "c"].map((id) => ({ visible: true, selector: `#${id}`, tagName: "input", id, bounds: {} })),
+  });
+  assert.deepEqual(page.elements.map((e) => e.required), [true, true, undefined]);
+});
+
 test("semantic snapshot redacts password value", () => {
   const page = buildSemanticPage({
     tab: { url: "https://example.test", title: "Login" },

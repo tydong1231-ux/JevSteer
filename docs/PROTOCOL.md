@@ -60,25 +60,57 @@ making it again once the form is fixed is not a duplicate, unless the page or
 the run history shows that a record was created. The effect request treats
 `guidance` and `constraints` as host facts about what a control does, so a fact
 such as "Generate only calculates the report" keeps a read-only button out of
-the remote-write journal.
+the remote-write journal. Both requests are told that `proposed_action.element`
+is the one control the action uses, and that its `context`, the text of the
+row or box around it, can name controls beside it that the action does not
+use: ccMonet's Save as Draft sits next to Approve ("Save as Draft Approve").
+With more than one constraint, the constraint request also says which one the
+action would most likely break. A `constraint_blocked` stop names it in `info`
+and as `pending.constraint` (with one constraint, it is that one), so the host
+knows which fact settles the doubt.
 
 A TYPE or SELECT (also an option chosen from an open list, or clicked there)
 gets one more question with the effect questions: does it set a field the task
 does not call for, or put a task value into a field it does not belong in? A
 field that `goal`, `success_criteria`, `values` or `guidance` never mention,
 and that the page does not mark required or invalid (a tracking category, a
-tag, a reference), keeps what it holds. A click on a field's clear button is
-asked whether the task calls for emptying that field: a value the task never
-mentions, that this run did not enter and that fits the field (a default, a
-saved setting) stays; one this run entered, or one that contradicts the task
-or belongs in another field, may be emptied. At `JEVSTEER_UNREQUESTED_AT`
+tag, a reference), keeps what it holds. A TYPE shows the guards the value's
+name (`value_key`) and the text it enters (`value`), unless the field or the
+value's name is secret. Where `guidance` says which field a value or a kind of
+text goes into ("Line item text goes into Description"), any other field is
+one that value does not belong in: ccMonet's invoice line got its item text
+in the product picker, "Preferred Name". Jev's TYPE target head and the value
+chooser are told the same. A click on a field's clear button is asked whether
+the task calls for emptying that field: a value the task asks for there stays,
+even one this run entered, and so does a value the task never mentions, that
+this run did not enter and that fits the field (a default, a saved setting).
+One this run entered that the task does not ask for there, one that
+contradicts the task or belongs in another field, or one in a field the page
+marks invalid, may be emptied. At `JEVSTEER_UNREQUESTED_AT`
 (default 0.7) or above no input is sent: Jev looks again with the refusal in
-its history (`recovery: "reobserve"`, `reason: "not_requested"`), and the
+its history (`recovery: "reobserve"`, `reason: "not_requested"`, and a detail
+such as `combobox "Preferred Name" -> item_a`), and the
 third such choice stops the milestone as `needs_guidance`, naming the field.
 Name a field the task needs, and its value, in `guidance` or `values`. Jev's
 own operation question says the same: set only what the task asks for or the
 page marks required or invalid, and never pick a value of its own for any
 other field.
+
+The page marks a field required by its `required` attribute or
+`aria-required`, or (Playwright driver) by a mark on its label or its column's
+header: a "*" before or after the words, or a class saying so (antd's
+`ant-form-item-required`, a `th.required` header). It marks one invalid by
+`aria-invalid` or the browser's own check, or (Playwright driver) by an error
+class on the field or a box it is drawn in, up to its table cell, while the
+box holds no other field (antd's `ant-select-status-error` and
+`ant-form-item-has-error`, Bootstrap's `is-invalid`, a cell's `error` class;
+`no-error` and the like do not count). On ccMonet's invoice nothing else said
+Tracking Category was required: its header is marked so, and its cell took an
+error class when Save as Draft was refused. Jev's page, its target heads, the
+guards and `browser_snapshot` show these as `required` and `invalid`. A class
+mark is the page's (`error_mark` in the observation): the effect check of a
+TYPE reads only the browser's own check, so a field typed while its cell still
+shows the error of a refused save is confirmed by its value.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session.
@@ -242,7 +274,12 @@ context, field name and record, because the same option ("Closed", "Delete")
 can sit under different fields. A CLICK Jev chooses on such an option shows
 them its combobox as `option_of`, and whether the option is chosen now.
 An option already chosen is not offered, because a click on a chosen option of
-a multi-select takes it out again. Before the journal write, the option must
+a multi-select takes it out again. Nor is one this run chose offered for CLICK
+while its list still shows it chosen: a multi-select's list stays open after a
+choice, and ccMonet's Tracking Category lost "HQ" to a second click. One chosen
+before the run still is, so a task can take it out, and the same option in
+another table line's list is offered as usual. The run history names the
+combobox of a clicked option as `option_of`. Before the journal write, the option must
 still be unchosen and still listed under the same combobox, which is still
 open. That combobox is found as any target is: of identical comboboxes, the one
 that still shows what it showed, leaving out which one is open, because a page
@@ -448,7 +485,11 @@ says what the write left behind: the message the page showed after it, or that
 none appeared, and that the page sent no data request after it when that is so.
 A Save that a required field stopped without a word looks like this; check the
 site before accepting. When the check fails, the milestone stops as before. No
-input is sent for this check.
+input is sent for this check. The same check runs when Jev chooses another
+guarded input while that write is still unconfirmed (ccMonet's Approve, chosen
+again after it had gone through): that input is not sent, and when the result
+goes to the host, `info` says which input Jev chose and that it was not sent.
+When the check fails, the milestone stops as `action_failed`, as before.
 
 Multiple remote writes need separately reviewable outcomes. If an earlier write is
 unconfirmed, independently inspect and resolve it before the next mutation; do not
@@ -525,8 +566,16 @@ When several named values are supplied, a unique `field_equals` assertion for th
 selected field binds its exact expected value to the one matching `task.values`
 entry without another model choice. Duplicate labels need unique context; conflicting
 assertions, missing values or duplicate matching entries stop for guidance rather
-than guessing. With no applicable assertion the model uses the selected field's
-explicit label/name first. Range pickers can still reorder coupled date endpoints;
+than guessing. Without one, a value whose name is the field's label or name in
+other words (`due_date` for "Due Date", `unitPrice` for "Unit Price") goes into
+a field off any table line without a question; the lines of a table hold
+different items, each with values of its own. Otherwise the model chooses:
+where `guidance` says which field a value or a kind of text goes into, that
+comes first, then the selected field's explicit label/name. When no value
+belongs in the field Jev chose (ccMonet's Due Date, which a milestone did not
+name), nothing is typed: Jev looks again with that in its history
+(`recovery: "reobserve"`, `reason: "no_value"`), and the third such choice
+stops the milestone as `needs_guidance`, naming the field. Range pickers can still reorder coupled date endpoints;
 keep intermediate ranges valid and verify both controls plus the generated heading.
 
 Typing a value that reads as a calendar date (`2026/1/1`, `10/20/2026`,
@@ -538,6 +587,13 @@ frame in which such a picker writes its value back. The effect check then sees
 the committed value and accepts the same date rewritten with other padding or
 separators (`2026/01/01`). Fast input also sends a Shift key press after
 filling, for widgets that parse fields on key events.
+
+A number field that groups the digits it takes (ccMonet's Unit Price shows a
+typed 5000 as `5,000`) is confirmed when it shows the same number with
+grouping marks between groups of three, decimals added or a trailing percent
+sign (`field_value_number`), and is not offered for TYPE again. A currency
+sign, a unit, another number, or a mark that does not part groups of three
+(`5.000` for 5000) is no match.
 
 ## Runtime limits
 
@@ -590,9 +646,11 @@ bounds all waits.
 With `JEVSTEER_LOG=1`, stderr gets one row per round: Jev's scores, the chosen
 action, `observe_ms` (watching the previous input or wait), `decide_ms` and
 `requests`. A guarded input adds a `guards` row with the effect and constraint
-verdicts (`unrequested_guard` too for an input that sets or empties a field),
-and the action as the guards judged it: `judged_as`, the element (for
-an option chosen from an open list, its combobox), the chosen `option`,
+verdicts (`unrequested_guard` too for an input that sets or empties a field;
+`constraint_guard`, with the `constraint` it named), and the action as the
+guards judged it: `judged_as`, the element (for
+an option chosen from an open list, its combobox), its table `row` (or its
+combobox's), the chosen `option`,
 `option_of` for a click on an open combobox's option, `clears` for a click on
 a field's clear button, and the element's scope and context. `explain: true` returns the round
 rows, guard verdicts included, in the result.

@@ -31,7 +31,7 @@ export function observationSignature(page) {
   // which line of its table it is on; the host reads them, also where the
   // page text that shows them is past its cutoff.
   const state = [page.url, page.title, page.text, page.loading, page.elements.map((e) =>
-    [e.tag, e.role, e.label, e.hint, e.column, e.row, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.options?.filter((o) => o.selected).map((o) => o.value)])];
+    [e.tag, e.role, e.label, e.hint, e.column, e.row, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.error_mark, e.options?.filter((o) => o.selected).map((o) => o.value)])];
   if (page.page_id) state.push(page.page_id, page.frames, page.elements.map((e) => [e.form_key, e.record_key]));
   // What a focused field's popup says (search results) is read apart from
   // the page text, also past that text's cutoff, and a review can rest on it.
