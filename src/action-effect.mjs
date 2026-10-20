@@ -95,12 +95,16 @@ export function verifyActionEffect(before, after, action) {
 // were open; Jev then waited for a bill that was not coming. Such a click
 // took controls away and added none, on the same address, with a few new
 // words at most (a field's placeholder shows again once it loses focus); the
-// page sent no request, and the click's target is still there.
+// page sent no request, and the click's target is still there, as it was:
+// a toggle that shows its own popup open (aria-expanded) or changes its own
+// state took the click itself.
 // Returns how many controls went, and a few of them.
 export function closedOnly(before, after, action) {
   if (action?.tool !== "click" || !before || !after || before.url !== after.url) return undefined;
   if (after.requests_since_input !== 0 || after.pending_requests > 0 || after.loading?.busy) return undefined;
-  if (!findAfter(after, action, before)) return undefined;
+  const target = findAfter(after, action, before);
+  if (!target || action.el?.expanded === true) return undefined;
+  if (["expanded", "checked", "selected"].some((key) => (target[key] ?? null) !== (action.el?.[key] ?? null))) return undefined;
   const left = new Map();
   for (const e of after.elements) left.set(elementFingerprint(e), (left.get(elementFingerprint(e)) || 0) + 1);
   const gone = [];

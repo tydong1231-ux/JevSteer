@@ -442,7 +442,11 @@ test("a click that only closed what was open, sending no request, is told apart 
     ["loaded another page", { ...after, url: "https://erp.test/bills/2" }],
     ["took its target away", { ...after, elements: [] }],
     ["closed nothing", { ...billsWithPopup, requests_since_input: 0 }],
+    ["changed its target's state", { ...after, elements: [{ ...vendorCell, selected: true }] }],
   ]) assert.equal(closedOnly(billsWithPopup, page, click), undefined, what);
+  // A toggle that showed its own popup open took the click: it closed that popup.
+  const toggle = { ...vendorCell, expanded: true };
+  assert.equal(closedOnly({ ...billsWithPopup, elements: billsWithPopup.elements.map((e) => (e === vendorCell ? toggle : e)) }, { ...after, elements: [{ ...vendorCell, expanded: false }] }, { tool: "click", el: toggle }), undefined);
   assert.equal(closedOnly(billsWithPopup, after, { tool: "press_key", key: "Escape" }), undefined);
 });
 

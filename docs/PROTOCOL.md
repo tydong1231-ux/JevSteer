@@ -277,7 +277,9 @@ done question tells it to check each of them against the page as it is now,
 A click that did nothing but close what was open (a popup, a menu, a list) is
 marked `closed_only` in Jev's history: the address stayed, the page sent no
 request, controls went and none came, at most a few new words showed, and its
-target is still there. The page did not pass the click on to its target, so
+target is still there as it was. A toggle that showed its own popup open, or
+whose expanded, checked or selected state changed, took the click itself and
+is not marked. Otherwise the page did not pass the click on to its target, so
 Jev's operation question tells it to click again if that target is still the
 next step: a wait does not bring its result. A bill row clicked while
 ccMonet's filter popup or search results were open opened nothing.
