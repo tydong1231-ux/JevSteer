@@ -758,7 +758,9 @@ test("a field the task does not ask to empty keeps what it holds: its clear butt
 // ccMonet's Manual Match (Mac runs on 3fa0a57 and 37c131e): the tick of the
 // invoice to match was judged a write, and the run stopped for a host review
 // before Confirm match.
-test("the side-effect guard is told that a choice in an open form or dialog stays local until its Save or Confirm control is used", async () => {
+// Only the host's checked word makes such a choice local: a control there
+// can also save on its own (Codex on b2d32ae).
+test("the side-effect guard is told that a choice stays local until its form's Save or Confirm is used only when task.guidance says that control applies it", async () => {
   let asked;
   const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
     asked = questions.action_side_effect?.instructions;
@@ -769,7 +771,7 @@ test("the side-effect guard is told that a choice in an open form or dialog stay
   const page = { url: "https://erp.test/reconcile", title: "Reconcile", text: "Manual Match 2026/4/17 JevSteer QA CHAIN1020A INVMNB5Q 50.00 Confirm match", elements: [tick, confirm] };
   const contract = normalizeTaskContract({ goal: "Reconcile the 50.00 deposit of 2026/4/17 with invoice INVMNB5Q" });
   assert.equal((await runtime.checkActionEffects(page, contract, { tool: "click", el: tick }, [])).sideEffect, 0.1);
-  assert.match(asked, /Do not attribute a later submit step to this action: a checkbox ticked, an option chosen or a value entered in an open form, panel or dialog that has its own Save, Confirm or Submit control stays local until that control is used, which is the later submit step\. task\.guidance and task\.constraints come from the host/);
+  assert.match(asked, /Do not attribute a later submit step to this action\. When task\.guidance says that a form, panel or dialog applies a choice only with its own Save, Confirm or Submit control \(such as "Ticking a candidate only selects it; Confirm match applies the match"\), a checkbox ticked, an option chosen or a value entered there stays local until that control is used, which is the later submit step\. Without such a fact, a control there can still save on its own: judge it as any other control\. task\.guidance and task\.constraints come from the host/);
 });
 
 // ccMonet's Manual Match (Mac runs on 3fa0a57, 37c131e and b2d32ae): Jev
@@ -808,7 +810,7 @@ test("a goal Jev half believes reached waits for the click that applies the choi
   // Confirm match was sent before the goal was checked, through the guards.
   assert.deepEqual(clicked(k), ["#pick", "#confirm"]);
   assert.deepEqual(asked.map((a) => a.element), ['button "Confirm match"']);
-  assert.match(asked[0].instructions, /^The last input in task\.history made a choice, such as ticking a checkbox, choosing an option or entering a value\. Such a choice in an open form, panel or dialog that has its own Save, Confirm or Submit control stays local until that control is used\. Is this EXACT proposed_action that control for the choice, .* and does task\.goal need the choice applied \(saved, submitted, confirmed or matched\), not only made\? Answer no when page shows the choice applied already/);
+  assert.match(asked[0].instructions, /^The last input in task\.history made a choice, such as ticking a checkbox, choosing an option or entering a value\. Such a choice, made in an open form, panel or dialog that has its own Save, Confirm or Submit control, can stay local until that control is used\. Is this EXACT proposed_action that control for the choice, .* and does task\.goal need the choice applied \(saved, submitted, confirmed or matched\), not only made\? Answer no when page shows the choice applied already/);
   assert.equal(result.rounds[1].applies_choice, 0.9);
   assert.equal(typeof result.rounds[1].side_effect_guard, "number");
 });

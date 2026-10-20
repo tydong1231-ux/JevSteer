@@ -64,11 +64,14 @@ the remote-write journal. Both requests are told that `proposed_action.element`
 is the one control the action uses, and that its `context`, the text of the
 row or box around it, can name controls beside it that the action does not
 use: ccMonet's Save as Draft sits next to Approve ("Save as Draft Approve").
-The effect request is also told that a checkbox ticked, an option chosen or a
-value entered in an open form, panel or dialog with its own Save, Confirm or
-Submit control stays local until that control is used: on ccMonet's Manual
-Match, the tick of the invoice to match was judged a write, and the run stopped
-for a host review before Confirm match.
+The effect request is also told that, when `guidance` says a form, panel or
+dialog applies a choice only with its own Save, Confirm or Submit control
+("Ticking a candidate only selects it; Confirm match applies the match"), a
+checkbox ticked, an option chosen or a value entered there stays local until
+that control is used. On ccMonet's Manual Match, the tick of the invoice to
+match was judged a write, and the run stopped for a host review before Confirm
+match. Without such a fact, a control there may save on its own and is judged
+as any other, so an autosaving toggle keeps its replay barrier.
 With more than one constraint, the constraint request also says which one the
 action would most likely break. A `constraint_blocked` stop names it in `info`
 and as `pending.constraint` (with one constraint, it is that one), so the host
@@ -663,10 +666,13 @@ filling, for widgets that parse fields on key events.
 
 A number field that groups the digits it takes (ccMonet's Unit Price shows a
 typed 5000 as `5,000`) is confirmed when it shows the same number with
-grouping marks between groups of three, decimals added or a trailing percent
-sign (`field_value_number`), and is not offered for TYPE again. A currency
-sign, a unit, another number, or a mark that does not part groups of three
-(`5.000` for 5000) is no match. The digits are compared as text, not as a
+grouping marks between groups of three or zeros added after the decimal point
+(`field_value_number`), and is not offered for TYPE again. Only a field the
+page says holds a number (`type=number`, role `spinbutton`) may also drop
+leading zeros, a plus sign or a trailing percent sign: in a text field, `123`
+for a typed `00123` is a reference cut short, and `10%` for `10` another
+value, so the TYPE fails. A currency sign, a unit, another number, or a mark
+that does not part groups of three (`5.000` for 5000) is no match. The digits are compared as text, not as a
 JavaScript number, which keeps about 16 of them: a long account or reference
 number one digit off is no match either.
 

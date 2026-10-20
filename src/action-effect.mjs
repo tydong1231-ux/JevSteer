@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { brief, elementFingerprint, pageDiff, squash } from "./page-model.mjs";
 import { locateAfterAction } from "./element-identity.mjs";
 import { sameDateText } from "./date-text.mjs";
-import { sameNumberText } from "./number-text.mjs";
+import { numericField, sameNumberText } from "./number-text.mjs";
 
 // Kapture snapshots give rich-text editors and custom textboxes no value; their
 // content is element text, whitespace-collapsed and cut to this many chars.
@@ -43,7 +43,7 @@ export function verifyActionEffect(before, after, action) {
     // A date picker rewrites a committed date in its own format: 2026/01/01.
     if (sameDateText(actual, expected)) return { status: "confirmed", check: "field_value_date" };
     // A number field groups the digits it took: 5000 shows as 5,000.
-    if (sameNumberText(actual, expected)) return { status: "confirmed", check: "field_value_number" };
+    if (sameNumberText(actual, expected, { numeric: numericField(current) })) return { status: "confirmed", check: "field_value_number" };
     return { status: "failed", check: "field_value" };
   }
 

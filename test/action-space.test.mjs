@@ -377,6 +377,28 @@ test("a combobox that shows an option counts as typed only when the option holds
   }
 });
 
+// A text field that shows 123 for a typed 00123 cut it short; only a field
+// that holds a number may drop the zeros (Codex on b2d32ae).
+test("a typed number a text field shows cut short is offered for TYPE again; one it shows grouped, or a number field took, is not", async () => {
+  for (const [field, typedText, shows, typable] of [
+    [{ type: "text", role: "textbox", label: "Reference" }, "00123", "123", true],
+    [{ type: "text", role: "textbox", label: "Discount" }, "10", "10%", true],
+    [{ type: "text", role: "textbox", label: "Unit Price" }, "5000", "5,000", false],
+    [{ type: "number", role: "spinbutton", label: "Quantity" }, "00123", "123", false],
+  ]) {
+    const el = { i: 0, selector: "#field", tag: "input", value: "", ...field };
+    const before = { url: "https://erp.test/invoice", title: "Invoice", text: "Invoice", metrics: {}, elements: [{ ...el, value: typedText }] };
+    const typed = [{ field: rememberField(before.elements[0], before), url: before.url, value: typedText }];
+    let offered;
+    const runtime = new JevSteerRuntime({ decider: async (_state, questions) => {
+      offered = questions;
+      return { answers: { tool: { choice: "none", probabilities: { none: 1 } } }, ms: 1, tokens: 1 };
+    } });
+    await runtime.decide({ ...before, elements: [{ ...el, value: shows }] }, normalizeTaskContract({ goal: "Fill in the invoice" }), {}, [], null, null, typed);
+    assert.equal(Object.keys(offered.type_target?.criteria || {}).includes("0"), typable, `${field.label}: typed ${typedText}, shows ${shows}`);
+  }
+});
+
 test("DONE is judged by the success criteria when the host gives them", async () => {
   const asked = [];
   const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
