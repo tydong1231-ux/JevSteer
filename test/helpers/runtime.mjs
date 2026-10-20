@@ -29,6 +29,7 @@ export function scriptedDecider(steps, { verifyScore = 0.99, inspect } = {}) {
     if (questions.goal_complete) answers = verification(questions, verifyScore);
     else if (questions.violates) answers = { violates: { noul: 0.01 } };
     else if (questions.action_side_effect) answers = {};
+    else if (questions.applies_choice) answers = {};
     else if (questions.option) answers = { option: { choice: Object.keys(questions.option.criteria)[0] } };
     else if (questions.key) answers = { key: { choice: "Escape" } };
     else {

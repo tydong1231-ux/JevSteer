@@ -32,6 +32,9 @@ export const config = {
   // At or above this, the guards judge that the task does not call for the
   // field an action sets or empties (see checkActionEffects): nothing is sent.
   unrequestedAt: num("JEVSTEER_UNREQUESTED_AT", 0.7),
+  // At or above this, Jev's next click applies the choice it just made (see
+  // appliesChoice): a goal Jev half believes reached waits for that click.
+  appliesChoiceAt: num("JEVSTEER_APPLIES_CHOICE_AT", 0.5),
   nextStepClearAt: num("JEVSTEER_NEXT_STEP_CLEAR_AT", 0.45),
   maxAutoRecoveries: num("JEVSTEER_MAX_AUTO_RECOVERIES", 2),
   modelPageTextChars: num("JEVSTEER_PAGE_TEXT_CHARS", 8000),

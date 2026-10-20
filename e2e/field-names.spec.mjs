@@ -317,6 +317,26 @@ test("a select's clear button is a button that names the field it empties, and a
   } finally { await driver.close(); }
 });
 
+// A multi-select's chosen options, as antd draws them: a tag each.
+const tags = (id, caption, values) => col(caption, `<div class="ant-select ant-select-multiple"><div class="ant-select-selector"><div class="ant-select-selection-overflow">${values.map((v) => `<div class="ant-select-selection-overflow-item"><span class="ant-select-selection-item" title="${v}"><span class="ant-select-selection-item-content">${v}</span><span class="ant-select-selection-item-remove" unselectable="on" aria-hidden="true"><span role="img" aria-label="close" class="anticon anticon-close"><svg width="10" height="10"></svg></span></span></span></div>`).join('')}<div class="ant-select-selection-overflow-item ant-select-selection-overflow-item-suffix"><div class="ant-select-selection-search"><input id="${id}" class="ant-select-selection-search-input" role="combobox" type="search" aria-expanded="false" autocomplete="off" value=""></div></div></div></div></div>`);
+
+// An option's own text can hold a comma (Codex on 37c131e): the options are
+// read apart, as the page parts them, never split from the joined text.
+test("a multi-select's chosen options are read apart, as the page parts them; a secret field's are not read", async ({ page }) => {
+  await page.setContent(`<style>.ant-select-multiple .ant-select-selection-overflow { display: flex; gap: 4px; } .ant-select{border:1px solid #ccc;min-height:24px}</style>
+    <h1>Edit contact</h1>
+    <div class="ant-row">${tags('tracking', 'Tracking Category', ['HQ', 'Changi'])}${tags('owner', 'Owner', ['Doe, John'])}${tags('tokens', 'API token', ['tok-1', 'tok-2'])}</div>`);
+  const { driver, id } = await driverFor(page);
+  try {
+    const { elements } = await driver.observe(id);
+    expect(elements.filter((e) => e.role === 'combobox').map((e) => [e.label, e.display, e.display_items])).toEqual([
+      ['Tracking Category', 'HQ, Changi', ['HQ', 'Changi']],
+      ['Owner', 'Doe, John', undefined],
+      ['API token', '[REDACTED]', undefined],
+    ]);
+  } finally { await driver.close(); }
+});
+
 test('Jev is told which field a clear button empties, and so are the guards and the run history', async ({ page }, testInfo) => {
   await page.setContent(clearableInvoice);
   const seen = {};

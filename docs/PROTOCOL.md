@@ -245,10 +245,13 @@ heads give it as `shows`: unnamed selects, such as ccMonet's filter row
 ("Status", "Is", "Draft"), are told apart by it. An unnamed one that takes
 typing (the field select of that row) is offered for TYPE by it, and the
 value chooser and the guards hear it as `shows` too. A secret field's is never
-given. A select that already shows the value Jev would type, as one of a
-multi-select's tags or as all it shows (ccMonet's Tracking Category showing
-"Changi"), gets nothing typed: typing it there again would only put it into
-the select's search box. Jev looks again with that in its history
+given. A multi-select's chosen options are also read apart, as the page parts
+them (`display_items`, with two or more): an option's own text can hold a
+comma ("Doe, John"). A select that already shows the value Jev would type, as
+one of a multi-select's options or as all it shows (ccMonet's Tracking
+Category showing "Changi"), gets nothing typed: typing it there again would
+only put it into the select's search box. The value must be a whole option: a
+single option "Changi, Singapore" does not hold back "Changi". Jev looks again with that in its history
 (`recovery: "reobserve"`, `reason: "already_shown"`), and the third such choice
 stops the milestone as `needs_guidance`. A value that a shown option holds
 only as part of its text ("Changi" in "Changi Airport") is still typed. A field this run
@@ -453,7 +456,7 @@ secret field's popup is left out. It also includes each field's `hint` and
 `row`, which tells which line it is on, also where the text that shows them is
 past the page text's cutoff. So it includes whether the page marks a field
 `required` or `readonly`, which a page can change with no text around the field
-changing.
+changing, and a multi-select's options one by one (`display_items`).
 A toast, such as antd's "Update successfully" message (under any class prefix),
 a toast or snackbar, or another fixed-position alert or status region, goes away
 on its own, so the state a ticket binds leaves its text out; the host still sees
@@ -527,14 +530,22 @@ again after it had gone through): that input is not sent, and when the result
 goes to the host, `info` says which input Jev chose and that it was not sent.
 When the check fails, the milestone stops as `action_failed`, as before.
 
-Jev's done questions are told that a choice made on an open form or dialog (a
-ticked checkbox, a chosen option, a typed value) is applied only when the
-control that applies it (Save, Confirm, Submit) is used after it: while the
-history shows no such use and the page still shows that form or dialog, a goal
-that needs the choice saved, submitted, confirmed or matched is not reached,
-unless the page shows it applied in a status or a message. On ccMonet's Manual
-Match, Jev found the deposit reconciled once it ticked the invoice, before
-Confirm match.
+When Jev half believes the goal reached (done 0.6 to 0.85, not from the host's
+assertions) and its next step is a click, or Enter, on a target it is sure of,
+right after an input that changed nothing remote (a ticked checkbox, a chosen
+option, a typed value), Jev is asked about that exact click
+(`applies_choice`): is it the control that applies that choice, such as the
+Save, Confirm, Submit or Match of the form, panel or dialog the choice was made
+in, and does the goal need the choice applied, not only made? At
+`JEVSTEER_APPLIES_CHOICE_AT` (0.5) or above, the goal waits for that click,
+which goes through every guard like any input; the round shows
+`applies_choice`. A missing answer holds nothing back. On ccMonet's Manual
+Match, Jev ticked the invoice, half believed the deposit matched (0.61) and
+chose Confirm match (0.97), and the run stopped for a host review before that
+click. Told in the done questions that such a choice waits for its control,
+Jev still found the deposit matched, and judged a filled invoice not done
+(0.26) for its unused Save; the done questions ask only whether the page shows
+the goal reached.
 
 Multiple remote writes need separately reviewable outcomes. If an earlier write is
 unconfirmed, independently inspect and resolve it before the next mutation; do not

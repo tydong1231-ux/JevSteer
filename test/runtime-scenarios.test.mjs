@@ -772,6 +772,75 @@ test("the side-effect guard is told that a choice in an open form or dialog stay
   assert.match(asked, /Do not attribute a later submit step to this action: a checkbox ticked, an option chosen or a value entered in an open form, panel or dialog that has its own Save, Confirm or Submit control stays local until that control is used, which is the later submit step\. task\.guidance and task\.constraints come from the host/);
 });
 
+// ccMonet's Manual Match (Mac runs on 3fa0a57, 37c131e and b2d32ae): Jev
+// ticked the invoice to match, half believed the deposit matched (0.61) and
+// chose Confirm match next (0.97), yet the run stopped for a host review
+// before that click.
+function manualMatch() {
+  const tick = { i: 0, selector: "#pick", tag: "input", type: "checkbox", role: "checkbox", label: "", context: "2026/4/18 JevSteer QA CHAIN1020A INVWIGG7 69,950.00", checked: false };
+  const confirm = { i: 1, selector: "#confirm", tag: "button", role: "button", label: "Confirm match" };
+  const k = new MemoryKapture({ url: "https://erp.test/reconcile", title: "Reconcile", text: "Manual Match 2026/4/18 69,950.00 JevSteer QA CHAIN1020A INVWIGG7 69,950.00 Confirm match", elements: [tick, confirm] });
+  k.onCommand = (command, args) => {
+    if (command !== "click") return;
+    if (args?.selector === "#pick") k.page.elements[0].checked = true;
+    if (args?.selector === "#confirm") Object.assign(k.page, { text: "Reconciled 2026/4/18 69,950.00 INVWIGG7", elements: [] });
+  };
+  return k;
+}
+const clicked = (k) => k.commands.filter((c) => c.command === "click").map((c) => c.args.selector);
+// Answers whether the click applies the choice; the rest as scripted.
+const applying = (steps, applies, asked) => {
+  const scripted = scriptedDecider(steps);
+  return async (state, questions) => {
+    if (!questions.applies_choice) return scripted(state, questions);
+    asked.push({ element: state.proposed_action.element, instructions: questions.applies_choice.instructions });
+    return { answers: applies == null ? {} : { applies_choice: { noul: applies } }, ms: 1, tokens: 1 };
+  };
+};
+const reconcile = "Reconcile the 69,950.00 deposit of 2026/4/18 with invoice INVWIGG7";
+
+test("a goal Jev half believes reached waits for the click that applies the choice it just made", async () => {
+  const k = manualMatch();
+  const asked = [];
+  const steps = [{ tool: "click", target: 0 }, { tool: "click", target: 1, done: 0.61, done_change: 0.61, side_effect: 0.9 }, { tool: "none", done: 0.95 }];
+  const result = await memoryRuntime(k, applying(steps, 0.9, asked)).run(reconcile, { evidenceLevel: "none", explain: true });
+  assert.equal(result.status, "completed_verified");
+  // Confirm match was sent before the goal was checked, through the guards.
+  assert.deepEqual(clicked(k), ["#pick", "#confirm"]);
+  assert.deepEqual(asked.map((a) => a.element), ['button "Confirm match"']);
+  assert.match(asked[0].instructions, /^The last input in task\.history made a choice, such as ticking a checkbox, choosing an option or entering a value\. Such a choice in an open form, panel or dialog that has its own Save, Confirm or Submit control stays local until that control is used\. Is this EXACT proposed_action that control for the choice, .* and does task\.goal need the choice applied \(saved, submitted, confirmed or matched\), not only made\? Answer no when page shows the choice applied already/);
+  assert.equal(result.rounds[1].applies_choice, 0.9);
+  assert.equal(typeof result.rounds[1].side_effect_guard, "number");
+});
+
+test("a goal Jev half believes reached is checked when its next click does not apply that choice, or Jev is sure, or the last input was a write", async () => {
+  // The click does something else, or the answer is missing.
+  for (const applies of [0.1, undefined]) {
+    const k = manualMatch();
+    const asked = [];
+    const steps = [{ tool: "click", target: 0 }, { tool: "click", target: 1, done: 0.61, done_change: 0.61, side_effect: 0.9 }];
+    const result = await memoryRuntime(k, applying(steps, applies, asked)).run(reconcile, { evidenceLevel: "none" });
+    assert.equal(result.status, "completed_verified", String(applies));
+    assert.deepEqual(clicked(k), ["#pick"]);
+    assert.equal(asked.length, 1);
+  }
+  // Jev is sure the goal is reached; the last input already wrote; or the
+  // round may send no more input.
+  const half = { tool: "click", target: 1, done: 0.61, done_change: 0.61, side_effect: 0.9 };
+  for (const [steps, maxActions] of [
+    [[{ tool: "click", target: 0 }, { tool: "click", target: 1, done: 0.9, side_effect: 0.9 }]],
+    [[{ tool: "click", target: 0, side_effect: 0.9 }, half]],
+    [[{ tool: "click", target: 0 }, half], 1],
+  ]) {
+    const k = manualMatch();
+    const asked = [];
+    const result = await memoryRuntime(k, applying(steps, 0.9, asked)).run(reconcile, { evidenceLevel: "none", ...(maxActions ? { maxActions } : {}) });
+    assert.equal(result.status, "completed_verified");
+    assert.deepEqual(clicked(k), ["#pick"]);
+    assert.deepEqual(asked, []);
+  }
+});
+
 // ccMonet's Tracking Category is a multi-select: its list stays open after a
 // choice, and a click on a chosen option takes it out. Filling an invoice
 // line, Jev chose "HQ", clicked it again and lost it (Mac run on 9a83708).
@@ -902,10 +971,12 @@ test("a field no task value belongs in gets nothing typed, and Jev looks again; 
 // ccMonet's invoice line (Mac run on 3fa0a57): a new run typed "Changi" into
 // a Tracking Category that already showed the tag "Changi", and stopped.
 test("a select that already shows the value gets nothing typed, and Jev looks again; one who insists is stopped", async () => {
-  const tracking = (display) => ({ i: 0, selector: "#tracking", tag: "input", type: "search", role: "combobox", label: "Tracking Category", column: "Tracking Category", row: 1, value: "", display });
+  // A multi-select's chosen options come apart (display_items), as the page
+  // parts them.
+  const tracking = (display, items) => ({ i: 0, selector: "#tracking", tag: "input", type: "search", role: "combobox", label: "Tracking Category", column: "Tracking Category", row: 1, value: "", display, ...(items ? { display_items: items } : {}) });
   const values = { tracking_category: "changi" };
   const typed = (k) => k.commands.filter((c) => ["fill", "clear", "type"].includes(c.command)).length;
-  let k = new MemoryKapture({ elements: [tracking("HQ, Changi")] });
+  let k = new MemoryKapture({ elements: [tracking("HQ, Changi", ["HQ", "Changi"])] });
   let told;
   const steps = scriptedDecider([() => decision({ tool: "type", target: 0 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
   let result = await memoryRuntime(k, steps).run("Tag line 1 with Changi", { values, maxActions: 4, evidenceLevel: "none" });
@@ -923,9 +994,10 @@ test("a select that already shows the value gets nothing typed, and Jev looks ag
   assert.equal(result.actions.filter((a) => a.reason === "already_shown").length, 2);
   assert.equal(typed(k), 0);
   // Another option, or one with the value only as part of its text, is not
-  // the value: the select is typed into to find it.
-  for (const display of ["HQ", "Changi Airport"]) {
-    k = new MemoryKapture({ elements: [tracking(display)] });
+  // the value: the select is typed into to find it. So is one option whose
+  // own text holds a comma: it is not split into two (Codex on 37c131e).
+  for (const [display, items] of [["HQ"], ["Changi Airport"], ["Changi, Singapore"], ["HQ, Changi Airport", ["HQ", "Changi Airport"]]]) {
+    k = new MemoryKapture({ elements: [tracking(display, items)] });
     await memoryRuntime(k, scriptedDecider([{ tool: "type", target: 0 }, { tool: "none", done: 0.99 }])).run("Tag line 1 with Changi", { values, maxActions: 3, evidenceLevel: "none" });
     assert.ok(typed(k) > 0, display);
   }

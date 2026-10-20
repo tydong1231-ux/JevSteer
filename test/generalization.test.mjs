@@ -150,6 +150,9 @@ test("observation recognizes values and toggle state but ignores generated selec
   assert.notEqual(observationSignature(a), observationSignature(page([{ ...a.elements[0], checked: true }])));
   // A select-like combobox holds no text once an option is picked; it shows it.
   assert.notEqual(observationSignature(a), observationSignature(page([{ ...a.elements[0], display: "Acme Ltd" }])));
+  // "Doe, John" is one option, or two: a multi-select's options are read apart.
+  const one = page([{ ...a.elements[0], display: "Doe, John" }]);
+  assert.notEqual(observationSignature(one), observationSignature(page([{ ...one.elements[0], display_items: ["Doe", "John"] }])));
 });
 
 test("unrelated live text cannot authorize a duplicate server submission", async () => {

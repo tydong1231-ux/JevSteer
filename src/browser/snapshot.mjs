@@ -378,8 +378,9 @@ export function readDOM(elements, nodes) {
     const search = searchHint(e);
     return label && search ? `${label} (search)` : label || (search && 'Search');
   };
-  // The value a select-like combobox shows when its input holds only the
-  // search text, as in antd and react-select.
+  // The values a select-like combobox shows when its input holds only the
+  // search text, as in antd and react-select: one, or each option a
+  // multi-select shows chosen, as the page parts them.
   const shown = (e) => {
     if (role(e) !== 'combobox' || e.tagName === 'SELECT' || !('value' in e) || String(e.value)) return undefined;
     let box = e;
@@ -389,7 +390,8 @@ export function readDOM(elements, nodes) {
       box = up;
     }
     const items = [...box.querySelectorAll(SHOWN)].filter((n) => !n.contains(e) && !n.querySelector(SHOWN));
-    return clean(items.map((n) => text(n, 100)).filter(Boolean).join(', '), 200) || undefined;
+    const texts = items.map((n) => text(n, 100)).filter(Boolean);
+    return texts.length ? texts : undefined;
   };
   // A placeholder that says how to fill a field ("Select date", "请输入",
   // "YYYY-MM-DD") names no field: on ccMonet every date says "Select date".
@@ -614,6 +616,7 @@ export function readDOM(elements, nodes) {
     // sits in its column too.
     const column = (e.matches(TYPABLE) || e.matches(CLEAR)) && cellHeader(e) || undefined;
     const ariaOff = ancestors(e).filter((p) => p.getAttribute('aria-disabled') === 'true');
+    const shownValues = shown(e);
     const descriptor = {
       ordinal: index, node: nodeOf(e), tag: e.tagName.toLowerCase(), role: role(e), type: e.getAttribute('type') || (e.tagName === 'INPUT' ? e.type : undefined),
       label, text: own, name: e.getAttribute('name') || '', placeholder: e.getAttribute('placeholder') || '',
@@ -622,7 +625,10 @@ export function readDOM(elements, nodes) {
       link_target: e.matches('a[href]') && e.getAttribute('target') || undefined,
       download: e.matches('a[href]') && e.hasAttribute('download') || undefined,
       value: 'value' in e ? String(e.value) : e.isContentEditable ? e.innerText : undefined,
-      display: shown(e),
+      display: shownValues && clean(shownValues.join(', '), 200) || undefined,
+      // Each chosen option of a multi-select apart: an option's own text can
+      // hold a comma ("Doe, John"), so the joined display cannot be split.
+      display_items: shownValues?.length > 1 ? shownValues.slice(0, 20) : undefined,
       column,
       // Which row of its table the field is in (see rowNumber), when the
       // table heads its columns: the rows of a table that only lays a form
@@ -762,6 +768,7 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
       if (sensitiveField(target)) {
         target.value = '[REDACTED]'; target.text = '';
         if (target.display) target.display = '[REDACTED]';
+        delete target.display_items;
       }
       refs.set(selector, { locator: query.nth(e.ordinal), frame, target });
       e.target = target;
