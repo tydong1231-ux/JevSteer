@@ -64,6 +64,11 @@ the remote-write journal. Both requests are told that `proposed_action.element`
 is the one control the action uses, and that its `context`, the text of the
 row or box around it, can name controls beside it that the action does not
 use: ccMonet's Save as Draft sits next to Approve ("Save as Draft Approve").
+The effect request is also told that a checkbox ticked, an option chosen or a
+value entered in an open form, panel or dialog with its own Save, Confirm or
+Submit control stays local until that control is used: on ccMonet's Manual
+Match, the tick of the invoice to match was judged a write, and the run stopped
+for a host review before Confirm match.
 With more than one constraint, the constraint request also says which one the
 action would most likely break. A `constraint_blocked` stop names it in `info`
 and as `pending.constraint` (with one constraint, it is that one), so the host
@@ -86,7 +91,12 @@ even one this run entered, and so does a value the task never mentions, that
 this run did not enter and that fits the field (a default, a saved setting).
 One this run entered that the task does not ask for there, one that
 contradicts the task or belongs in another field, or one in a field the page
-marks invalid, may be emptied. At `JEVSTEER_UNREQUESTED_AT`
+marks invalid, may be emptied. A click on an option its open list shows chosen
+takes that option out of the field (a multi-select's list stays open after a
+choice), and is asked the same way: an option the task asks for there stays,
+even one this run chose, and so does one the task never mentions that this run
+did not choose. Its refusal reads `combobox "Tracking Category" without HQ`.
+At `JEVSTEER_UNREQUESTED_AT`
 (default 0.7) or above no input is sent: Jev looks again with the refusal in
 its history (`recovery: "reobserve"`, `reason: "not_requested"`, and a detail
 such as `combobox "Preferred Name" -> item_a`), and the
@@ -264,7 +274,11 @@ takes typing (a select with search, whose input is not read-only) lists only
 the options that match what is typed there: Jev is told to TYPE the option's
 text into it, as `values` or `guidance` give it, rather than scroll its list
 (on ccMonet's invoice Jev scrolled the Customer list instead), and to SCROLL
-only to look through options whose text they do not give.
+only to look through options whose text they do not give. The question whether
+the next step is clear, asked apart, is told that typing such an option's text
+into it is a clear next step: on ccMonet's invoice, Jev chose to type the
+Category the guidance gave into its open list but did not find that clear, and
+the run stopped for guidance three times.
 
 antd draws a select's options in a portal at the end of `<body>`, as divs with
 `aria-selected` and no role, and keeps `role=option` copies in a 0×0 listbox
@@ -437,7 +451,9 @@ its cutoff, so results that change before acceptance make the ticket stale. A
 secret field's popup is left out. It also includes each field's `hint` and
 `column`, which tell the host which field an unnamed one is, and its table
 `row`, which tells which line it is on, also where the text that shows them is
-past the page text's cutoff.
+past the page text's cutoff. So it includes whether the page marks a field
+`required` or `readonly`, which a page can change with no text around the field
+changing.
 A toast, such as antd's "Update successfully" message (under any class prefix),
 a toast or snackbar, or another fixed-position alert or status region, goes away
 on its own, so the state a ticket binds leaves its text out; the host still sees
@@ -510,6 +526,15 @@ guarded input while that write is still unconfirmed (ccMonet's Approve, chosen
 again after it had gone through): that input is not sent, and when the result
 goes to the host, `info` says which input Jev chose and that it was not sent.
 When the check fails, the milestone stops as `action_failed`, as before.
+
+Jev's done questions are told that a choice made on an open form or dialog (a
+ticked checkbox, a chosen option, a typed value) is applied only when the
+control that applies it (Save, Confirm, Submit) is used after it: while the
+history shows no such use and the page still shows that form or dialog, a goal
+that needs the choice saved, submitted, confirmed or matched is not reached,
+unless the page shows it applied in a status or a message. On ccMonet's Manual
+Match, Jev found the deposit reconciled once it ticked the invoice, before
+Confirm match.
 
 Multiple remote writes need separately reviewable outcomes. If an earlier write is
 unconfirmed, independently inspect and resolve it before the next mutation; do not
@@ -630,7 +655,9 @@ typed 5000 as `5,000`) is confirmed when it shows the same number with
 grouping marks between groups of three, decimals added or a trailing percent
 sign (`field_value_number`), and is not offered for TYPE again. A currency
 sign, a unit, another number, or a mark that does not part groups of three
-(`5.000` for 5000) is no match.
+(`5.000` for 5000) is no match. The digits are compared as text, not as a
+JavaScript number, which keeps about 16 of them: a long account or reference
+number one digit off is no match either.
 
 ## Runtime limits
 

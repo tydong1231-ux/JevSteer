@@ -755,6 +755,23 @@ test("a field the task does not ask to empty keeps what it holds: its clear butt
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
 });
 
+// ccMonet's Manual Match (Mac runs on 3fa0a57 and 37c131e): the tick of the
+// invoice to match was judged a write, and the run stopped for a host review
+// before Confirm match.
+test("the side-effect guard is told that a choice in an open form or dialog stays local until its Save or Confirm control is used", async () => {
+  let asked;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked = questions.action_side_effect?.instructions;
+    return { answers: { action_side_effect: { noul: 0.1 }, action_irreversible: { noul: 0.01 } }, ms: 1, tokens: 1 };
+  });
+  const tick = { i: 0, selector: "#pick", tag: "input", type: "checkbox", role: "checkbox", label: "", context: "2026/4/17 JevSteer QA CHAIN1020A INVMNB5Q 50.00", checked: false };
+  const confirm = { i: 1, selector: "#confirm", tag: "button", role: "button", label: "Confirm match" };
+  const page = { url: "https://erp.test/reconcile", title: "Reconcile", text: "Manual Match 2026/4/17 JevSteer QA CHAIN1020A INVMNB5Q 50.00 Confirm match", elements: [tick, confirm] };
+  const contract = normalizeTaskContract({ goal: "Reconcile the 50.00 deposit of 2026/4/17 with invoice INVMNB5Q" });
+  assert.equal((await runtime.checkActionEffects(page, contract, { tool: "click", el: tick }, [])).sideEffect, 0.1);
+  assert.match(asked, /Do not attribute a later submit step to this action: a checkbox ticked, an option chosen or a value entered in an open form, panel or dialog that has its own Save, Confirm or Submit control stays local until that control is used, which is the later submit step\. task\.guidance and task\.constraints come from the host/);
+});
+
 // ccMonet's Tracking Category is a multi-select: its list stays open after a
 // choice, and a click on a chosen option takes it out. Filling an invoice
 // line, Jev chose "HQ", clicked it again and lost it (Mac run on 9a83708).
@@ -803,6 +820,55 @@ test("an option chosen in one table line's list is still offered in another line
     await runtime.decide({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice", elements: multiSelect(row, { hq: true }) }, contract, {}, [], null, null, [], chose);
     assert.deepEqual(offered, keys, `table line ${row}`);
   }
+});
+
+// A click on an option its open list shows chosen takes it out of a
+// multi-select's field. Asked whether it sets a field the task calls for,
+// the guard could pass it because the task asks for that option (Codex on
+// 3fa0a57).
+test("a click on a chosen option is asked as taking it out of the field, and one the task asks for stays chosen", async () => {
+  const tagged = (selected) => new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Tracking Category HQ", elements: multiSelect(1, selected) });
+  const contract = normalizeTaskContract({ goal: "Add HQ to line 1's Tracking Category" });
+  const asked = [];
+  let proposed;
+  const guard = (unrequested) => async (state, questions) => {
+    if (!questions.action_side_effect) return undefined;
+    if (questions.action_unrequested) asked.push(questions.action_unrequested.instructions);
+    proposed = state.proposed_action;
+    return { answers: { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, action_unrequested: { noul: unrequested } }, ms: 1, tokens: 1 };
+  };
+  let runtime = memoryRuntime(new MemoryKapture(), guard(0.91));
+  const page = tagged({ hq: true, woodlands: false }).page;
+  const takeOut = runtime.resolve(page, decision({ tool: "click", target: 1 }), {});
+  assert.equal((await runtime.checkActionEffects(page, contract, takeOut, [])).unrequested, 0.91);
+  assert.match(asked.at(-1), /^This EXACT proposed_action clicks an option that is chosen now \(proposed_action\.selected\) in the open list of the field proposed_action\.option_of names: in a list that allows several choices, such as a multi-select's, the click takes that option out of the field\./);
+  assert.match(asked.at(-1), /Answer yes when the task asks for this option in this field \(task\.goal, task\.success_criteria, task\.values or task\.guidance name it for this field\), even one this run chose; /);
+  assert.deepEqual([proposed.element, proposed.selected, proposed.option_of.element], ['option "HQ"', true, 'combobox "Tracking Category"']);
+  // An option it shows unchosen sets the field.
+  const choose = runtime.resolve(page, decision({ tool: "click", target: 2 }), {});
+  await runtime.checkActionEffects(page, contract, choose, []);
+  assert.match(asked.at(-1), /^This EXACT proposed_action sets a field\./);
+  assert.equal(proposed.selected, false);
+
+  // In a run, nothing is sent: Jev is told the option stays.
+  const clicks = (k) => k.commands.filter((c) => c.command === "click").map((c) => c.args.selector);
+  let k = tagged({ hq: true });
+  let told;
+  const steps = scriptedDecider([() => decision({ tool: "click", target: 1 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.9)(state, questions)) || steps(state, questions));
+  let result = await runtime.run("Add HQ to line 1's Tracking Category", { maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual(clicks(k), []);
+  assert.equal(k.page.elements[1].selected, true);
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "not_requested", false]);
+  assert.equal(told.detail, 'combobox "Tracking Category" without HQ: the task does not ask to take that option out of this field, so nothing was sent. Leave the field as it is, unless task.goal, task.values or task.guidance call for it.');
+  assert.equal(result.status, "completed_verified");
+  // When the task asks to take it out, the click is sent.
+  k = tagged({ hq: true });
+  const asks = scriptedDecider([() => decision({ tool: "click", target: 2 }), () => decision({ tool: "none", done: 0.99 })]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.05)(state, questions)) || asks(state, questions));
+  result = await runtime.run("Take Woodlands out of line 1's Tracking Category", { maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual(clicks(k), ["#woodlands-1"]);
+  assert.equal(asked.at(-1).startsWith("This EXACT proposed_action clicks an option that is chosen now"), true);
 });
 
 // ccMonet's invoice (Mac rerun on 9a83708): filling the lines, Jev chose Due

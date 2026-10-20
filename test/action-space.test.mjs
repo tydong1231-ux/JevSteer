@@ -192,25 +192,33 @@ test("an open combobox that takes typing is named to Jev as one to type an optio
   const customer = { i: 0, selector: "#customer", tag: "input", role: "combobox", label: "Customer", value: "", expanded: true, more_options: "below" };
   const options = [1, 2].map((i) => ({ i, selector: `#o${i}`, tag: "div", role: "option", label: `Customer ${i}`, popup_of: 0 }));
   let tool;
+  let clear;
   const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
     tool = questions.tool;
+    clear = questions.next_step_clear;
     const answers = Object.fromEntries(Object.entries(questions).map(([name, q]) => [name, q.type === "noul" ? { noul: 0.01 } : choice(q.criteria, "none")]));
     return { answers, ms: 1, tokens: 1 };
   } });
   const look = (field) => runtime.decide({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice", elements: [{ ...customer, ...field }, ...options] },
     normalizeTaskContract({ goal: "Bill JevSteer QA CHAIN1020A" }), { customer: "JevSteer QA CHAIN1020A", amount: "50" }, []);
   const note = '[0] combobox "Customer" is open and takes typing: it lists the options that match what is typed there. To reach an option its open list does not show, TYPE the option\'s text (as task.values or task.guidance give it) into the combobox, rather than scrolling the list.';
+  // Whether the next step is clear is asked apart: it is told too (ccMonet's
+  // Category, Mac run on 37c131e).
+  const clearNote = '[0] combobox "Customer" is open and takes typing: typing into it the text of an option that task.values or task.guidance give for that field is a clear next step.';
   await look({});
   assert.ok(tool.instructions.endsWith(`${note} Choose SCROLL only to look through options whose text they do not give.`), tool.instructions);
   assert.doesNotMatch(tool.instructions, /more_options/);
+  assert.ok(clear.instructions.endsWith(`multiple business transitions are similarly plausible. ${clearNote}`), clear.instructions);
   await look({ more_options: undefined });
   assert.ok(tool.instructions.endsWith(note), tool.instructions);
+  assert.ok(clear.instructions.endsWith(clearNote), clear.instructions);
   // One that takes no typing (antd's select without search keeps its input
   // read-only), or a closed one, is not named. Its list is scrolled.
   for (const [other, scrolled] of [[{ readonly: true }, true], [{ expanded: false }, false]]) {
     await look(other);
     assert.doesNotMatch(tool.instructions, /takes typing/);
     assert.equal(/more_options/.test(tool.instructions), scrolled);
+    assert.ok(clear.instructions.endsWith("multiple business transitions are similarly plausible."), clear.instructions);
   }
 });
 
@@ -380,6 +388,20 @@ test("DONE is judged by the success criteria when the host gives them", async ()
   await runtime.decide(p, normalizeTaskContract({ goal: "Search for vendor CP-MEIJI" }), {}, []);
   assert.match(asked[0], /task\.success_criteria say what achieved looks like: check each of them against page as it is now, including page\.popup\.$/);
   assert.doesNotMatch(asked[1], /success_criteria/);
+});
+
+// ccMonet's Manual Match (Mac runs on 3fa0a57 and 37c131e): Jev found the
+// deposit reconciled once it ticked the invoice, before Confirm match.
+test("DONE and DONE_CHANGE are told that a choice on an open form or dialog is applied only by the control that applies it", async () => {
+  let asked;
+  const runtime = new JevSteerRuntime({ decider: async (state, questions) => {
+    asked = questions;
+    return { answers: { ...Object.fromEntries(Object.entries(questions).filter(([, q]) => q.type === "noul").map(([k]) => [k, { noul: 0.01 }])), tool: { choice: "none", probabilities: { none: 1 } } }, ms: 1, tokens: 1 };
+  } });
+  await runtime.decide(page(), normalizeTaskContract({ goal: "Reconcile the 50.00 deposit of 2026/4/17 with invoice INVMNB5Q" }), {}, []);
+  const clause = "A choice made on an open form or dialog, such as a ticked checkbox, a chosen option or a typed value, is applied only when the control that applies it (Save, Confirm, Submit) is used after it. When task.history shows no use of that control since the choice, and page still shows the form or dialog with it, a goal that needs the choice saved, submitted, confirmed or matched is not achieved yet, unless page shows it applied, such as in a status or a message.";
+  assert.ok(asked.done.instructions.endsWith(`has been achieved? ${clause}`), asked.done.instructions);
+  assert.ok(asked.done_change.instructions.endsWith(`has task.goal been achieved? ${clause}`), asked.done_change.instructions);
 });
 
 test("the value chooser sees a field's table column and hint", async () => {

@@ -29,9 +29,12 @@ export function observationSignature(page) {
   // `display` is what a select-like combobox shows as its value. `hint` and
   // `column` say which field it is when it has no name of its own, and `row`
   // which line of its table it is on; the host reads them, also where the
-  // page text that shows them is past its cutoff.
+  // page text that shows them is past its cutoff. So it reads whether a field
+  // is marked required or read-only, which a page can change with no text
+  // around it changing: whether a form is complete, or a record locked, can
+  // rest on it (Codex on 3fa0a57).
   const state = [page.url, page.title, page.text, page.loading, page.elements.map((e) =>
-    [e.tag, e.role, e.label, e.hint, e.column, e.row, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.invalid, e.error_mark, e.options?.filter((o) => o.selected).map((o) => o.value)])];
+    [e.tag, e.role, e.label, e.hint, e.column, e.row, e.context, e.scope, e.value, e.display, e.checked, e.expanded, e.selected, e.disabled, e.readonly, e.required, e.invalid, e.error_mark, e.options?.filter((o) => o.selected).map((o) => o.value)])];
   if (page.page_id) state.push(page.page_id, page.frames, page.elements.map((e) => [e.form_key, e.record_key]));
   // What a focused field's popup says (search results) is read apart from
   // the page text, also past that text's cutoff, and a review can rest on it.

@@ -15,6 +15,19 @@ test("the same number with its digits grouped, or with decimals or a percent sig
   }
 });
 
+// A JavaScript number keeps about 16 digits: read as numbers, a long account
+// or reference number and one a digit off compared equal (Codex on 3fa0a57).
+test("numbers are compared digit by digit, however many digits they have", () => {
+  for (const [a, b] of [["9007199254740992", "9,007,199,254,740,993"], ["12345678901234567890", "12345678901234567891"], ["0.1", "0.1000000000000000055511151231257827"], ["1.0000000000000001", "1"]]) {
+    assert.equal(sameNumberText(a, b), false, `${a} ${b}`);
+    assert.equal(sameNumberText(b, a), false, `${b} ${a}`);
+  }
+  for (const [a, b] of [["9007199254740993", "9,007,199,254,740,993"], ["12345678901234567890", "12 345 678 901 234 567 890.000"], ["+5", "5"], ["-0", "0.00"], ["007", "7"], ["5.", "5"], ["0.10", ".1"]]) {
+    assert.equal(sameNumberText(a, b), true, `${a} ${b}`);
+    assert.equal(sameNumberText(b, a), true, `${b} ${a}`);
+  }
+});
+
 // ccMonet's Unit Price showed the typed 5000 as "5,000", and the run stopped
 // on a failed effect (Mac run on 9a83708).
 test("a typed number the field shows with its digits grouped is confirmed; another number fails", () => {

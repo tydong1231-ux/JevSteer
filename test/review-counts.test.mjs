@@ -161,3 +161,20 @@ test("a ticket goes stale when the table row a field is in changes", async () =>
   const receipt = await runtime.reviewResult({ tabId: "test", reviewId: result.host_review.review_id, decision: "accept", goalEvidence: "Line 2's Unit Price shows 50" });
   assert.equal(receipt.status, "host_review_stale");
 });
+
+// Whether a form is complete can rest on which fields the page marks
+// required, and whether a record is locked on which it makes read-only. A
+// page can change either with no text around the field changing (Codex on
+// 3fa0a57).
+test("a ticket goes stale when a field's required or read-only mark changes", async () => {
+  for (const key of ["required", "readonly"]) {
+    const field = { i: 0, tag: "input", role: "textbox", label: "Category", value: "", context: "", column: "Category", row: 1 };
+    const k = new MemoryKapture({ text: "Invoice", elements: [field] });
+    const runtime = memoryRuntime(k, scriptedDecider([{ tool: "none", done: 0.99 }]));
+    const result = await runtime.run("Check that line 1 has every field it needs", { verificationMode: "host", evidenceLevel: "none" });
+    assert.equal(result.status, "host_review_required", key);
+    k.page.elements = [{ ...field, [key]: true }];
+    const receipt = await runtime.reviewResult({ tabId: "test", reviewId: result.host_review.review_id, decision: "accept", goalEvidence: "Line 1's Category is not marked required" });
+    assert.equal(receipt.status, "host_review_stale", key);
+  }
+});
