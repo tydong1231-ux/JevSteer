@@ -46,10 +46,28 @@ constraint request sees the page text only. A missing constraint answer counts
 as a violation, and the constraint verdict is applied after the replay and
 journal gates. `allow_irreversible` does not lift a `constraint_blocked` stop:
 settle the doubt with a guidance fact the host has checked (for example, that no
-duplicate record exists) or change the constraint. The effect request treats
+duplicate record exists) or change the constraint. The constraint request takes
+`guidance` as such a fact, for example that an earlier attempt was rejected and
+created nothing. A save or submit the site refused with a validation message
+("Please fill in all required fields : Due Date") normally created nothing, so
+making it again once the form is fixed is not a duplicate, unless the page or
+the run history shows that a record was created. The effect request treats
 `guidance` and `constraints` as host facts about what a control does, so a fact
 such as "Generate only calculates the report" keeps a read-only button out of
 the remote-write journal.
+
+A TYPE or SELECT (also an option chosen from an open list) gets one more
+question with the effect questions: does it set a field the task does not call
+for, or put a task value into a field it does not belong in? A field that
+`goal`, `success_criteria`, `values` or `guidance` never mention, and that the
+page does not mark required or invalid (a tracking category, a tag, a
+reference), keeps what it holds. At `JEVSTEER_UNREQUESTED_AT` (default 0.7)
+or above no input is sent: Jev looks again with the refusal in its history
+(`recovery: "reobserve"`, `reason: "not_requested"`), and the third such
+choice stops the milestone as `needs_guidance`, naming the field. Name a field
+the task needs, and its value, in `guidance` or `values`. Jev's own operation
+question says the same: set only what the task asks for or the page marks
+required or invalid, and never pick a value of its own for any other field.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session.
@@ -215,8 +233,23 @@ combobox's open list covers it, that click is refused before the journal
 Any covered target is refused this way, and Jev looks again with the refusal
 in its history (`recovery: "reobserve"`, `reason: "target_covered"`), as after
 a stale target; the same choice a third time on the same page stops the run as
-`stuck`. A target that never becomes ready for another reason (it keeps
-moving, say) stops the run as `action_failed`, with nothing pending.
+`stuck`. A target that never becomes ready for another reason stops the run as
+`action_failed`, with nothing pending, and the error says what the browser
+waited for: `the target never became ready for input (it kept moving); no
+input was sent`, or it is not visible, the browser counts it as disabled, it
+is not editable, it stays outside the viewport, or it left the page.
+
+A field's clear button is a `button` named by its icon ("close-circle",
+"close"), with `clears`, the `[i]` of the field it empties, and that field's
+table `column`. antd draws a select's clear button, and the remove button of
+each value a multi-select shows, as an aria-hidden span with no role, at
+opacity 0 until the pointer is over the select; they are observed all the
+same, as are antd's date picker and input clear buttons. Any class prefix
+counts (`ant-select-clear`, `xyz-select-clear`). Jev's target heads show the
+field as `clears: "[12] combobox \"Tracking Category\" showing \"Woodlands\""`,
+with a note that a click empties it and is for a field the task wants empty;
+the guards and the run history name it the same way. Two clear buttons on one
+invoice line read alike and are told apart by their column.
 
 A focused text field that holds text can draw results or suggestions under or
 over itself with no ARIA link, such as ccMonet's global search ("Vendor 1
@@ -225,7 +258,12 @@ field, later in the page, across from it and at most 64 px under or over it,
 that holds a control other than a text field, is the field's popup. Its
 controls carry `popup_of`, and Jev's page gets
 `popup: { field, field_value, shows }`, also in the first call of a two-stage
-decision on a large page. A secret field's popup is left out, because it can
+decision on a large page. In a target head such a control is marked
+`in_popup_of` its field, with a note that a click anywhere else closes the
+popup; the group summaries of a two-stage decision mark it too, and the popup's
+controls and their field are offered in its second call whichever groups were
+picked, because the popup is on top of the page (ccMonet's global search
+results lost to the bill rows behind them). A secret field's popup is left out, because it can
 echo what was typed there. The floating parts of the next line item (an antd
 select's search box, a remove button at the row's end), a fixed bar above the
 field and a footer far below it are not popups. A field this run typed keeps
@@ -235,6 +273,14 @@ goes, and an Enter Jev chooses for it goes to it.
 When the contract has success criteria, Jev's
 done question tells it to check each of them against the page as it is now,
 `page.popup` included.
+
+A click that did nothing but close what was open (a popup, a menu, a list) is
+marked `closed_only` in Jev's history: the address stayed, the page sent no
+request, controls went and none came, at most a few new words showed, and its
+target is still there. The page did not pass the click on to its target, so
+Jev's operation question tells it to click again if that target is still the
+next step: a wait does not bring its result. A bill row clicked while
+ccMonet's filter popup or search results were open opened nothing.
 
 If workflow knowledge is missing, return `needs_guidance` instead of guessing. The host patches the current milestone and resumes.
 A target head with only one offered target can also answer `__none__`: that
@@ -480,7 +526,8 @@ bounds all waits.
 With `JEVSTEER_LOG=1`, stderr gets one row per round: Jev's scores, the chosen
 action, `observe_ms` (watching the previous input or wait), `decide_ms` and
 `requests`. A guarded input adds a `guards` row with the effect and constraint
-verdicts and the action as the guards judged it: `judged_as`, the element (for
+verdicts (`unrequested_guard` too for a TYPE or SELECT), and the action as the
+guards judged it: `judged_as`, the element (for
 an option chosen from an open list, its combobox), the chosen `option`,
 `option_of` for a click on an open combobox's option, and the element's scope
 and context. `explain: true` returns the round

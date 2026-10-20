@@ -810,7 +810,7 @@ test('a target that never becomes ready is refused before any input', async ({ p
     const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Generate the report', verification_mode: 'host', max_actions: 2, evidence_level: 'none' });
     expect(result.status).toBe('action_failed');
     expect(result.info).toMatch(/^The browser refused this action before sending any input/);
-    expect(result.actions.map((a) => [a.action, a.error])).toEqual([['click', 'the target never became ready for input; no input was sent']]);
+    expect(result.actions.map((a) => [a.action, a.error])).toEqual([['click', 'the target never became ready for input (it kept moving); no input was sent']]);
     expect(result.pending_actions).toBeUndefined();
   } finally { await mcp.close(); }
 });

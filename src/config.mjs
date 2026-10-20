@@ -29,6 +29,9 @@ export const config = {
   driftAutoRecoverAt: num("JEVSTEER_DRIFT_RECOVER_AT", 0.12),
   sideEffectSafeAt: num("JEVSTEER_SIDE_EFFECT_SAFE_AT", 0.2),
   constraintRiskAt: num("JEVSTEER_CONSTRAINT_RISK_AT", 0.55),
+  // At or above this, the guards judge that the task does not call for the
+  // field an action sets (see checkActionEffects): nothing is sent.
+  unrequestedAt: num("JEVSTEER_UNREQUESTED_AT", 0.7),
   nextStepClearAt: num("JEVSTEER_NEXT_STEP_CLEAR_AT", 0.45),
   maxAutoRecoveries: num("JEVSTEER_MAX_AUTO_RECOVERIES", 2),
   modelPageTextChars: num("JEVSTEER_PAGE_TEXT_CHARS", 8000),

@@ -1,10 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { sensitiveField } from '../sensitive.mjs';
 
+// The clear button of a field: antd draws the one of a select (and the
+// remove button of each value a multi-select shows) as an aria-hidden span
+// with no role, and the ones of a date picker and an input as role=button.
+// The class prefix ("ant") can be renamed, so any prefix counts. readDOM
+// keeps its own copy, as page code cannot reach this module.
+export const CLEAR = ['select-clear', 'select-selection-item-remove', 'picker-clear', 'input-clear-icon']
+  .flatMap((c) => [`[class$="-${c}"]`, `[class*="-${c} "]`]).join(',');
+
 // This selector is only a discovery surface. It is never a durable identity.
 // antd draws a select's options as divs with aria-selected and no role (its
 // role=option copies sit in a hidden 0×0 listbox): those are options too.
-export const INTERACTIVE = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option],[role=combobox],[role=listbox],[role=textbox],[role=searchbox],[role=spinbutton],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"]),.cursor-pointer,[aria-selected]:not([role]):not(td):not(th):not(tr)';
+export const INTERACTIVE = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option],[role=combobox],[role=listbox],[role=textbox],[role=searchbox],[role=spinbutton],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"]),.cursor-pointer,[aria-selected]:not([role]):not(td):not(th):not(tr),' + CLEAR;
 
 // Form fields. The box a field is drawn in holds no other of them. readDOM
 // keeps its own copy, as page code cannot reach this module.
@@ -31,11 +39,18 @@ export function readDOM(elements, nodes) {
     const rect = style.clip.match(/^rect\(([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px\)$/);
     return !!rect && ['absolute', 'fixed'].includes(style.position) && (rect[2] - rect[4] <= 1 || rect[3] - rect[1] <= 1);
   };
+  // A field's clear button (see CLEAR in this module). antd hides a
+  // select's from screen readers, though a person sees and clicks it: its
+  // own aria-hidden does not hide it here. It is drawn at opacity 0 until
+  // the pointer is over its field, as the browser's click moves it there.
+  const CLEAR = ['select-clear', 'select-selection-item-remove', 'picker-clear', 'input-clear-icon']
+    .flatMap((c) => [`[class$="-${c}"]`, `[class*="-${c} "]`]).join(',');
+  const ariaHidden = (p, e) => p.getAttribute('aria-hidden') === 'true' && !(p === e && e.matches(CLEAR));
   const visible = (e) => {
     if (!e.isConnected || !e.getClientRects().length) return false;
     return !ancestors(e).some((p) => {
       const style = getComputedStyle(p);
-      return p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || clipsAll(p, style);
+      return p.hidden || p.inert || ariaHidden(p, e) || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || clipsAll(p, style);
     });
   };
   // A count in a badge ("Todo 41") changes on its own as other work adds to
@@ -95,7 +110,7 @@ export function readDOM(elements, nodes) {
   const iconHidden = (icon) => {
     const shown = icon.matches('svg title') ? icon.parentElement : icon;
     if (!shown || getComputedStyle(shown).visibility !== 'visible') return true;
-    return ancestors(shown).some((p) => p.hidden || p.inert || p.getAttribute('aria-hidden') === 'true' || getComputedStyle(p).display === 'none');
+    return ancestors(shown).some((p) => p.hidden || p.inert || ariaHidden(p, p) || getComputedStyle(p).display === 'none');
   };
   const iconName = (e) => [...e.querySelectorAll('[role=img][aria-label],svg title,img[alt]')]
     .filter((icon) => !iconHidden(icon))
@@ -308,10 +323,22 @@ export function readDOM(elements, nodes) {
     || [...(e.labels || [])].map((l) => text(l, 180)).join(' ') || text(closest(e, 'label'), 180)
     || e.getAttribute('alt') || e.getAttribute('title') || (e.matches('button,a,[role=button],.cursor-pointer') || role(e) === 'option' ? text(e, 180) : '')
     || (['submit', 'button', 'reset'].includes(e.type) ? e.value : '')
-    || (e.matches('button,[role=button],.cursor-pointer') ? iconName(e) || iconHint(e) : '') || placeholderName(e) || e.getAttribute('name'));
+    || (e.matches('button,[role=button],.cursor-pointer') || e.matches(CLEAR) ? iconName(e) || iconHint(e) : '') || placeholderName(e) || e.getAttribute('name')
+    || (e.matches(CLEAR) ? clean(e.textContent, 20) : ''));
   const role = (e) => e.getAttribute('role') || ({ A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', SUMMARY: 'button' })[e.tagName]
     || (e.tagName === 'INPUT' ? ({ checkbox: 'checkbox', radio: 'radio', search: 'searchbox', submit: 'button', reset: 'button', button: 'button', number: 'spinbutton' })[e.type] || 'textbox' : e.isContentEditable ? 'textbox'
-      : e.hasAttribute('aria-selected') && !/^(TD|TH|TR)$/.test(e.tagName) ? 'option' : undefined);
+      : e.hasAttribute('aria-selected') && !/^(TD|TH|TR)$/.test(e.tagName) ? 'option' : e.matches(CLEAR) ? 'button' : undefined);
+  // The field a clear button empties: the one field in the box it is drawn
+  // in, up to 4 levels out.
+  const clearedField = (e) => {
+    if (!e.matches(CLEAR)) return undefined;
+    for (let box = parent(e), depth = 0; box && box !== document.body && depth < 4; box = parent(box), depth++) {
+      const count = fieldsIn(box);
+      if (count > 1) return undefined;
+      if (count === 1) return box.matches(FIELD) ? box : box.querySelector(FIELD);
+    }
+    return undefined;
+  };
   const all = [...elements];
   const modals = all.filter((e) => e.matches('dialog[open],[role=dialog][aria-modal=true]') && visible(e));
   // Dialogs without focusable attributes are discovered independently.
@@ -467,8 +494,9 @@ export function readDOM(elements, nodes) {
       value: 'value' in e ? String(e.value) : e.isContentEditable ? e.innerText : undefined,
       display: shown(e),
       // The table column a field sits in: such a field belongs to its row's
-      // item (an invoice line), not to the document.
-      column: e.matches(TYPABLE) && cellHeader(e) || undefined,
+      // item (an invoice line), not to the document. A field's clear button
+      // sits in its column too.
+      column: (e.matches(TYPABLE) || e.matches(CLEAR)) && cellHeader(e) || undefined,
       // What text drawn over an unnamed field says it is for.
       hint: (!label || label === e.getAttribute('name')) && hintText(e) || undefined,
       checked: 'checked' in e ? e.checked : e.hasAttribute('aria-checked') ? e.getAttribute('aria-checked') === 'true' : undefined,
@@ -476,6 +504,8 @@ export function readDOM(elements, nodes) {
       expanded: e.hasAttribute('aria-expanded') ? e.getAttribute('aria-expanded') === 'true' : undefined,
       // The ordinal of the field whose popup holds this element (see popupOwner).
       popup_of: ((owner) => (owner ? all.indexOf(owner) : undefined))(popupOwner(e)),
+      // The ordinal of the field this clear button empties (see clearedField).
+      clears: ((field) => (field && all.includes(field) ? all.indexOf(field) : undefined))(clearedField(e)),
       disabled: e.matches(':disabled') || ariaOff.some((p) => !dragOnly(p)),
       // Inside a drag-only one. Playwright's input checks still count it as
       // disabled; the driver checks such targets itself.
@@ -568,7 +598,7 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
     const documentId = `${info.id}:${revision}:${data.documentKey}`;
     for (const e of data.elements) {
       const selector = `pw-ref:${snapshotId}:${info.id}:${e.ordinal}`;
-      const { popup_of: _, ...described } = e;
+      const { popup_of: _, clears: __, ...described } = e;
       const target = { ...described, selector, snapshot_id: snapshotId, page_id: pageId, session_id: sessionId, frame_id: info.id, document_id: documentId, identity_version: 2 };
       target.value_hash = createHash('sha256').update(String(e.value ?? '')).digest('hex');
       if (sensitiveField(target)) {
@@ -589,11 +619,14 @@ export async function captureSnapshot(page, { pageId, sessionId, frameInfo, scop
   if (elements.length > maxElements) throw new Error(`OBSERVATION_LIMIT: ${elements.length} interactive elements, more than ${maxElements}; narrow the observation scope`);
   elements.forEach((e, i) => { e.i = i; });
   // An element in a field's popup names that field by its index here, and so
-  // does the popup of the focused field.
+  // do a field's clear button and the popup of the focused field.
   let popup;
   for (const f of active) {
     const byOrdinal = new Map(f.data.elements.map((e) => [e.ordinal, e.target]));
-    for (const e of f.data.elements) if (e.popup_of != null && byOrdinal.get(e.popup_of)?.i != null) e.target.popup_of = byOrdinal.get(e.popup_of).i;
+    for (const e of f.data.elements) {
+      if (e.popup_of != null && byOrdinal.get(e.popup_of)?.i != null) e.target.popup_of = byOrdinal.get(e.popup_of).i;
+      if (e.clears != null && byOrdinal.get(e.clears)?.i != null) e.target.clears = byOrdinal.get(e.clears).i;
+    }
     const field = f.data.popup && byOrdinal.get(f.data.popup.field);
     if (!popup && field?.i != null) popup = { field: field.i, text: f.data.popup.text };
   }

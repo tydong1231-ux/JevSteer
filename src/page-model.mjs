@@ -88,6 +88,8 @@ function modelElement(e, multiFrame) {
   // The [i] of the field whose popup shows this element: an open combobox's
   // option, or a result under a search box.
   put("popup_of", e.popup_of);
+  // The [i] of the field this clear button empties.
+  put("clears", e.clears);
   put("validation_message", e.validation_message);
   return out;
 }

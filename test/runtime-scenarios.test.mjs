@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MemoryKapture, memoryRuntime, scriptedDecider, decision } from "./helpers/runtime.mjs";
+import { normalizeTaskContract } from "../src/task-contract.mjs";
+import { closedOnly } from "../src/action-effect.mjs";
 
 const button = { i: 0, selector: "#continue", tag: "button", role: "button", label: "Continue" };
 const plan = [
@@ -344,7 +346,8 @@ test("the exact guards see an option chosen from an open list as a SELECT on its
   await runtime.checkActionEffects(page, contract, action, []);
   await runtime.checkConstraint(page, contract, action, []);
   const asSelect = { tool: "select", element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", selected_option: { text: "Closed" } };
-  assert.deepEqual(seen, { "action_irreversible,action_side_effect": asSelect, violates: asSelect });
+  // A SELECT sets a field: the guards also ask whether the task calls for it.
+  assert.deepEqual(seen, { "action_irreversible,action_side_effect,action_unrequested": asSelect, violates: asSelect });
   // A CLICK on an option names its combobox, and whether the option is chosen
   // now: a click on a chosen one of a multi-select takes it out. Such a click
   // is checked before input as a SELECT is (see the driver).
@@ -394,6 +397,135 @@ test("a constraint block says allow_irreversible does not lift it and how to set
   assert.equal(result.status, "constraint_blocked");
   assert.match(result.info, /allow_irreversible does not lift this check/);
   assert.equal(result.pending.p_constraint_risk, 0.74);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+});
+
+// ccMonet refused a Save as Draft ("Please fill in all required fields :
+// Due Date"). With the date typed, the save was blocked at 0.82 to 0.92
+// against "Do not create duplicates", whatever the host's guidance said.
+test("the constraint guard takes the host's checked guidance as fact, and a refused save as nothing created", async () => {
+  let asked;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked = { task: state.task, instructions: questions.violates.instructions };
+    return { answers: { violates: { noul: 0.1 } }, ms: 1, tokens: 1 };
+  });
+  const el = { i: 0, selector: "#draft", tag: "button", role: "button", label: "Save as Draft" };
+  const page = { url: "https://erp.test/invoices", title: "New Invoice", text: "New Invoice Customer JevSteer QA Due Date 2026/11/30", elements: [el] };
+  const contract = normalizeTaskContract({ goal: "Save the invoice as a draft", constraints: ["Create one draft invoice for JevSteer QA. Do not create duplicates."],
+    guidance: ["The earlier Save as Draft was refused because Due Date was empty; it created nothing and no invoice exists"] });
+  assert.equal(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), 0.1);
+  assert.deepEqual(asked.task.guidance, contract.guidance);
+  assert.match(asked.instructions, /task\.guidance comes from the host, who has checked the site: take what it says as fact/);
+  assert.match(asked.instructions, /refused with a validation message \(a required field it named\) normally created nothing: making it again once the form is fixed is not a duplicate/);
+});
+
+// ccMonet (Mac rerun on f462b95): with a filter popup left open, or the
+// global search's results showing, a click on a bill's vendor cell only closed
+// them. The page sent no request and no bill opened; Jev waited three times.
+const vendorCell = { i: 0, selector: "#cp", tag: "td", label: "CP-MEIJI CO.,LTD.", record_key: "2" };
+const filterPopup = [{ i: 1, selector: "#add", tag: "button", label: "+ Add Filter" }, { i: 2, selector: "#field", tag: "input", role: "combobox" }];
+const billsWithPopup = { url: "https://erp.test/bills", title: "Vendor Bills", text: "Vendor Bills Filter + Add Filter CP-MEIJI CO.,LTD. ฿ 1,732.00", elements: [vendorCell, ...filterPopup] };
+
+test("a click that only closed what was open, sending no request, is told apart from one that did something", () => {
+  const after = { ...billsWithPopup, text: "Vendor Bills CP-MEIJI CO.,LTD. ฿ 1,732.00", elements: [vendorCell], requests_since_input: 0 };
+  const click = { tool: "click", el: vendorCell };
+  assert.deepEqual(closedOnly(billsWithPopup, after, click), { controls_gone: 2, such_as: ['button "+ Add Filter"', "combobox"] });
+  // A field's placeholder can show again once it loses focus.
+  assert.ok(closedOnly(billsWithPopup, { ...after, text: `${after.text} Search contacts, ...` }, click));
+  for (const [what, page] of [
+    ["sent a request", { ...after, requests_since_input: 1 }],
+    ["has a request open", { ...after, pending_requests: 1 }],
+    ["is loading", { ...after, loading: { busy: true } }],
+    ["counts no requests", { ...after, requests_since_input: undefined }],
+    ["opened something", { ...after, elements: [vendorCell, { i: 1, selector: "#edit", tag: "button", label: "Edit" }] }],
+    ["shows new text", { ...after, text: `${after.text} Bill 9001563832 due 2025/5/25 Unpaid` }],
+    ["loaded another page", { ...after, url: "https://erp.test/bills/2" }],
+    ["took its target away", { ...after, elements: [] }],
+    ["closed nothing", { ...billsWithPopup, requests_since_input: 0 }],
+  ]) assert.equal(closedOnly(billsWithPopup, page, click), undefined, what);
+  assert.equal(closedOnly(billsWithPopup, after, { tool: "press_key", key: "Escape" }), undefined);
+});
+
+test("after a click that only closed a popup, Jev sees it in history and clicks again instead of waiting", async () => {
+  const k = new MemoryKapture(structuredClone(billsWithPopup));
+  let clicks = 0;
+  k.onCommand = (command) => {
+    if (command !== "click") return;
+    clicks++;
+    // The first click closes the popup and goes no further; the second opens the bill.
+    k.page = k.page.elements.length > 1
+      ? { ...k.page, text: "Vendor Bills CP-MEIJI CO.,LTD. ฿ 1,732.00", elements: [vendorCell], requests_since_input: 0 }
+      : { ...k.page, url: "https://erp.test/bills/2", text: "Bill 9001563832 CP-MEIJI CO.,LTD. Unpaid", elements: [{ i: 0, selector: "#edit", tag: "button", label: "Edit" }], requests_since_input: 6 };
+  };
+  let last;
+  const runtime = memoryRuntime(k, scriptedDecider([
+    { tool: "click", target: 0 },
+    (state) => {
+      last = state.task.history.at(-1);
+      return decision(last.closed_only ? { tool: "click", target: 0 } : { tool: "wait" });
+    },
+    { tool: "none", done: 0.99 },
+  ]));
+  const result = await runtime.run("Open the CP-MEIJI bill", { maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual([last.action, last.requests, last.closed_only], ["click", 0, { controls_gone: 2, such_as: ['button "+ Add Filter"', "combobox"] }]);
+  assert.equal(clicks, 2);
+  assert.equal(result.status, "completed_verified");
+});
+
+// ccMonet (Mac rerun on f462b95): filling an invoice's lines, Jev chose
+// Tracking Category "Woodlands" on both lines, though nothing asked for one.
+const trackingLine = () => {
+  const tracking = { i: 0, selector: "#tracking", tag: "input", role: "combobox", label: "Tracking Category", column: "Tracking Category", record_key: "line-1", value: "", expanded: true };
+  const woodlands = { i: 1, selector: "#woodlands", tag: "div", role: "option", label: "Woodlands", popup_of: 0, selected: false };
+  const quantity = { i: 2, selector: "#qty", tag: "input", label: "QTY", column: "QTY", record_key: "line-1", value: "2" };
+  return new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Item QA item A QTY 2 Tracking Category Woodlands", elements: [tracking, woodlands, quantity] });
+};
+const pickWoodlands = { ...decision({ tool: "select", target: null }), select_target: { choice: "0>1", probabilities: { "0>1": 0.99 } } };
+
+test("only an action that sets a field is asked whether the task calls for it; an unanswered question holds nothing back", async () => {
+  const asked = [];
+  let reply = {};
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked.push(Object.keys(questions).sort().join());
+    if (questions.action_unrequested) asked.push(questions.action_unrequested.instructions);
+    return { answers: reply, ms: 1, tokens: 1 };
+  });
+  const page = trackingLine().page;
+  const contract = normalizeTaskContract({ goal: "Fill line 1: item QA item A, quantity 2" });
+  const select = runtime.resolve(page, pickWoodlands, {});
+  reply = { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, action_unrequested: { noul: 0.93 } };
+  assert.deepEqual(await runtime.checkActionEffects(page, contract, select, []), { sideEffect: 0.05, irreversible: 0.01, unrequested: 0.93 });
+  assert.match(asked[1], /puts a value of its own choosing into a field that task\.goal, task\.success_criteria and task\.guidance never mention/);
+  reply = { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 } };
+  assert.equal((await runtime.checkActionEffects(page, contract, select, [])).unrequested, 0);
+  const click = { tool: "click", el: { i: 3, selector: "#add", tag: "button", label: "Add New Line" } };
+  assert.equal("unrequested" in await runtime.checkActionEffects(page, contract, click, []), false);
+  assert.deepEqual(asked.filter((a) => !a.includes(" ")), ["action_irreversible,action_side_effect,action_unrequested", "action_irreversible,action_side_effect,action_unrequested", "action_irreversible,action_side_effect"]);
+});
+
+test("a field the task does not ask for is left as it is: nothing is sent, Jev is told why, and one who insists is stopped", async () => {
+  const unrequested = async (state, questions) => {
+    if (questions.action_side_effect) return { answers: { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, ...(questions.action_unrequested ? { action_unrequested: { noul: 0.9 } } : {}) }, ms: 1, tokens: 1 };
+    return undefined;
+  };
+  // Jev reads the refusal and moves on.
+  let k = trackingLine();
+  let told;
+  const steps = scriptedDecider([() => pickWoodlands, (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  let runtime = memoryRuntime(k, async (state, questions) => (await unrequested(state, questions)) || steps(state, questions));
+  let result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "not_requested", false]);
+  assert.match(told.detail, /^combobox "Tracking Category" -> Woodlands: the task does not ask to set this field to that, so nothing was sent/);
+  assert.equal(result.actions.find((a) => a.reason === "not_requested")?.detail, told.detail);
+  assert.equal(result.status, "completed_verified");
+  // Jev chooses it three times: the third stops the run for guidance.
+  k = trackingLine();
+  const insists = scriptedDecider([() => pickWoodlands]);
+  runtime = memoryRuntime(k, async (state, questions) => (await unrequested(state, questions)) || insists(state, questions));
+  result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 6, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev kept choosing to set fields the task does not ask for \(last: combobox "Tracking Category" -> Woodlands\), so no input was sent/);
   assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
 });
 

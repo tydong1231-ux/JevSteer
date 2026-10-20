@@ -249,3 +249,72 @@ for (const [what, content, field] of [['the next line item', lines(2), 'Descript
     } finally { await driver.close(); }
   });
 }
+
+// ccMonet (Mac rerun on f462b95): with the global search's results open, Jev
+// clicked the CP-MEIJI row of the table behind them. The click only closed
+// the results; no bill opened, and Jev waited three times for one. Here the
+// results close on a click outside them, and that click goes no further.
+const swallowing = bills
+  .replace('<td>CP-MEIJI CO.,LTD.</td>', '<td class="cursor-pointer">CP-MEIJI CO.,LTD.</td>')
+  .replace('</script>', `
+    for (const row of document.querySelectorAll('tbody tr')) row.addEventListener('click', () => { window.opened = row.dataset.rowKey; document.querySelector('h1').textContent = 'Bill 9001563832 CP-MEIJI CO.,LTD. Unpaid'; });
+    document.addEventListener('click', (e) => {
+      const results = document.querySelector('#results');
+      if (results.style.display !== 'none' && !e.target.closest('.group')) { results.style.display = 'none'; e.stopPropagation(); }
+    }, true);
+  </script>`);
+
+test('a click that only closed the search results is marked closed_only, and Jev clicks again', async ({ page }, testInfo) => {
+  await page.setContent(swallowing);
+  const cell = (state) => state.page.elements.find((e) => e.tag === 'td' && e.label === 'CP-MEIJI CO.,LTD.').i;
+  let after;
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'type', target: state.page.elements.find((e) => e.hint?.startsWith('Search contacts')).i }),
+    (state) => decision({ tool: 'click', target: cell(state) }),
+    (state) => {
+      after = state.task.history.at(-1);
+      return decision(after.closed_only ? { tool: 'click', target: cell(state) } : { tool: 'wait' });
+    },
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', {
+      tab_id: mcp.id, goal: 'Search for CP-MEIJI, then open its bill', values: { vendor: 'CP-MEIJI' },
+      verification_mode: 'host', max_actions: 5, evidence_level: 'none',
+    });
+    expect(after).toMatchObject({ action: 'click', requests: 0, closed_only: { controls_gone: 2, such_as: ['div "CP-MEIJI CO.,LTD. 2/9 MOO 4 PHAHONYOTHIN RD., NONGNAK, NONGKAE"', 'div "9001563832 9001563832 · 2025/4/25 ฿1,732.00"'] } });
+    expect(await page.evaluate(() => window.opened)).toBe('2');
+    expect(result.status).toBe('host_review_required');
+  } finally { await mcp.close(); }
+});
+
+test('on a page too large for one decision, what the focused box\'s popup shows is offered whichever group Jev picks, marked as its', async ({ page }, testInfo) => {
+  await page.setContent(manyBills);
+  let offered;
+  const groupWith = (questions, words) => Object.entries(questions.group.criteria).find(([, summary]) => summary.includes(words))?.[0];
+  const inGroup = (tool, g) => ({ ...decision({ tool, target: null }), group: { choice: g, probabilities: { [g]: 0.99 } } });
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state, questions) => inGroup('type', groupWith(questions, 'Search contacts')),
+    (state) => {
+      const box = String(state.page.elements.find((e) => e.hint?.startsWith('Search contacts')).i);
+      return { type_target: { choice: box, probabilities: { [box]: 0.99 } } };
+    },
+    (state, questions) => {
+      offered = { summary: questions.group.criteria[groupWith(questions, 'CP-MEIJI CO.,LTD. 2/9')] };
+      // Jev picks the group of a far bill: the results are offered all the same.
+      return inGroup('click', groupWith(questions, 'Bill 250'));
+    },
+    (state, questions) => {
+      offered.criteria = Object.values(questions.click_target.criteria);
+      return { click_target: { choice: '__none__', probabilities: { __none__: 0.99 } } };
+    },
+  ]));
+  try {
+    await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Search for CP-MEIJI, then open its vendor record', values: { vendor: 'CP-MEIJI' }, verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(offered.summary).toContain('div "CP-MEIJI CO.,LTD. 2/9 MOO 4 PHAHONYOTHIN RD., NONGNAK, NONGKAE" (in popup of [1])');
+    expect(offered.criteria).toEqual(expect.arrayContaining([
+      expect.objectContaining({ control: expect.stringMatching(/^\[\d+\] div "CP-MEIJI CO\.,LTD\. 2\/9 MOO 4/), in_popup_of: '[1] textbox "Search contacts, vendor bills, sales invoices, payrolls..."' }),
+      expect.objectContaining({ control: expect.stringMatching(/^\[\d+\] link "Bill 250"/) }),
+    ]));
+  } finally { await mcp.close(); }
+});

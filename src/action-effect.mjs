@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { elementFingerprint, pageDiff, squash } from "./page-model.mjs";
+import { brief, elementFingerprint, pageDiff, squash } from "./page-model.mjs";
 import { locateAfterAction } from "./element-identity.mjs";
 import { sameDateText } from "./date-text.mjs";
 
@@ -86,4 +86,32 @@ export function verifyActionEffect(before, after, action) {
   }
 
   return { status: "unknown", check: "none" };
+}
+
+// What a click did when all it did was close something. A popup, menu or list
+// that is open takes a click outside it: it closes, and the page need not
+// pass the click on to what it was aimed at. ccMonet's bill rows opened
+// nothing when clicked while a filter popup, or the global search's results,
+// were open; Jev then waited for a bill that was not coming. Such a click
+// took controls away and added none, on the same address, with a few new
+// words at most (a field's placeholder shows again once it loses focus); the
+// page sent no request, and the click's target is still there.
+// Returns how many controls went, and a few of them.
+export function closedOnly(before, after, action) {
+  if (action?.tool !== "click" || !before || !after || before.url !== after.url) return undefined;
+  if (after.requests_since_input !== 0 || after.pending_requests > 0 || after.loading?.busy) return undefined;
+  if (!findAfter(after, action, before)) return undefined;
+  const left = new Map();
+  for (const e of after.elements) left.set(elementFingerprint(e), (left.get(elementFingerprint(e)) || 0) + 1);
+  const gone = [];
+  for (const e of before.elements) {
+    const key = elementFingerprint(e);
+    if (left.get(key)) left.set(key, left.get(key) - 1);
+    else gone.push(e);
+  }
+  // What is still counted in `left` was not there before.
+  if (!gone.length || [...left.values()].some((n) => n > 0)) return undefined;
+  const words = new Set(squash(before.text, 6000).split(" "));
+  if (squash(after.text, 6000).split(" ").filter((w) => w && !words.has(w)).length > 3) return undefined;
+  return { controls_gone: gone.length, such_as: gone.slice(0, 3).map((e) => brief(e)) };
 }
