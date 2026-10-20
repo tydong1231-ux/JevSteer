@@ -4,6 +4,7 @@
 import { test, expect } from '@playwright/test';
 import { driverFor, mcpFixture } from './helpers.mjs';
 import { scriptedDecider, decision } from '../test/helpers/runtime.mjs';
+import { twinsOf } from '../src/element-identity.mjs';
 
 const pick = (match) => (state) => state.page.elements.find(match)?.i;
 
@@ -814,3 +815,168 @@ test('a target that never becomes ready is refused before any input', async ({ p
     expect(result.pending_actions).toBeUndefined();
   } finally { await mcp.close(); }
 });
+
+// antd v5 draws a single select's shown value as a span after its search
+// input, positioned (position: relative) and, unlike its placeholder, not
+// pointer-events: none, so the value lies over the input. A select with no
+// search keeps that input read-only and transparent. ccMonet's bill filter
+// (Mac rerun on 95f5f4c): the browser's check before a click on the input
+// found the value "Is" on top and waited for it to move until it timed out,
+// so SELECT never opened the list. A person clicks the value. Like rc-select,
+// a mousedown anywhere in the selector toggles the list.
+const antdSelect = ({ id, shown, search = false }) => `<div class="ant-select ant-select-outlined ant-select-single ant-select-show-arrow${search ? ' ant-select-show-search' : ''}">
+    <div class="ant-select-selector">
+      <span class="ant-select-selection-search"><input type="search" id="${id}" class="ant-select-selection-search-input" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="${id}_list" aria-autocomplete="list" aria-controls="${id}_list" autocomplete="off"${search ? '' : ' readonly unselectable="on" style="opacity:0"'} value=""></span>
+      ${shown ? `<span class="ant-select-selection-item" title="${shown}">${shown}</span>` : '<span class="ant-select-selection-placeholder">Select</span>'}
+    </div>
+    <span class="ant-select-arrow" unselectable="on" aria-hidden="true" style="user-select:none"><span role="img" aria-label="down" class="anticon anticon-down ant-select-suffix"><svg width="12" height="12"></svg></span></span>
+  </div>`;
+const antdList = (id, names, shown) => `<div class="ant-select-dropdown ant-select-dropdown-hidden" id="${id}_dropdown"><div>
+    <div role="listbox" id="${id}_list" style="height:0;width:0;overflow:hidden"></div>
+    <div class="rc-virtual-list"><div class="rc-virtual-list-holder-inner">${names.map((n) => `<div aria-selected="${n === shown}" class="ant-select-item ant-select-item-option" title="${n}"><div class="ant-select-item-option-content">${n}</div></div>`).join('')}</div></div>
+  </div></div>`;
+const filterPopup = ({ value = 'Draft' } = {}) => `<style>
+    body { font: 14px sans-serif; }
+    .ant-popover { position: absolute; top: 60px; left: 20px; background: #fff; padding: 12px; box-shadow: 0 6px 16px rgba(0,0,0,.08); }
+    .filter-row { display: flex; gap: 8px; margin: 8px 0; }
+    .ant-select { position: relative; display: inline-flex; cursor: pointer; width: 160px; height: 32px; box-sizing: border-box; }
+    .ant-select-single .ant-select-selector { display: flex; position: relative; width: 100%; height: 100%; padding: 0 11px; border: 1px solid #d9d9d9; border-radius: 6px; box-sizing: border-box; background: #fff; }
+    .ant-select-single .ant-select-selector .ant-select-selection-search { position: absolute; top: 0; bottom: 0; inset-inline-start: 11px; inset-inline-end: 11px; }
+    .ant-select-single .ant-select-selector .ant-select-selection-search-input { width: 100%; height: 30px; padding: 0; margin: 0; border: 0; background: transparent; outline: none; appearance: none; font: inherit; }
+    .ant-select .ant-select-selection-item { flex: 1; position: relative; user-select: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 30px; padding-inline-end: 18px; }
+    .ant-select .ant-select-selection-placeholder { flex: 1; overflow: hidden; color: rgba(0,0,0,.25); white-space: nowrap; line-height: 30px; pointer-events: none; }
+    .ant-select .ant-select-arrow { position: absolute; top: 50%; inset-inline-end: 11px; height: 12px; margin-top: -6px; display: flex; align-items: center; pointer-events: none; }
+    .ant-select-dropdown { position: absolute; z-index: 1050; background: #fff; padding: 4px; box-shadow: 0 6px 16px rgba(0,0,0,.08); }
+    .ant-select-dropdown-hidden { display: none; }
+    .ant-select-item-option { padding: 5px 12px; cursor: pointer; }
+  </style>
+  <h1>Bills</h1><button>Filter</button>
+  <div class="ant-popover"><div class="ant-popover-inner" role="tooltip">
+    <div class="ant-popover-title">Filter records</div>
+    <div class="filter-row">${antdSelect({ id: 'field', shown: 'Status' })}${antdSelect({ id: 'op', shown: 'Is' })}${antdSelect({ id: 'value', shown: value, search: true })}</div>
+    <button>Apply</button>
+  </div></div>
+  ${antdList('field', ['Status', 'Vendor'], 'Status')}${antdList('op', ['Is', 'Is not'], 'Is')}${antdList('value', ['Draft', 'Paid'], value)}
+  <script>
+    window.events = [];
+    for (const box of document.querySelectorAll('.ant-select')) {
+      const input = box.querySelector('input');
+      const dropdown = document.getElementById(input.id + '_dropdown');
+      const setOpen = (open) => {
+        input.setAttribute('aria-expanded', String(open));
+        dropdown.classList.toggle('ant-select-dropdown-hidden', !open);
+        const r = box.getBoundingClientRect();
+        Object.assign(dropdown.style, { top: r.bottom + scrollY + 4 + 'px', left: r.left + scrollX + 'px', width: r.width + 'px' });
+      };
+      box.querySelector('.ant-select-selector').addEventListener('mousedown', (e) => {
+        window.events.push(input.id + ' mousedown on ' + e.target.className);
+        if (e.target !== input) e.preventDefault();
+        setOpen(input.getAttribute('aria-expanded') !== 'true');
+      });
+      box.addEventListener('click', (e) => { if (e.target !== input) input.focus(); });
+      for (const o of dropdown.querySelectorAll('.ant-select-item-option')) o.addEventListener('click', () => {
+        box.querySelector('.ant-select-selection-item, .ant-select-selection-placeholder')
+          .replaceWith(Object.assign(document.createElement('span'), { className: 'ant-select-selection-item', title: o.title, textContent: o.title }));
+        for (const x of dropdown.querySelectorAll('.ant-select-item-option')) x.setAttribute('aria-selected', String(x === o));
+        setOpen(false);
+      });
+    }
+  </script>`;
+
+for (const [what, id, shows] of [['a read-only select', 'op', 'Is'], ['a searchable select', 'value', 'Draft']]) {
+  test(`SELECT on ${what} whose shown value lies over its input opens its list with a click on that value`, async ({ page }) => {
+    await page.setContent(filterPopup());
+    const { driver, id: tab } = await driverFor(page);
+    try {
+      const seen = await driver.observe(tab);
+      const box = seen.elements.find((e) => e.role === 'combobox' && e.display === shows);
+      const action = { tool: 'select', target: box.i, el: box, observedUrl: seen.url, observed: { twins: twinsOf(box, seen) } };
+      await driver.assertTargetFresh(tab, action);
+      const result = await driver.perform(tab, action, action.el);
+      expect([result.state, result.error]).toEqual(['dispatched_ack', undefined]);
+      await expect(page.locator(`#${id}`)).toHaveAttribute('aria-expanded', 'true');
+      expect(await page.evaluate(() => window.events)).toEqual([`${id} mousedown on ant-select-selection-item`]);
+    } finally { await driver.close(); }
+  });
+}
+
+// The whole step through browser_run: SELECT opens the operator's list, then
+// SELECT chooses "Is not" from it.
+test('Jev changes a filter operator whose shown value lies over its input', async ({ page }, testInfo) => {
+  await page.setContent(filterPopup());
+  const operator = (state) => state.page.elements.find((e) => e.role === 'combobox' && ['Is', 'Is not'].includes(e.display));
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+    (state) => decision({ tool: 'select', target: operator(state).i }),
+    (state) => decision({ tool: 'select', target: `${operator(state).i}>${pick((e) => e.role === 'option' && e.label === 'Is not')(state)}` }),
+    { tool: 'none', done: 0.99 },
+  ]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Filter bills whose status is not Draft', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(result.status).toBe('host_review_required');
+    expect(result.actions.map((a) => [a.action, a.error])).toEqual([['select', undefined], ['click', undefined]]);
+    await expect(page.locator('.ant-select-selection-item')).toHaveText(['Status', 'Is not', 'Draft']);
+    await expect(page.locator('#op')).toHaveAttribute('aria-expanded', 'false');
+  } finally { await mcp.close(); }
+});
+
+// A realistic TYPE clicks the field first: on a searchable select that shows
+// a value, that click lands on the value too, and opens the list.
+test('a realistic TYPE into a searchable select that shows a value clicks that value, then types', async ({ page }) => {
+  await page.setContent(filterPopup());
+  const { driver, id: tab } = await driverFor(page);
+  try {
+    const seen = await driver.observe(tab);
+    const box = seen.elements.find((e) => e.role === 'combobox' && e.display === 'Draft');
+    const action = { tool: 'type', target: box.i, el: box, value: 'Pa', observedUrl: seen.url, observed: { twins: twinsOf(box, seen) } };
+    await driver.assertTargetFresh(tab, action);
+    const result = await driver.perform(tab, action, action.el);
+    expect([result.state, result.error]).toEqual(['dispatched_ack', undefined]);
+    await expect(page.locator('#value')).toHaveValue('Pa');
+    await expect(page.locator('#value')).toHaveAttribute('aria-expanded', 'true');
+    expect(await page.evaluate(() => window.events)).toEqual(['value mousedown on ant-select-selection-item']);
+  } finally { await driver.close(); }
+});
+
+// What lies over a field is clicked in its place only when it is part of the
+// field's own box and no control of its own: here a button drawn over the
+// field takes no click, and the refusal names it.
+test('a control of a field\'s own box drawn over the field is not clicked in its place', async ({ page }, testInfo) => {
+  await page.setContent(`<h1>Account</h1>
+    <div class="ant-input-affix-wrapper" style="position:relative;width:240px">
+      <input id="key" role="combobox" aria-expanded="false" aria-label="API key" style="width:100%;height:28px">
+      <button class="reveal" style="position:absolute;inset:0;opacity:.5" onclick="window.revealed = true">Reveal</button>
+    </div>
+    <script>document.querySelector('#key').addEventListener('mousedown', (e) => e.target.setAttribute('aria-expanded', 'true'));</script>`);
+  const mcp = await mcpFixture(page, testInfo, scriptedDecider([(state) => decision({ tool: 'select', target: pick((e) => e.label === 'API key')(state) })]));
+  try {
+    const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Open the API key list', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+    expect(result.actions.map((a) => [a.action ?? a.recovery, a.error ?? a.detail])).toEqual([
+      ['reobserve', 'the target is covered by another element (<button class="reveal">); no input was sent'],
+      ['reobserve', 'the target is covered by another element (<button class="reveal">); no input was sent'],
+    ]);
+    expect(result.pending_actions).toBeUndefined();
+    expect(await page.evaluate(() => window.revealed)).toBeUndefined();
+    await expect(page.locator('#key')).toHaveAttribute('aria-expanded', 'false');
+  } finally { await mcp.close(); }
+});
+
+// The browser's log names what covers a target as markup, with its text when
+// it holds only text, or none: the refusal names it either way.
+for (const [what, cover, named] of [
+  ['text', '<div class="cookie-banner" title="Cookies">We use cookies</div>', '<div class="cookie-banner">'],
+  ['nothing', '<div class="mask"></div>', '<div class="mask">'],
+]) {
+  test(`a target covered by an element holding ${what} is refused, and the refusal names the cover`, async ({ page }, testInfo) => {
+    await page.setContent(`<style>.cookie-banner, .mask { position: fixed; top: 0; left: 0; width: 400px; height: 120px; background: rgba(0,0,0,.2); }</style>
+      <h1>Report</h1><button onclick="window.generated = true">Generate</button>${cover}`);
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([(state) => decision({ tool: 'click', target: pick((e) => e.label === 'Generate')(state) })]));
+    try {
+      const result = await mcp.call('browser_run', { tab_id: mcp.id, goal: 'Generate the report', verification_mode: 'host', max_actions: 3, evidence_level: 'none' });
+      expect(result.actions.map((a) => a.error ?? a.detail)).toEqual([
+        `the target is covered by another element (${named}); no input was sent`,
+        `the target is covered by another element (${named}); no input was sent`,
+      ]);
+      expect(await page.evaluate(() => window.generated)).toBeUndefined();
+    } finally { await mcp.close(); }
+  });
+}

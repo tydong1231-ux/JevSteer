@@ -84,23 +84,33 @@ const NOT_READY = [
   [/element is outside of the viewport/, "it stays outside the viewport"],
   [/element was detached|element is not attached/i, "it left the page"],
 ];
-function notReadyReason(message) {
-  const lines = message.split("\n").reverse();
+// The log names what covers the target as markup, with its text when it
+// holds only text: `<span title="Is" class="ant-select-selection-item">Is</span>
+// intercepts pointer events`. The cover is its first tag, with its class.
+// Long attributes are cut short there; an attribute read stops at a cut.
+function coverTag(line) {
+  const tag = line.match(/<([a-z][\w-]*)((?:\s+[^\s=>"/]+(?:="[^">…]*["…])?)*)/i);
+  if (!tag) return "";
+  const cls = tag[2].match(/\sclass="([^"]{0,80})/)?.[1];
+  return `<${tag[1].toLowerCase()}${cls ? ` class="${cls}"` : ""}>`;
+}
+function notReady(message) {
+  const lines = message.replace(/\x1b\[[0-9;]*m/g, "").split("\n").reverse();
   for (const line of lines) {
+    if (/intercepts pointer events/.test(line)) return { cover: coverTag(line) };
     const known = NOT_READY.find(([pattern]) => pattern.test(line));
-    if (known) return known[1];
+    if (known) return { reason: known[1] };
   }
-  return undefined;
+  return {};
 }
 
 function actionError(error) {
   const message = String(error?.message ?? error);
   // Refused before any input: the browser's check on the target never passed.
   if (error?.dispatchState === "predispatch_rejected" && /timeout|timed out/i.test(message)) {
-    const cover = message.match(/(<[a-z][\w-]*)[^>\n]*?(\sclass="[^"\n]{0,80})?[^>\n]*>(?:…<\/[\w-]+>)?\s+(?:from <[^\n]*?>\s+subtree\s+)?intercepts pointer events/);
-    const reason = notReadyReason(message);
-    return cover
-      ? `the target is covered by another element (${cover[1]}${cover[2] ? `${cover[2]}"` : ""}>); no input was sent`
+    const { cover, reason } = notReady(message);
+    return cover != null
+      ? `the target is covered by another element${cover ? ` (${cover})` : ""}; no input was sent`
       : `the target never became ready for input${reason ? ` (${reason})` : ""}; no input was sent`;
   }
   if (/command timeout|timed out|timeout/i.test(message)) return "browser command timed out; its execution is uncertain";

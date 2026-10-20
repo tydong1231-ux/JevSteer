@@ -233,7 +233,24 @@ combobox's open list covers it, that click is refused before the journal
 Any covered target is refused this way, and Jev looks again with the refusal
 in its history (`recovery: "reobserve"`, `reason: "target_covered"`), as after
 a stale target; the same choice a third time on the same page stops the run as
-`stuck`. A target that never becomes ready for another reason stops the run as
+`stuck`. The error names the cover by its tag and class whatever it holds:
+text (`<span title="Is" class="ant-select-selection-item">Is</span>` in the
+browser's log reads `(<span class="ant-select-selection-item">)`), other
+elements, or nothing.
+A field can be covered by a part of its own box: antd draws a select's shown
+value as a positioned span over its input (ccMonet's filter popup, "Is"), and
+a person opens the select by clicking that value. A click on a field (CLICK,
+HOVER, SELECT that opens a custom combobox, and a realistic TYPE's first
+click) lands on such a part instead, with the browser's checks on that part:
+the part is what is on top at the middle of the field, inside the field's own
+box (up to four levels around the field that hold no other field), and
+neither it nor anything between it and that box is a control (a button, a
+link, a clear button, an option). A control drawn over the field is never
+clicked in its place, and anything outside the box still refuses the click as
+above. After the journal is written, the click must still land on the same
+part, or on the field itself if it did before; otherwise nothing is sent
+(`STALE_TARGET`).
+A target that never becomes ready for another reason stops the run as
 `action_failed`, with nothing pending, and the error says what the browser
 waited for: `the target never became ready for input (it kept moving); no
 input was sent`, or it is not visible, the browser counts it as disabled, it

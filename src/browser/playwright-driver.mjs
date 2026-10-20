@@ -5,7 +5,7 @@ import { sameIdentity, equivalentLink, pickTwin } from '../element-identity.mjs'
 import { FIELDISH, SELECTISH } from '../page-model.mjs';
 import { isDateText } from '../date-text.mjs';
 import { observeUntilReady, observationSignature } from '../observation.mjs';
-import { captureSnapshot, readDOM, FIELD } from './snapshot.mjs';
+import { captureSnapshot, readDOM, FIELD, INTERACTIVE } from './snapshot.mjs';
 import { PageEvents } from './events.mjs';
 import { sessionIdentity, physicalPageId } from './sessions.mjs';
 import { dispatchInput } from './driver.mjs';
@@ -160,6 +160,10 @@ export class PlaywrightDriver {
     const inputMode = action.inputMode || this.options.inputMode;
     // An option chosen from an open list: its combobox, pinned with it.
     let owner;
+    // What a click on a field lands on when that is a part of the field's
+    // own box drawn over it, pinned too (see ownPart); null when the field
+    // itself takes the click.
+    let part;
     return dispatchInput(async () => {
       if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
       if (!['click', 'type', 'press_enter', 'press_key', 'select', 'hover', 'scroll', 'back', 'wait', 'none'].includes(action.tool)) throw new Error('UNSUPPORTED_ACTION');
@@ -192,11 +196,14 @@ export class PlaywrightDriver {
           const options = current.options.filter((o) => o.value === String(action.value));
           if (action.value == null || options.length !== 1 || options[0].disabled) throw new Error('INVALID_INPUT: native option must be unique and enabled');
         }
-        if (forced(action, current)) await handle.hover({ trial: true, timeout });
-        else if (['click', 'hover'].includes(action.tool)) await handle[action.tool]({ trial: true, timeout });
+        if (clicksField(action, inputMode, current)) part = await ownPartOf(handle, timeout);
+        const at = part || handle;
+        if (forced(action, current)) await at.hover({ trial: true, timeout });
+        else if (['click', 'hover'].includes(action.tool)) await at[action.tool]({ trial: true, timeout });
         // A custom combobox opens on a click. One that another combobox's
         // open list covers fails here, before the journal, not after.
-        else if (action.tool === 'select' && current.tag !== 'select') await handle.click({ trial: true, timeout });
+        else if (action.tool === 'select' && current.tag !== 'select') await at.click({ trial: true, timeout });
+        else if (part) await part.click({ trial: true, timeout });
         return handle;
       } catch (error) { await handle.dispose(); throw error; }
     }, beforeDispatch, async (handle, mark) => {
@@ -216,9 +223,14 @@ export class PlaywrightDriver {
           assertChosenAsSeen(action, current);
           await assertOwnerHolds(owner, action.listed_owner, handle);
         }
+        // The click still lands where it was checked to land.
+        if (part !== undefined && !await handle.evaluate(ownPart, [FIELD, INTERACTIVE, part])) {
+          throw new Error('STALE_TARGET: what a click on the target lands on changed while persisting intent');
+        }
         force = forced(action, current);
-        if (force) await handle.hover({ trial: true, timeout });
+        if (force) await (part || handle).hover({ trial: true, timeout });
       }
+      const at = part || handle;
       // Requests the page starts from here on belong to this input; the next
       // observation waits for them (see observe).
       if (!['wait', 'none'].includes(action.tool)) {
@@ -226,13 +238,13 @@ export class PlaywrightDriver {
         record.events.input(record.inputAt);
       }
       switch (action.tool) {
-        case 'click': mark(); await handle.click({ timeout, force }); break;
-        case 'hover': mark(); await handle.hover({ timeout }); break;
+        case 'click': mark(); await at.click({ timeout, force }); break;
+        case 'hover': mark(); await at.hover({ timeout }); break;
         case 'type': {
           const value = String(action.value);
           mark();
           if (inputMode === 'realistic') {
-            await handle.click({ timeout, force });
+            await at.click({ timeout, force });
             await handle.press('ControlOrMeta+A', { timeout });
             await handle.press('Backspace', { timeout });
             await handle.type(value, { timeout });
@@ -258,7 +270,7 @@ export class PlaywrightDriver {
         case 'select':
           mark();
           if (action.el.tag === 'select') await handle.selectOption({ value: String(action.value) }, { timeout, force });
-          else await handle.click({ timeout, force });
+          else await at.click({ timeout, force });
           return { input_mode: action.el.tag === 'select' ? 'native_select' : 'pointer' };
         case 'press_enter':
         case 'press_key': {
@@ -273,7 +285,7 @@ export class PlaywrightDriver {
         case 'none': break;
       }
       return { input_mode: ['click', 'hover'].includes(action.tool) ? 'pointer' : 'keyboard' };
-    }).finally(() => owner?.dispose().catch(() => {}));
+    }).finally(() => Promise.all([owner, part].map((h) => h?.dispose().catch(() => {}))));
   }
   async screenshot(ref, { format = 'png' } = {}) {
     const record = await this.record(ref);
@@ -315,6 +327,72 @@ export class PlaywrightDriver {
 // stable and not covered.
 function forced(action, current) {
   return current.drag_disabled === true && ['click', 'type', 'select'].includes(action.tool);
+}
+
+// Input that clicks a field (or points at it): the click, the hover, the
+// click that opens a custom combobox, and a realistic TYPE's first click.
+// The page code checks the field as FIELD counts one; this only skips that
+// check for what cannot be one.
+const FIELD_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton', 'checkbox', 'radio', 'switch', 'slider']);
+function clicksField(action, inputMode, current) {
+  const field = ['input', 'textarea', 'select'].includes(current.tag) || FIELD_ROLES.has(current.role) || !!current.contenteditable;
+  return field && (['click', 'hover'].includes(action.tool) || action.tool === 'select' && current.tag !== 'select'
+    || action.tool === 'type' && inputMode === 'realistic');
+}
+
+// The part of a field's own box a click on the field lands on, when not the
+// field itself (see ownPart). The field is scrolled into view first, as the
+// click scrolls it, so that its middle is on screen.
+async function ownPartOf(handle, timeout) {
+  await handle.scrollIntoViewIfNeeded({ timeout });
+  const found = await handle.evaluateHandle(ownPart, [FIELD, INTERACTIVE]);
+  const part = found.asElement();
+  if (!part) await found.dispose();
+  return part;
+}
+
+// Page code: what a click on a field lands on, when that is a part of the
+// field's own box drawn over it. antd draws a select's shown value over its
+// input ("Is" in ccMonet's filter popup), so the browser's check before a
+// click on the input waits, until it times out, for something that never
+// moves away, and a person clicks that value to open the list. The part is
+// what is on top at the middle of the field, where a click lands; it lies in
+// the field's own box, up to four levels around the field that hold no other
+// field (as in listsOption), and neither it nor anything between it and that
+// box is a control (`interactive`): a clear button, a link, an option. With
+// the field itself on top there, or anything else, there is none (null), and
+// the browser's own check decides. `field` is FIELD. Like the browser's check,
+// it reads into open shadow roots, and so does its count of fields in a box.
+// Given what it found before (`expected`, a part or null), it says whether it
+// finds the same now.
+function ownPart(target, [field, interactive, expected]) {
+  const parent = (e) => e.parentElement || e.getRootNode()?.host;
+  const fieldsIn = (root) => [...root.querySelectorAll('*')].reduce((n, e) => n + (e.matches(field) ? 1 : 0) + (e.shadowRoot ? fieldsIn(e.shadowRoot) : 0), 0);
+  const lands = () => {
+    if (!target.isConnected || !target.matches(field)) return null;
+    const rect = target.getClientRects()[0];
+    if (!rect) return null;
+    const x = (Math.max(rect.left, 0) + Math.min(rect.right, innerWidth)) / 2;
+    const y = (Math.max(rect.top, 0) + Math.min(rect.bottom, innerHeight)) / 2;
+    let hit = document.elementFromPoint(x, y);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    if (!hit) return null;
+    for (let p = hit; p; p = parent(p)) if (p === target) return null;
+    let box;
+    for (let up = parent(target), depth = 0; up && up !== document.body && up !== document.documentElement && depth < 4; up = parent(up), depth++) {
+      if (fieldsIn(up) + (up.matches(field) ? 1 : 0) > 1) break;
+      box = up;
+    }
+    if (!box) return null;
+    for (let p = hit; p !== box; p = parent(p)) if (!p || p.matches(interactive)) return null;
+    return hit;
+  };
+  const found = lands();
+  return expected === undefined ? found : found === expected;
 }
 
 // An option from an open combobox's list is clicked: one chosen with SELECT
