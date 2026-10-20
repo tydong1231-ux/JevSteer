@@ -117,6 +117,18 @@ test("an open combobox is not a SELECT target; a field known only by its hint ca
   assert.equal(space.questions.type_target.criteria["3"].table_column, "QTY");
 });
 
+test("unnamed selects are told apart in the target heads by what they show", () => {
+  const space = buildTargetSpace([
+    { i: 0, selector: "#field", tag: "input", role: "combobox", label: "", value: "", display: "Status", expanded: false },
+    { i: 1, selector: "#op", tag: "input", role: "combobox", label: "", value: "", display: "Is", expanded: false },
+    { i: 2, selector: "#value", tag: "input", role: "combobox", label: "", value: "", display: "Draft", expanded: false },
+    { i: 3, selector: "#password", tag: "input", type: "password", role: "combobox", label: "Password", value: "", display: "hunter2", expanded: false },
+  ]);
+  const shows = (tool) => Object.fromEntries(Object.entries(space.questions[`${tool}_target`].criteria).map(([key, c]) => [key, c.shows]));
+  assert.deepEqual(shows("select"), { 0: "Status", 1: "Is", 2: "Draft", 3: undefined });
+  assert.deepEqual(shows("click"), { 0: "Status", 1: "Is", 2: "Draft", 3: undefined });
+});
+
 test("an open combobox offers the options its popup lists for SELECT; choosing one clicks it", () => {
   const elements = [
     { i: 0, selector: "#customer", tag: "input", role: "combobox", label: "Customer", value: "Acme", expanded: true },

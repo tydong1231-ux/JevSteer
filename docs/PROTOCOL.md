@@ -173,7 +173,9 @@ but it is never the field's name, because it goes away once the field holds a
 value. A field in a table cell also reports its column header as `column`; such
 a field belongs to its row's item, such as an invoice line, and the value
 chooser is told so. A select-like combobox whose input holds only search text
-(antd, react-select) reports the value it shows as `display`. A field this run
+(antd, react-select) reports the value it shows as `display`, and Jev's target
+heads give it as `shows`: unnamed selects, such as ccMonet's filter row
+("Status", "Is", "Draft"), are told apart by it. A field this run
 typed that now shows an option holding the typed text as whole words ("Acme" in
 "Acme Ltd") is not offered for TYPE again. An option that holds it only inside
 a word ("US" in "Australia", "1" in "10") is another option, so the field can

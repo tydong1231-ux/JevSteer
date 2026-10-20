@@ -48,6 +48,10 @@ function describe(candidate, pool) {
   if (e.scope) result.scope = squash(e.scope, 180);
   if (e.column) result.table_column = squash(e.column, 60);
   if (e.value != null && !sensitiveField(e)) result.current_value = squash(e.value, 80);
+  // What a select shows while its input holds nothing (antd draws the chosen
+  // option apart from its input). ccMonet's filter row has three unnamed
+  // selects told apart only by it: "Status", "Is", "Draft".
+  if (e.display && !sensitiveField(e)) result.shows = squash(e.display, 80);
   if (e.checked != null) result.checked = e.checked;
   if (e.options?.length && candidate.option == null) {
     result.selected = e.options.filter(o => o.selected).map(o => squash(o.text, 55)).slice(0, 3);
