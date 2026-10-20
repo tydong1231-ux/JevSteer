@@ -147,3 +147,17 @@ test("a ticket goes stale when the hint or column that tells which field it is c
     assert.equal(receipt.status, "host_review_stale", key);
   }
 });
+
+// Fields of two invoice lines read alike ("Unit Price"); the host tells them
+// apart by their table row. A row inserted above one, with the table's text
+// past the page-text cutoff, moves it to another line.
+test("a ticket goes stale when the table row a field is in changes", async () => {
+  const field = { i: 0, tag: "input", role: "textbox", label: "Unit Price", value: "50", context: "", column: "Unit Price", row: 2 };
+  const k = new MemoryKapture({ text: "Invoice", elements: [field] });
+  const runtime = memoryRuntime(k, scriptedDecider([{ tool: "none", done: 0.99 }]));
+  const result = await runtime.run("Set line 2's unit price to 50", { verificationMode: "host", evidenceLevel: "none" });
+  assert.equal(result.status, "host_review_required");
+  k.page.elements = [{ ...field, row: 3 }];
+  const receipt = await runtime.reviewResult({ tabId: "test", reviewId: result.host_review.review_id, decision: "accept", goalEvidence: "Line 2's Unit Price shows 50" });
+  assert.equal(receipt.status, "host_review_stale");
+});

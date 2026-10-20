@@ -62,18 +62,23 @@ the run history shows that a record was created. The effect request treats
 such as "Generate only calculates the report" keeps a read-only button out of
 the remote-write journal.
 
-A TYPE or SELECT (also an option chosen from an open list) gets one more
-question with the effect questions: does it set a field the task does not call
-for, or put a task value into a field it does not belong in? A field that
-`goal`, `success_criteria`, `values` or `guidance` never mention, and that the
-page does not mark required or invalid (a tracking category, a tag, a
-reference), keeps what it holds. At `JEVSTEER_UNREQUESTED_AT` (default 0.7)
-or above no input is sent: Jev looks again with the refusal in its history
-(`recovery: "reobserve"`, `reason: "not_requested"`), and the third such
-choice stops the milestone as `needs_guidance`, naming the field. Name a field
-the task needs, and its value, in `guidance` or `values`. Jev's own operation
-question says the same: set only what the task asks for or the page marks
-required or invalid, and never pick a value of its own for any other field.
+A TYPE or SELECT (also an option chosen from an open list, or clicked there)
+gets one more question with the effect questions: does it set a field the task
+does not call for, or put a task value into a field it does not belong in? A
+field that `goal`, `success_criteria`, `values` or `guidance` never mention,
+and that the page does not mark required or invalid (a tracking category, a
+tag, a reference), keeps what it holds. A click on a field's clear button is
+asked whether the task calls for emptying that field: a value the task never
+mentions, that this run did not enter and that fits the field (a default, a
+saved setting) stays; one this run entered, or one that contradicts the task
+or belongs in another field, may be emptied. At `JEVSTEER_UNREQUESTED_AT`
+(default 0.7) or above no input is sent: Jev looks again with the refusal in
+its history (`recovery: "reobserve"`, `reason: "not_requested"`), and the
+third such choice stops the milestone as `needs_guidance`, naming the field.
+Name a field the task needs, and its value, in `guidance` or `values`. Jev's
+own operation question says the same: set only what the task asks for or the
+page marks required or invalid, and never pick a value of its own for any
+other field.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
 on a closed/replaced Page blocks new input on other Pages in that session.
@@ -363,8 +368,9 @@ That state includes what a focused field's popup says (search results under a
 search box, see above), which is read apart from the page text and also past
 its cutoff, so results that change before acceptance make the ticket stale. A
 secret field's popup is left out. It also includes each field's `hint` and
-`column`, which tell the host which field an unnamed one is, also where the
-text that shows them is past the page text's cutoff.
+`column`, which tell the host which field an unnamed one is, and its table
+`row`, which tells which line it is on, also where the text that shows them is
+past the page text's cutoff.
 A toast, such as antd's "Update successfully" message (under any class prefix),
 a toast or snackbar, or another fixed-position alert or status region, goes away
 on its own, so the state a ticket binds leaves its text out; the host still sees
@@ -574,11 +580,11 @@ bounds all waits.
 With `JEVSTEER_LOG=1`, stderr gets one row per round: Jev's scores, the chosen
 action, `observe_ms` (watching the previous input or wait), `decide_ms` and
 `requests`. A guarded input adds a `guards` row with the effect and constraint
-verdicts (`unrequested_guard` too for a TYPE or SELECT), and the action as the
-guards judged it: `judged_as`, the element (for
+verdicts (`unrequested_guard` too for an input that sets or empties a field),
+and the action as the guards judged it: `judged_as`, the element (for
 an option chosen from an open list, its combobox), the chosen `option`,
-`option_of` for a click on an open combobox's option, and the element's scope
-and context. `explain: true` returns the round
+`option_of` for a click on an open combobox's option, `clears` for a click on
+a field's clear button, and the element's scope and context. `explain: true` returns the round
 rows, guard verdicts included, in the result.
 Playwright observations read at most 2000 interactive elements
 (`JEVSTEER_MAX_ELEMENTS`; Wikipedia's history at 100 revisions holds about

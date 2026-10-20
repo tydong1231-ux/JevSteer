@@ -30,7 +30,7 @@ export const config = {
   sideEffectSafeAt: num("JEVSTEER_SIDE_EFFECT_SAFE_AT", 0.2),
   constraintRiskAt: num("JEVSTEER_CONSTRAINT_RISK_AT", 0.55),
   // At or above this, the guards judge that the task does not call for the
-  // field an action sets (see checkActionEffects): nothing is sent.
+  // field an action sets or empties (see checkActionEffects): nothing is sent.
   unrequestedAt: num("JEVSTEER_UNREQUESTED_AT", 0.7),
   nextStepClearAt: num("JEVSTEER_NEXT_STEP_CLEAR_AT", 0.45),
   maxAutoRecoveries: num("JEVSTEER_MAX_AUTO_RECOVERIES", 2),

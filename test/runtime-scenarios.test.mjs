@@ -498,13 +498,23 @@ const trackingLine = () => {
   return new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Item QA item A QTY 2 Tracking Category Woodlands", elements: [tracking, woodlands, quantity] });
 };
 const pickWoodlands = { ...decision({ tool: "select", target: null }), select_target: { choice: "0>1", probabilities: { "0>1": 0.99 } } };
+// An invoice whose Currency shows the organization's default, with antd's
+// clear button next to it.
+const defaultCurrency = () => {
+  const currency = { i: 0, selector: "#currency", tag: "input", role: "combobox", label: "Currency", value: "", display: "SGD", expanded: false };
+  const clear = { i: 1, selector: "#clear-currency", tag: "span", role: "button", label: "close-circle", clears: 0 };
+  const quantity = { i: 2, selector: "#qty", tag: "input", label: "QTY", column: "QTY", record_key: "line-1", value: "2" };
+  return new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Currency SGD Item QA item A QTY 2", elements: [currency, clear, quantity] });
+};
 
-test("only an action that sets a field is asked whether the task calls for it; an unanswered question holds nothing back", async () => {
+test("only an action that sets or empties a field is asked whether the task calls for it; an unanswered question holds nothing back", async () => {
   const asked = [];
   let reply = {};
+  let proposed;
   const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
     asked.push(Object.keys(questions).sort().join());
     if (questions.action_unrequested) asked.push(questions.action_unrequested.instructions);
+    proposed = state.proposed_action;
     return { answers: reply, ms: 1, tokens: 1 };
   });
   const page = trackingLine().page;
@@ -518,6 +528,19 @@ test("only an action that sets a field is asked whether the task calls for it; a
   const click = { tool: "click", el: { i: 3, selector: "#add", tag: "button", label: "Add New Line" } };
   assert.equal("unrequested" in await runtime.checkActionEffects(page, contract, click, []), false);
   assert.deepEqual(asked.filter((a) => !a.includes(" ")), ["action_irreversible,action_side_effect,action_unrequested", "action_irreversible,action_side_effect,action_unrequested", "action_irreversible,action_side_effect"]);
+  // A click on an open combobox's option sets that combobox.
+  reply = { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, action_unrequested: { noul: 0.91 } };
+  const option = runtime.resolve(page, decision({ tool: "click", target: 1 }), {});
+  assert.equal((await runtime.checkActionEffects(page, contract, option, [])).unrequested, 0.91);
+  assert.match(asked.at(-1), /^This EXACT proposed_action sets a field\./);
+  assert.equal(proposed.option_of.element, 'combobox "Tracking Category"');
+  // A click on a field's clear button empties that field, and is asked as such.
+  const currency = defaultCurrency().page;
+  const clear = runtime.resolve(currency, decision({ tool: "click", target: 1 }), {});
+  assert.equal((await runtime.checkActionEffects(currency, contract, clear, [])).unrequested, 0.91);
+  assert.match(asked.at(-1), /^This EXACT proposed_action empties the field that proposed_action\.clears names/);
+  assert.match(asked.at(-1), /Answer no when the task asks to empty or change this field, when this run entered the value it holds, when it holds a value that contradicts the task or belongs in another field/);
+  assert.equal(proposed.clears, '[0] combobox "Currency" showing "SGD"');
 });
 
 test("a field the task does not ask for is left as it is: nothing is sent, Jev is told why, and one who insists is stopped", async () => {
@@ -542,8 +565,50 @@ test("a field the task does not ask for is left as it is: nothing is sent, Jev i
   runtime = memoryRuntime(k, async (state, questions) => (await unrequested(state, questions)) || insists(state, questions));
   result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 6, evidenceLevel: "none" });
   assert.equal(result.status, "needs_guidance");
-  assert.match(result.info, /^Jev kept choosing to set fields the task does not ask for \(last: combobox "Tracking Category" -> Woodlands\), so no input was sent/);
+  assert.match(result.info, /^Jev kept choosing to change fields the task does not ask for \(last: combobox "Tracking Category" -> Woodlands\), so no input was sent/);
+  assert.equal(result.pending.field, 'combobox "Tracking Category"');
   assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  // Clicked instead of chosen with SELECT, the option is refused the same way.
+  k = trackingLine();
+  told = undefined;
+  const clicks = scriptedDecider([() => decision({ tool: "click", target: 1 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  runtime = memoryRuntime(k, async (state, questions) => (await unrequested(state, questions)) || clicks(state, questions));
+  result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  assert.match(told.detail, /^combobox "Tracking Category" -> Woodlands: the task does not ask to set this field to that, so nothing was sent/);
+});
+
+// A field's clear button (round 4) could empty what the task never mentions,
+// such as a default currency.
+test("a field the task does not ask to empty keeps what it holds: its clear button is not clicked", async () => {
+  const guard = (unrequested) => async (state, questions) => (questions.action_side_effect
+    ? { answers: { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, ...(questions.action_unrequested ? { action_unrequested: { noul: unrequested } } : {}) }, ms: 1, tokens: 1 }
+    : undefined);
+  const emptyCurrency = () => decision({ tool: "click", target: 1 });
+  let k = defaultCurrency();
+  let told;
+  const steps = scriptedDecider([emptyCurrency, (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  let runtime = memoryRuntime(k, async (state, questions) => (await guard(0.9)(state, questions)) || steps(state, questions));
+  let result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "not_requested", false]);
+  assert.match(told.detail, /^button "close-circle" emptying \[0\] combobox "Currency" showing "SGD": the task does not ask to empty this field, so nothing was sent/);
+  assert.equal(result.status, "completed_verified");
+  // Jev chooses it three times: the third stops the run for guidance.
+  k = defaultCurrency();
+  const insists = scriptedDecider([emptyCurrency]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.9)(state, questions)) || insists(state, questions));
+  result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 6, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev kept choosing to change fields the task does not ask for \(last: button "close-circle" emptying \[0\] combobox "Currency" showing "SGD"\)/);
+  assert.equal(result.pending.field, '[0] combobox "Currency" showing "SGD"');
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  // When the task asks for it, the clear button is clicked.
+  k = defaultCurrency();
+  const asked = scriptedDecider([emptyCurrency, () => decision({ tool: "none", done: 0.99 })]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.05)(state, questions)) || asked(state, questions));
+  result = await runtime.run("Empty the invoice's Currency", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
 });
 
 test("Playwright rounds wait on full observations, not the URL/title metadata poll", async () => {
