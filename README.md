@@ -18,6 +18,8 @@ JevSteer keeps expensive agents out of repetitive browser loops without asking J
 
 [Agent protocol](docs/PROTOCOL.md) · [Claude Code example](examples/claude-code.md)
 
+**Demo (~67 s):** [watch the video](https://github.com/tydong1231-ux/JevSteer/releases/download/demo-v1/jevsteer-demo.mp4) — JevSteer fills and submits a public web form, then searches Wikipedia and opens an article's revision history (real runs, recorded with OpenScreen).
+
 ## What problem does it solve?
 
 A powerful host agent is good at planning a multi-step business task, but spending that agent's time on every browser click is expensive. A smaller executor can be cheaper, but should not be entrusted with the entire business workflow.
