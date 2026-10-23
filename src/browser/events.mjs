@@ -82,6 +82,13 @@ export class PageEvents {
     }
     return { started: this.started.filter((at) => at >= since).length, pending };
   }
+  // Responses to requests that can change remote data (any method but GET,
+  // HEAD and OPTIONS, the page's own data requests and document requests
+  // such as a form post), received at or after `since`.
+  writes(since = 0) {
+    return this.entries.filter((e) => e.kind === 'network' && e.timestamp >= since && (DATA_REQUESTS.has(e.type) || e.type === 'document')
+      && !['GET', 'HEAD', 'OPTIONS'].includes(String(e.method || 'GET').toUpperCase()) && !trackerRequest(e.url || '')).length;
+  }
   read(since = 0) {
     const entries = this.entries.filter((e) => e.cursor > since);
     return { cursor: this.cursor, requests: entries.filter((e) => e.kind === 'network'), events: entries.filter((e) => e.kind !== 'network'), truncated: since > 0 && since < (this.entries[0]?.cursor || 0) - 1 };

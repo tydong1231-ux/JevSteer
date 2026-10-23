@@ -129,7 +129,17 @@ TYPE reads only the browser's own check, so a field typed while its cell still
 shows the error of a refused save is confirmed by its value.
 
 A profile/endpoint has a stable logical session namespace. An unresolved action
-on a closed/replaced Page blocks new input on other Pages in that session.
+judged likely to change remote data (recorded risk at or above
+`JEVSTEER_SESSION_LOCK_RISK_AT`, 0.5 by default; a record without a risk counts)
+blocks new input on other Pages in that session, even once its own Page is
+closed or replaced. An unresolved action judged possible but unlikely to write
+(risk 0.25 to 0.5: a menu, a tab, a filter) blocks only its own repeat on its
+own page; once the next observation shows its local effect with nothing in
+flight and no write request (a method other than GET, HEAD or OPTIONS) after
+it, its record closes as `applied` with no replay barrier. Low-risk input whose
+acknowledgement was lost closes as `not_applied` when the page shows no effect
+of it, has no request open and sent no write request, so the milestone can be
+rerun without a hand resolution.
 `browser_snapshot` and `browser_inspect` still read any page. Opening a page
 sends it no input, but its address is a request to the site, which can change
 something (a GET that saves, a logout) or wipe what the action left. That
@@ -589,6 +599,10 @@ Each milestone returns a compact Evidence Packet: actions/effects, verification,
 ## Unconfirmed actions
 
 `pending_actions` contains opaque action IDs and the originating run/milestone.
+Each dispatched action in `actions` carries `pointer` (viewport pixels of where
+the input landed, the time it was sent and the viewport size), so a host that
+records a run can draw the pointer; a Playwright observation reports
+`writes_since_input` next to `requests_since_input`.
 Intent is journaled before input under the same tab lease as network monitoring
 and evidence collection, including guarded `browser_act` manual recovery.
 Raw URLs, input values and financial record text are not stored in this journal.

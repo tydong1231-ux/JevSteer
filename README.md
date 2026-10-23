@@ -297,7 +297,7 @@ must stay local. No tests run during normal MCP startup.
 - `browser_resolve_action` — resolve an unconfirmed action after inspecting its outcome.
 - `browser_snapshot` / `browser_act` — recovery only.
 - `browser_screenshot` — visual fallback.
-- `browser_doctor` / `browser_tabs` / `browser_open` — setup/navigation helpers.
+- `browser_doctor` / `browser_tabs` / `browser_open` — setup/navigation helpers. `browser_doctor` says what a failed browser start needs (`fix`) and probes each tab (`responsive`, `visible`): a sleeping tab takes no input, and a background tab is brought on screen before input.
 
 MIT licensed. See `THIRD_PARTY_NOTICES.md`.
 
@@ -334,7 +334,10 @@ separate operations. Safety and verification thresholds remain unchanged.
 Before dispatching an interaction, a durable journal records its intent. This
 also covers guarded `browser_act` recovery, an Escape pressed on no element
 included: it returns an unresolved action ID until the host verifies its
-outcome. An unconfirmed
+outcome. An unconfirmed input judged likely to write (risk 0.5 or more) blocks
+the session's other pages until resolved; one judged unlikely (0.25 to 0.5)
+closes on its own once its local effect shows and no write request followed it
+(see [the protocol](docs/PROTOCOL.md)). An unconfirmed
 remote mutation survives
 a changed `run_id`, milestone resume and process restart. Unrelated page changes do not release it. A lost acknowledgement
 can be reconciled by an exact local control effect or independently verified final
