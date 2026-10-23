@@ -18,6 +18,8 @@ const MAP = {
   error: ["inspect_error", "browser_snapshot", true],
   constraint_blocked: ["refine_or_confirm_contract", "browser_snapshot", false],
   needs_tab_selection: ["select_tab", "browser_tabs", true],
+  // browser_snapshot reads the same page and stops at the same limit.
+  observation_limit: ["narrow_page_or_visual_step", "browser_screenshot", true],
 };
 
 export function recoveryFor(status, { tabId, contract, checkpoint, failedStep, candidates, info } = {}) {

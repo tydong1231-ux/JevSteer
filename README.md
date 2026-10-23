@@ -101,7 +101,9 @@ JevSteer can search, inspect, and verify the observed result. **If it cannot con
   independently ranks compatible targets for click, type, select, enter and hover.
   Only the chosen operation's target can execute.
 - **Native dropdown shortcuts:** small menus choose a specific option in one
-  call; large menus retain a follow-up option choice.
+  call; large menus retain a follow-up option choice. An open custom combobox
+  (antd, react-select) offers the options its list shows the same way, and the
+  chosen one is clicked.
 - **Separate text generation:** the host can pass named `values`, or optionally
   supply `TEXT_MODEL_API_KEY` / `TEXT_MODEL_BASE_URL` / `TEXT_MODEL` for a
   low-cost OpenAI-compatible model to fill ordinary fields from the goal. Missing
@@ -336,8 +338,10 @@ decision suggests a side effect. Opening a picker and submitting a record are
 separate operations. Safety and verification thresholds remain unchanged.
 
 Before dispatching an interaction, a durable journal records its intent. This
-also covers guarded `browser_act` recovery, which returns an unresolved action
-ID until the host verifies its outcome. An unconfirmed remote mutation survives
+also covers guarded `browser_act` recovery, an Escape pressed on no element
+included: it returns an unresolved action ID until the host verifies its
+outcome. An unconfirmed
+remote mutation survives
 a changed `run_id`, milestone resume and process restart. Unrelated page changes do not release it. A lost acknowledgement
 can be reconciled by an exact local control effect or independently verified final
 outcome, without replaying input. Otherwise the host inspects evidence and calls
@@ -368,7 +372,10 @@ exact, including whitespace and empty strings. For example:
 new input begins after exhaustion, while an already dispatched command retains
 its transport timeout. `JEVSTEER_ACTION_SETTLE_MS` defaults to 8000 and
 `JEVSTEER_OBSERVATION_QUIET_MS` to 250, and `JEVSTEER_REVIEW_QUIET_MS`, the
-quiet period before a host review ticket binds the page, to 1000. A `wait`
+quiet period before a host review ticket binds the page, to 1000. A new ticket
+also waits while a toast shows, up to `JEVSTEER_REVIEW_TOAST_WAIT_MS` (default
+4000). A Playwright observation reads at most `JEVSTEER_MAX_ELEMENTS` (default
+2000) interactive elements. A `wait`
 watches the page for up to `JEVSTEER_WAIT_MS` (default 5000) and ends as soon as
 it changes; `JEVSTEER_MAX_IDLE_WAITS` (default 2) waits in a row that saw
 nothing change stop the milestone as `stuck`, one more if the page kept sending

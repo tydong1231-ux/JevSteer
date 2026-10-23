@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findRemembered, locateAfterAction, rememberField } from "../src/element-identity.mjs";
+import { equivalentLink, findRemembered, locateAfterAction, pickTwin, rememberField, twinsOf } from "../src/element-identity.mjs";
 
 const doc = { frame_id: "f1", document_id: "f1:0:1", identity_version: 2 };
 const field = (i, context, extra = {}) => ({ i, ...doc, tag: "input", role: "textbox", label: "Credit limit", name: "credit", context, ...extra });
@@ -34,4 +34,87 @@ test("record keys, forms and documents still separate controls without context",
   assert.equal(locateAfterAction(before.elements[0], after, before), after.elements[0]);
   const otherDocument = page({ ...field(0, "a changed", { record_key: "line-1" }), document_id: "f1:1:2" });
   assert.equal(locateAfterAction(before.elements[0], otherDocument, before), undefined);
+});
+
+test("identical controls are told apart by what they show, never by their order", () => {
+  const select = (i, extra = {}) => ({ i, ...doc, tag: "input", role: "combobox", label: "", context: "", ...extra });
+  const filters = page(select(0, { hint: "Status" }), select(1, { hint: "Vendor" }), field(2, "Amount"));
+  const twins = twinsOf(filters.elements[1], filters);
+  assert.equal(twins.count, 2);
+  assert.equal(twins.distinct, true);
+  assert.equal(twinsOf(filters.elements[2], filters), undefined);
+  // Another document's copy is not a twin.
+  assert.equal(twinsOf(filters.elements[0], page(filters.elements[0], { ...select(1), document_id: "f1:1:2" })), undefined);
+  // The page swapped them: the one showing "Vendor" is still the one chosen.
+  const swapped = page(select(0, { hint: "Vendor" }), select(1, { hint: "Status" }));
+  assert.equal(pickTwin(twins, swapped.elements), swapped.elements[0]);
+  // Two that nothing observed tells apart are never picked, swapped or not.
+  const same = page(select(0), select(1));
+  assert.equal(twinsOf(same.elements[1], same).distinct, false);
+  assert.equal(pickTwin(twinsOf(same.elements[1], same), same.elements), undefined);
+  // Nor is one whose look another twin took on.
+  assert.equal(pickTwin(twins, [select(0, { hint: "Vendor" }), select(1, { hint: "Vendor" })]), undefined);
+  // When one is left, it is still picked only by its look: it may be the other.
+  assert.equal(pickTwin(twins, [select(0, { hint: "Status" })]), undefined);
+  assert.equal(pickTwin(twins, [select(0, { hint: "Vendor" })]).hint, "Vendor");
+});
+
+test("a combobox's twins can be told apart leaving out which one is open, as an open list can move", () => {
+  const box = (i, extra = {}) => ({ i, ...doc, tag: "input", role: "combobox", label: "Tags", context: "", ...extra });
+  const before = page(box(0, { expanded: true }), box(1, { expanded: false, display: "Urgent" }));
+  const owner = twinsOf(before.elements[0], before, { ignore: ["expanded"] });
+  assert.equal(owner.distinct, true);
+  // The open list moved to the twin: the chosen one is still the empty one.
+  const moved = page(box(0, { expanded: false }), box(1, { expanded: true, display: "Urgent" }));
+  assert.equal(pickTwin(owner, moved.elements), moved.elements[0]);
+  // Told apart only by which one is open: never picked.
+  const open = page(box(0, { expanded: true }), box(1, { expanded: false }));
+  assert.equal(twinsOf(open.elements[0], open).distinct, true);
+  assert.equal(twinsOf(open.elements[0], open, { ignore: ["expanded"] }).distinct, false);
+});
+
+// Codex on 440e142: two blank invoice lines with no key of their own hold
+// fields alike in everything but their line.
+test("fields alike but for their table line are the node seen on that line, while it is there and on that line", () => {
+  const price = (i, node, row, extra = {}) => ({ i, ...doc, node, tag: "input", role: "textbox", label: "Unit Price", column: "Unit Price", row, context: "", value: "", ...extra });
+  const lines = page(price(0, "t:1", 1), price(1, "t:2", 2));
+  const twins = twinsOf(lines.elements[1], lines);
+  assert.deepEqual({ ...twins, key: undefined }, { count: 2, key: undefined, distinct: true, node: "t:2", row: 2 });
+  assert.equal(pickTwin(twins, lines.elements), lines.elements[1]);
+  // The page rebuilt the lines: neither node is the one seen.
+  assert.equal(pickTwin(twins, [price(0, "t:3", 1), price(1, "t:4", 2)]), undefined);
+  // It moved the line up: the node seen is on another line now.
+  assert.equal(pickTwin(twins, [price(0, "t:2", 1), price(1, "t:1", 2)]), undefined);
+  assert.equal(pickTwin(twins, [price(0, "t:2", 1)]), undefined);
+  // Nor is it picked once it shows something else.
+  assert.equal(pickTwin(twins, [price(0, "t:1", 1), price(1, "t:2", 2, { value: "50" })]), undefined);
+  // Without node numbers (Kapture), off a table, or on the same line of two
+  // tables, nothing observed tells them apart.
+  const kapture = page(price(0, undefined, 1), price(1, undefined, 2));
+  assert.equal(twinsOf(kapture.elements[1], kapture).distinct, false);
+  const loose = page(price(0, "t:1", undefined, { column: undefined }), price(1, "t:2", undefined, { column: undefined }));
+  assert.equal(twinsOf(loose.elements[1], loose).distinct, false);
+  assert.equal(twinsOf(loose.elements[1], loose).node, undefined);
+  const twoTables = page(price(0, "t:1", 2), price(1, "t:2", 2), price(2, "t:3", 1));
+  assert.equal(twinsOf(twoTables.elements[1], twoTables).distinct, false);
+  assert.equal(twinsOf(twoTables.elements[2], twoTables).distinct, true);
+  // Twins told apart by what they show are found by it, as before.
+  const filled = page(price(0, "t:1", 1, { value: "100" }), price(1, "t:2", 2));
+  assert.equal(twinsOf(filled.elements[1], filled).node, undefined);
+  assert.equal(pickTwin(twinsOf(filled.elements[1], filled), [price(0, "t:9", 1), price(1, "t:8", 2, { value: "100" })]).i, 0);
+});
+
+test("of two links to one address, the one clicked is the node Jev saw; links rebuilt since are not told apart", () => {
+  const link = (i, node, extra = {}) => ({ i, ...doc, node, tag: "a", role: "link", label: "100", text: "100", href: "/w/index.php?limit=100", context: "(20 | 50 | 100)", ...extra });
+  const base = "https://en.wikipedia.org/w/index.php?action=history";
+  // The page moved the bottom pager above the top one: still the node seen.
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "t:2"), link(1, "t:1")], base).i, 0);
+  // The only one left is the node seen.
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "t:2")], base).i, 0);
+  // Rebuilt: neither is the node seen.
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "u:1"), link(1, "u:2")], base), undefined);
+  // Without node numbers (Kapture), or for other links, nothing is picked.
+  assert.equal(equivalentLink(link(1, undefined), [link(0, undefined), link(1, undefined)], base), undefined);
+  assert.equal(equivalentLink(link(1, "t:2", { href: "#more" }), [link(0, "t:1", { href: "#more" }), link(1, "t:2", { href: "#more" })], base), undefined);
+  assert.equal(equivalentLink(link(1, "t:2"), [link(0, "t:1", { link_target: "_blank" }), link(1, "t:2")], base), undefined);
 });

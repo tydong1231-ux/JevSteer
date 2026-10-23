@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { repeatsBlock, elementFingerprint, toModelPage } from "../src/page-model.mjs";
+import { repeatsBlock, elementFingerprint, toModelPage, brief, formatPage, pageDiff } from "../src/page-model.mjs";
 
 test("repeatsBlock detects repeated cycles", () => {
   assert.equal(repeatsBlock(["a", "b", "a", "b", "a", "b"], 2, 3), true);
@@ -41,4 +41,47 @@ test("model page leaves out empty and default fields without losing state", () =
     { i: 5, tag: "input", label: "Password", type: "password", value: "[REDACTED]" },
   ]);
   assert.equal(toModelPage({ ...page, metrics: { frame_count: 2 } }).elements[0].frame_id, "f1");
+});
+
+// ccMonet marks an invoice line's required fields on the column header, and
+// one a save refused by an error class on its cell (see the snapshot). That
+// mark is the page's; the browser's own check, which an effect check reads,
+// stays apart.
+test("a field the page marks required or wrong says so to Jev and the host", () => {
+  const tracking = { i: 0, selector: "#tracking", tag: "input", role: "combobox", label: "Tracking Category", column: "Tracking Category", value: "", required: true, invalid: false, error_mark: true };
+  const page = { url: "https://erp.test", title: "Invoice", text: "Invoice", metrics: {}, elements: [tracking] };
+  assert.deepEqual(toModelPage(page).elements, [{ i: 0, tag: "input", role: "combobox", label: "Tracking Category", value: "", column: "Tracking Category", required: true, invalid: true }]);
+  assert.match(formatPage(page), /\[0\] <input> role=combobox label="Tracking Category" required invalid$/);
+  assert.equal(pageDiff(page, { ...page, elements: [{ ...tracking, error_mark: false }] }), 'combobox "Tracking Category" invalid=false');
+  assert.equal(pageDiff(page, { ...page, elements: [{ ...tracking, error_mark: undefined, invalid: true }] }), "no obvious visible change");
+});
+
+test("a hint and a table column reach Jev; a hint names a field only when nothing else does", () => {
+  const search = { i: 0, tag: "input", role: "textbox", type: "text", label: "", hint: "Search contacts, vendor bills..." };
+  const qty = { i: 1, tag: "input", role: "textbox", label: "QTY", column: "QTY", value: "" };
+  const page = { url: "https://erp.test", title: "Bills", text: "Bills", metrics: {}, elements: [search, qty] };
+  assert.deepEqual(toModelPage(page).elements, [
+    { i: 0, tag: "input", role: "textbox", hint: "Search contacts, vendor bills...", type: "text" },
+    { i: 1, tag: "input", role: "textbox", label: "QTY", value: "", column: "QTY" },
+  ]);
+  assert.equal(brief(search), 'textbox "Search contacts, vendor bills..."');
+  assert.equal(brief({ ...search, placeholder: "Keyword" }), 'textbox "Keyword"');
+  assert.match(formatPage(page), /\[0\] <input> role=textbox type=text hint="Search contacts, vendor bills..."/);
+});
+
+test("the focused field's popup shows next to that field; a secret field's popup is left out", () => {
+  const field = { i: 3, tag: "input", role: "textbox", label: "", hint: "Search contacts", value: "CP-MEIJI" };
+  const page = { url: "https://erp.test", title: "Bills", text: "Vendor 1 CP-MEIJI CO.,LTD.", elements: [field, { i: 6, tag: "div", label: "CP-MEIJI CO.,LTD.", popup_of: 3 }], popup: { field: 3, text: "Vendor 1 CP-MEIJI CO.,LTD." } };
+  const model = toModelPage(page);
+  assert.deepEqual(model.popup, { field: '[3] textbox "Search contacts"', field_value: "CP-MEIJI", shows: "Vendor 1 CP-MEIJI CO.,LTD." });
+  assert.equal(model.elements[1].popup_of, 3);
+  // A popup that echoes what was typed in a secret field is left out of
+  // Jev's page, also when it lies beyond the page text Jev reads.
+  for (const secret of [{ type: "password", label: "Password" }, { label: "API token" }]) {
+    const echo = { ...page, text: "x".repeat(9000), elements: [{ ...field, ...secret, value: "hunter2" }], popup: { field: 3, text: "hunter2 is too common" } };
+    const model = toModelPage(echo);
+    assert.equal(model.popup, undefined);
+    assert.doesNotMatch(JSON.stringify(model), /hunter2/);
+  }
+  assert.equal(toModelPage({ ...page, popup: { field: 9, text: "x" } }).popup, undefined);
 });

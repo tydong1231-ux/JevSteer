@@ -44,6 +44,14 @@ test("duplicate field names are distinguished by fieldset scope", () => {
   assert.equal(evaluateAssertions(p, [{ ...assertions[0], context: undefined }])[0].passed, false);
 });
 
+test("a select-like combobox is compared by the value it shows", () => {
+  const customer = { i: 0, tag: "input", role: "combobox", label: "Customer", value: "", display: "CHAIN1019", context: "" };
+  const assertions = normalizeTaskContract({ goal: "Check", assertions: [{ type: "field_equals", label: "Customer", value: "CHAIN1019" }] }).assertions;
+  assert.equal(evaluateAssertions({ url: "https://app.test", text: "", elements: [customer] }, assertions)[0].passed, true);
+  // Text typed into its search box is what it holds while the list is open.
+  assert.equal(evaluateAssertions({ url: "https://app.test", text: "", elements: [{ ...customer, value: "CHAIN", display: undefined }] }, assertions)[0].passed, false);
+});
+
 test("native modal excludes background controls and ARIA toggle state is exact", () => {
   const p = buildSemanticPage({ domHtml: '<button id="behind">Delete</button><dialog open aria-label="Settings"><button id="switch" role="switch" aria-checked="false">Notifications</button></dialog>', rawElements: ["behind", "switch"].map((id) => ({ selector: `#${id}`, visible: true, tagName: "button" })) });
   assert.equal(p.elements.length, 1);
@@ -140,12 +148,29 @@ test("observation recognizes values and toggle state but ignores generated selec
   assert.equal(observationSignature(a), observationSignature(page([{ ...a.elements[0], selector: "#random" }])));
   assert.notEqual(observationSignature(a), observationSignature(page([{ ...a.elements[0], value: "b" }])));
   assert.notEqual(observationSignature(a), observationSignature(page([{ ...a.elements[0], checked: true }])));
+  // A select-like combobox holds no text once an option is picked; it shows it.
+  assert.notEqual(observationSignature(a), observationSignature(page([{ ...a.elements[0], display: "Acme Ltd" }])));
+  // "Doe, John" is one option, or two: a multi-select's options are read apart.
+  const one = page([{ ...a.elements[0], display: "Doe, John" }]);
+  assert.notEqual(observationSignature(one), observationSignature(page([{ ...one.elements[0], display_items: ["Doe", "John"] }])));
+  // The options read apart stop at 20; a later one the field shows still
+  // counts (Codex on 7519fff).
+  const tags = Array.from({ length: 25 }, (_, n) => `T${n + 1}`);
+  const many = (shown) => page([{ ...a.elements[0], display: shown.join(", "), display_items: shown.slice(0, 20) }]);
+  assert.notEqual(observationSignature(many(tags)), observationSignature(many([...tags.slice(0, 24), "T99"])));
+  // A secret field reads "[REDACTED]" whatever it holds: the digest of its
+  // live value tells a change apart (Codex on ebc7159).
+  const secret = page([{ ...a.elements[0], label: "API token", value: "[REDACTED]", value_hash: "1".repeat(64), secret: true }]);
+  assert.notEqual(observationSignature(secret), observationSignature(page([{ ...secret.elements[0], value_hash: "2".repeat(64) }])));
+  // Another field's digest adds nothing to what its value says.
+  assert.equal(observationSignature(a), observationSignature(page([{ ...a.elements[0], value_hash: "3".repeat(64) }])));
 });
 
 test("unrelated live text cannot authorize a duplicate server submission", async () => {
   const k = new MemoryKapture(page());
   k.onCommand = () => { k.page.text = "A clock ticked; save outcome still unknown"; };
-  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  // Jev chooses Save again: the contract is checked first, and fails here.
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
   const result = await runtime.run("Save the record", { evidenceLevel: "none" });
   assert.equal(result.status, "action_failed");
   assert.equal(k.commands.length, 1);
@@ -173,13 +198,13 @@ test("lost click acknowledgement stays blocked across process restart and a new 
 test("changing the save button label cannot bypass an unresolved mutation", async () => {
   const k = new MemoryKapture(page());
   k.onCommand = () => { k.page.elements[0].label = "Retry save"; };
-  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }])).run("Save", { evidenceLevel: "none" });
+  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 })).run("Save", { evidenceLevel: "none" });
   assert.equal(result.status, "action_failed"); assert.equal(k.commands.length, 1);
 });
 
 test("an observed server rejection can explicitly authorize a new attempt", async () => {
   const k = new MemoryKapture(page());
-  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
   const first = await runtime.run("Save", { evidenceLevel: "none" });
   await runtime.resolveAction({ tabId: "test", actionId: first.pending_actions[0].action_id, resolution: "not_applied", evidence: "Server returned validation rejection; record is absent" });
   runtime.decider = scriptedDecider([{ side_effect: 0.9 }, { tool: "none", done: 0.99 }]);
@@ -358,7 +383,7 @@ test("P1: host-confirmed applied save remains replay-blocked across restarts and
   const dir = await mkdtemp(join(tmpdir(), "jevsteer-applied-"));
   try {
     const k = new MemoryKapture(page());
-    const first = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+    const first = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
     first.journal = new ActionJournal({ dir });
     const initial = await first.run("Save invoice REF-42", { runId: "first", evidenceLevel: "none" });
     assert.equal(initial.status, "action_failed");
@@ -390,7 +415,7 @@ test("P1: host-confirmed applied save remains replay-blocked across restarts and
 
 test("P1: confirmed not_applied permits retry, while verified remote writes stay protected", async () => {
   const k = new MemoryKapture(page());
-  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 }));
   const first = await runtime.run("Save REF-42", { evidenceLevel: "none" });
   await runtime.resolveAction({
     tabId: "test", actionId: first.pending_actions[0].action_id,
@@ -446,6 +471,56 @@ test("P2: manual recovery journals before clicking and stays pending after trans
   });
   assert.equal((await runtime.journal.pending("test")).length, 0);
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }), /ACTION_ALREADY_APPLIED/);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+});
+
+// ccMonet opens every invoice on one address: a host's click on option "HQ"
+// for one invoice, resolved applied, refused "HQ" on the next invoice, by
+// hand and in a run, and a milestone goal that named no invoice refused
+// Approve on the next one (Mac rerun of 3fa0a57). A goal names the
+// operation and its record; the same goal is still refused.
+test("a manual input given a goal is refused again under that goal only, as a run's write is", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const clicks = () => k.commands.filter((c) => c.command === "click").length;
+  const first = await runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "  Approve the sales invoice for ABC PTE LTD,\n 5,000.00 " });
+  assert.match(first.info, /the same input on this page is then refused as a replay under this goal\. If it only changed the page \(a field set before saving, a list opened\), resolve not_applied\.$/);
+  await runtime.resolveAction({ tabId: "test", actionId: first.action_id, resolution: "applied", evidence: "The invoice shows Approved" });
+  // The same goal, by hand or as a run's goal, is refused, with how another record is told apart.
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "Approve the sales invoice for ABC PTE LTD, 5,000.00" }),
+    /ACTION_ALREADY_APPLIED: the confirmed action must not be replayed manually\. If the page now shows another record \(another invoice on the same address\), name that record in goal, so this operation is told apart from the confirmed one\. For the same record, keep the goal as it is\.$/);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0 }),
+    /replayed manually\. If the page now shows another record, pass goal naming that record and the operation\.$/);
+  const resumed = await runtime.run("Approve the sales invoice for ABC PTE LTD, 5,000.00", { evidenceLevel: "none" });
+  assert.equal(resumed.status, "action_failed");
+  assert.match(resumed.info, /Inspect the existing record\. If the page now shows another record \(another invoice on the same address\), name that record in this milestone's goal/);
+  assert.equal(clicks(), 1);
+  // Another record's goal is another operation.
+  const next = await runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "Approve the sales invoice for JevSteer QA CHAIN1020A, 50.00" });
+  assert.equal(next.status, "action_unconfirmed");
+  assert.equal(clicks(), 2);
+  await runtime.resolveAction({ tabId: "test", actionId: next.action_id, resolution: "applied", evidence: "The invoice shows Approved" });
+  // A run under a goal no record holds clicks.
+  runtime.decider = scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 });
+  const other = await runtime.run("Approve the sales invoice for Third Co, 1.00", { evidenceLevel: "none" });
+  assert.equal(clicks(), 3);
+  assert.equal(other.pending_actions.length, 1);
+});
+
+test("a manual input given no goal, once applied, refuses the same input on the page under any goal", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const bare = await runtime.actManual({ tabId: "test", action: "click", element: 0 });
+  assert.match(bare.info, /refused as a replay under any goal, since none was given\./);
+  await runtime.resolveAction({ tabId: "test", actionId: bare.action_id, resolution: "applied", evidence: "The invoice shows Approved" });
+  const note = "It was confirmed by a manual action given no goal, so it refuses this input on this page under any goal.";
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "click", element: 0, goal: "Approve the sales invoice for Third Co, 1.00" }),
+    (error) => error.message.endsWith(note));
+  const run = await runtime.run("Approve the sales invoice for Third Co, 1.00", { evidenceLevel: "none" });
+  assert.equal(run.status, "action_failed");
+  assert(run.info.endsWith(note), run.info);
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
 });
 
@@ -505,12 +580,52 @@ test("manual click replay cannot be bypassed with ignored value or key parameter
   assert.equal(k.commands.filter(c => c.command === "click").length, 1);
 });
 
-test("manual Escape key default and explicit Escape are the same journaled action", async () => {
+test("manual Escape on no element is journaled like any key; resolved not_applied it can be pressed again, applied it is not replayed", async () => {
   const k = new MemoryKapture(page());
   const runtime = memoryRuntime(k, scriptedDecider([{}]));
-  const result = await runtime.actManual({ tabId: "test", action: "press_key" });
-  assert.equal(result.status, "action_unconfirmed");
+  k.tabDetail = async () => ({ url: k.page.url, title: k.page.title });
+  // The default key is Escape. A page can answer it (cancel an edit, autosave),
+  // so its outcome is the host's to resolve.
+  const escape = await runtime.actManual({ tabId: "test", action: "press_key" });
+  assert.equal(escape.status, "action_unconfirmed");
+  assert.match(escape.info, /resolve it as applied/);
+  assert.deepEqual((await runtime.journal.pending("test")).map((r) => [r.id, r.tool]), [[escape.action_id, "press_key"]]);
   await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /UNCONFIRMED_ACTION/);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
+  // Nothing changed on the site: it can be pressed again.
+  const local = await runtime.resolveAction({ tabId: "test", actionId: escape.action_id, resolution: "not_applied", evidence: "The menu closed and nothing changed on the site" });
+  assert.equal(local.replay_protected, false);
+  const again = await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" });
+  assert.equal(again.status, "action_unconfirmed");
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 2);
+  // It cancelled something on the site: the same Escape here is a replay.
+  const remote = await runtime.resolveAction({ tabId: "test", actionId: again.action_id, resolution: "applied", evidence: "The page discarded the draft on the server" });
+  assert.equal(remote.replay_protected, true);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape" }), /ACTION_ALREADY_APPLIED/);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 2);
+});
+
+test("manual Escape on an element gets the same guidance; resolved applied it is not replayed", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  runtime.shown = { ...k.page, tab_id: "test" };
+  const escape = await runtime.actManual({ tabId: "test", action: "press_key", key: "Escape", element: 0 });
+  assert.equal(escape.status, "action_unconfirmed");
+  assert.match(escape.info, /resolve it as not_applied/);
+  const resolved = await runtime.resolveAction({ tabId: "test", actionId: escape.action_id, resolution: "applied", evidence: "The edit was cancelled on the server" });
+  assert.equal(resolved.replay_protected, true);
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Escape", element: 0 }), /ACTION_ALREADY_APPLIED/);
+  assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
+});
+
+test("manual Enter is journaled and is not repeated before it is resolved", async () => {
+  const k = new MemoryKapture(page());
+  const runtime = memoryRuntime(k, scriptedDecider([{}]));
+  k.tabDetail = async () => ({ url: k.page.url, title: k.page.title });
+  // Enter can submit a form.
+  const enter = await runtime.actManual({ tabId: "test", action: "press_key", key: "Enter" });
+  assert.equal(enter.status, "action_unconfirmed");
+  await assert.rejects(() => runtime.actManual({ tabId: "test", action: "press_key", key: "Enter" }), /UNCONFIRMED_ACTION/);
   assert.equal(k.commands.filter(c=>c.command==="keypress").length, 1);
 });
 

@@ -2,7 +2,11 @@
 // selection and completion decision. Never accepts executable caller code.
 // `patterns` is SENSITIVE_PATTERNS from src/sensitive.mjs: this function runs
 // in the page and cannot import sensitiveName(), so it rebuilds the same rule.
-export function inspectBusinessDOM(patterns) {
+// `registry` is the frame's node registry and `secret` the numbers of the
+// nodes a snapshot saw as secret fields (see secretNodes in snapshot.mjs): a
+// field named only by text drawn over it is secret here too, also once that
+// text has gone. The registry is only read.
+export function inspectBusinessDOM({ patterns, registry, secret = [] } = {}) {
   const clean = (s, max = 1800) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const visible = (e) => {
     if (!e.getClientRects().length) return false;
@@ -17,6 +21,11 @@ export function inspectBusinessDOM(patterns) {
   const sensitiveName = (value) => {
     const words = value.replace(/([a-z])([A-Z])/g, '$1 $2');
     return long.test(value) || long.test(words) || short.test(words);
+  };
+  const seenSecret = new Set(secret);
+  const secretNode = (e) => {
+    const n = registry?.ids?.get(e);
+    return n != null && seenSecret.has(`${registry.token}:${n}`);
   };
   // Card and one-time-code autocomplete tokens are secret here as well.
   const legacySecret = /password|passwd|secret|token|api.?key|credit.?card|cvv|cvc|otp|one-time-code|cc-number|cc-csc|(?:security|verification|access|private).?(?:key|code)/i;
@@ -34,7 +43,7 @@ export function inspectBusinessDOM(patterns) {
   const controls = allControls.slice(0, 1000).map((e) => {
     const label = clean(e.getAttribute('aria-label') || [...(e.labels || [])].map((l) => l.innerText).join(' ') || e.getAttribute('placeholder') || e.innerText, 180);
     const names = [label, e.name, e.id, e.autocomplete].join(' ');
-    const secret = e.type === 'password' || legacySecret.test(names) || sensitiveName(names);
+    const secret = e.type === 'password' || legacySecret.test(names) || sensitiveName(names) || secretNode(e);
     const blockers = [];
     // A dnd-kit item's aria-disabled only turns dragging off (see snapshot.mjs).
     const dragOnly = (p) => !p.matches(':disabled,[inert]') && (/\b(sortable|draggable)\b/i.test(p.getAttribute('aria-roledescription') || '')

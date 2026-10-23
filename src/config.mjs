@@ -29,6 +29,12 @@ export const config = {
   driftAutoRecoverAt: num("JEVSTEER_DRIFT_RECOVER_AT", 0.12),
   sideEffectSafeAt: num("JEVSTEER_SIDE_EFFECT_SAFE_AT", 0.2),
   constraintRiskAt: num("JEVSTEER_CONSTRAINT_RISK_AT", 0.55),
+  // At or above this, the guards judge that the task does not call for the
+  // field an action sets or empties (see checkActionEffects): nothing is sent.
+  unrequestedAt: num("JEVSTEER_UNREQUESTED_AT", 0.7),
+  // At or above this, Jev's next click applies the choice it just made (see
+  // appliesChoice): a goal Jev believes reached waits for that click.
+  appliesChoiceAt: num("JEVSTEER_APPLIES_CHOICE_AT", 0.5),
   nextStepClearAt: num("JEVSTEER_NEXT_STEP_CLEAR_AT", 0.45),
   maxAutoRecoveries: num("JEVSTEER_MAX_AUTO_RECOVERIES", 2),
   modelPageTextChars: num("JEVSTEER_PAGE_TEXT_CHARS", 8000),
@@ -39,6 +45,12 @@ export const config = {
   navigationSettleMs: num("JEVSTEER_NAVIGATION_SETTLE_MS", 15000),
   observationQuietMs: num("JEVSTEER_OBSERVATION_QUIET_MS", 250),
   reviewQuietMs: num("JEVSTEER_REVIEW_QUIET_MS", 1000),
+  // A review ticket waits this long at most for a toast to go away: the app
+  // may still be closing a drawer and reloading its list behind it.
+  reviewToastWaitMs: num("JEVSTEER_REVIEW_TOAST_WAIT_MS", 4000),
+  // Interactive elements one Playwright observation reads at most. Wikipedia's
+  // history at 100 revisions holds about 1100.
+  observationMaxElements: num("JEVSTEER_MAX_ELEMENTS", 2000),
   waitWatchMs: num("JEVSTEER_WAIT_MS", 5000),
   maxWaits: num("JEVSTEER_MAX_WAITS", 12),
   maxIdleWaits: num("JEVSTEER_MAX_IDLE_WAITS", 2),

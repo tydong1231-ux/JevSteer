@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MemoryKapture, memoryRuntime, scriptedDecider, decision } from "./helpers/runtime.mjs";
+import { normalizeTaskContract } from "../src/task-contract.mjs";
+import { closedOnly } from "../src/action-effect.mjs";
 
 const button = { i: 0, selector: "#continue", tag: "button", role: "button", label: "Continue" };
 const plan = [
@@ -137,9 +139,11 @@ test("no-effect click loop stops after two attempts", async () => {
   assert.equal(result.actions.length, 2);
 });
 
+// Before the stop, the contract is checked on the page the first write left
+// (see the next tests): a verifier that fails it leaves the stop as it was.
 test("an acknowledged remote mutation with no visible effect is never submitted twice", async () => {
   const k = new MemoryKapture({ elements: [button] });
-  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }])).run("Save a test customer", { maxActions: 10, evidenceLevel: "none" });
+  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }], { verifyScore: 0.1 })).run("Save a test customer", { maxActions: 10, evidenceLevel: "none" });
   assert.equal(result.status, "action_failed");
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
   assert.equal(result.actions[0].effect.status, "unknown");
@@ -147,7 +151,7 @@ test("an acknowledged remote mutation with no visible effect is never submitted 
 
 test("waiting does not clear an unconfirmed mutation or permit duplicate submission", async () => {
   const k = new MemoryKapture({ elements: [button] });
-  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { tool: "wait" }, { side_effect: 0.9 }])).run("Save a test customer", { maxActions: 8, evidenceLevel: "none" });
+  const result = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { tool: "wait" }, { side_effect: 0.9 }], { verifyScore: 0.1 })).run("Save a test customer", { maxActions: 8, evidenceLevel: "none" });
   assert.equal(result.status, "action_failed");
   assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
 });
@@ -202,6 +206,8 @@ test("after a sent Create, a verifier pass that Jev does not share goes to the h
     assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
     // The Create stays pending until the host accepts or resolves it.
     assert.equal((await runtime.journal.pending("test")).length, 1);
+    // The host is told what Jev did not see, and that the verifier passed.
+    if (mode === "hybrid") assert.equal(result.info, 'Jev did not find task.goal reached after a write this milestone sent (click on button "Create"): no message appeared after it. The verifier passed this page. A required field or a rule on the page may have stopped the write. Check the site before accepting this result, and resolve the pending action from what it shows. No input was replayed.');
   }
 });
 
@@ -220,6 +226,26 @@ test("after a sent Create, Jev seeing no action or no clear target also checks t
   const k = customerForm();
   const failed = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, unsureTarget(0.5)], { verifyScore: 0.1 })).run("Save customer JevSteer QA P1019B", saveCustomer);
   assert.equal(failed.status, "ambiguous");
+});
+
+// ccMonet (Mac run on 9a83708): the invoice was approved, and Jev chose
+// Approve again; only the journal stopped it, as a failed action.
+test("after a sent write, Jev choosing another one checks the contract first, and sends nothing", async () => {
+  for (const [mode, status] of [["host", "host_review_required"], ["hybrid", "host_review_required"], ["jev", "verification_uncertain"]]) {
+    const k = customerForm();
+    const runtime = memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { side_effect: 0.9 }]));
+    const result = await runtime.run("Save customer JevSteer QA P1019B", { ...saveCustomer, verificationMode: mode });
+    assert.equal(result.status, status, mode);
+    assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+    assert.equal((await runtime.journal.pending("test")).length, 1);
+    assert.match(result.info, /Jev then chose CLICK on button "JevSteer QA P1019B THB 0\.00"; it was not sent, since the earlier write is unconfirmed\.$/, mode);
+  }
+  // Jev finding the goal reached completes the milestone, without the note.
+  const k = customerForm();
+  const done = await memoryRuntime(k, scriptedDecider([{ side_effect: 0.9 }, { side_effect: 0.9, done: 0.6 }])).run("Save customer JevSteer QA P1019B", saveCustomer);
+  assert.equal(done.status, "completed_verified");
+  assert.equal(done.info, undefined);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
 });
 
 test("after a sent Create, an uncertain check goes to the host; without a write the host is asked for guidance", async () => {
@@ -259,6 +285,34 @@ test("large pages keep original target indices across the two-stage decision", a
   assert.equal(runtime.resolve(k.page, answer, {}).el.selector, "#item-300");
 });
 
+test("on a large page the first stage sees the focused field's popup, and SELECT still finds an open combobox's far options", async () => {
+  const customer = { i: 0, selector: "#customer", tag: "input", role: "combobox", label: "Customer", value: "Acme", expanded: true };
+  const rows = Array.from({ length: 299 }, (_, n) => ({ ...button, i: n + 1, selector: `#row-${n}`, label: `Record ${n}` }));
+  const option = { i: 300, selector: "#acme", tag: "div", role: "option", label: "Acme Ltd", popup_of: 0 };
+  const k = new MemoryKapture({ elements: [customer, ...rows, option], popup: { field: 0, text: "Acme Ltd" } });
+  const calls = [];
+  const runtime = memoryRuntime(k, async (state, questions) => {
+    calls.push({ state, questions });
+    const answers = questions.group ? { ...decision({ tool: "select", target: null }), group: { choice: "0", probabilities: { "0": 0.99 } } } : { select_target: { choice: "0>300", probabilities: { "0>300": 0.99, __none__: 0.01 } } };
+    return { answers, ms: 1, tokens: 1 };
+  });
+  const answer = await runtime.decide(k.page, { goal: "Choose customer Acme Ltd", success_criteria: [], constraints: [], guidance: [] }, {}, [], null, null);
+  assert.equal(answer.stages, 2);
+  assert.deepEqual(calls[0].state.page.popup, { field: '[0] combobox "Customer"', field_value: "Acme", shows: "Acme Ltd" });
+  assert.deepEqual(Object.keys(calls[1].questions.select_target.criteria), ["0>300", "__none__"]);
+  const action = runtime.resolve(k.page, answer, {});
+  assert.deepEqual([action.tool, action.el.selector], ["click", "#acme"]);
+});
+
+test("a head that turns down its only target stops for guidance, and nothing is typed", async () => {
+  const k = new MemoryKapture({ text: "Vendor 1 CP-MEIJI CO.,LTD.", elements: [{ i: 0, selector: "#size", tag: "input", role: "combobox", label: "Page Size", value: "20" }] });
+  const runtime = memoryRuntime(k, scriptedDecider([() => ({ ...decision({ tool: "type", target: null }), type_target: { choice: "__none__", probabilities: { "0": 0.2, __none__: 0.8 } } })]));
+  const result = await runtime.run("Search for vendor CP-MEIJI", { values: { vendor: "CP-MEIJI" }, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev chose TYPE, but the one control it could do that on does not fit task\.goal, so no input was sent\./);
+  assert.equal(k.commands.length, 0);
+});
+
 test("network evidence stops monitoring even when the decision service fails", async () => {
   const k = new MemoryKapture();
   const runtime = memoryRuntime(k, async () => { throw new Error("decision service offline"); });
@@ -288,10 +342,129 @@ test("exact constraint guard sees the chosen native option, never a secret one",
   const el = { i: 0, selector: "#status", tag: "select", role: "combobox", label: "Status", options: [{ text: "Open", value: "open" }, { text: "Closed", value: "closed" }] };
   const contract = { goal: "Reopen the ticket", success_criteria: [], constraints: ["Do not set Status to Closed"], guidance: [] };
   const page = { url: "https://fixture.test/ticket", title: "Ticket", text: "Status", elements: [el] };
-  assert.equal(await runtime.checkConstraint(page, contract, { tool: "select", el, value: "open" }, []), 0.05);
+  assert.deepEqual(await runtime.checkConstraint(page, contract, { tool: "select", el, value: "open" }, []), { risk: 0.05, constraint: "Do not set Status to Closed" });
   assert.deepEqual(seen.selected_option, { text: "Open", value: "open" });
   await runtime.checkConstraint(page, contract, { tool: "select", el: { ...el, label: "Security PIN" }, value: "open" }, []);
   assert.equal(seen.selected_option, undefined);
+});
+
+test("the exact guards see which table column and row a field is in", async () => {
+  let seen;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state) => {
+    seen = state.proposed_action;
+    return { answers: {}, ms: 1, tokens: 1 };
+  });
+  const el = { i: 1, selector: "#price-2", tag: "input", role: "textbox", label: "", hint: "0.00", column: "Unit Price", row: 2, value: "" };
+  const page = { url: "https://fixture.test/invoice", title: "Invoice", text: "Unit Price", elements: [el] };
+  const contract = { goal: "Add two invoice lines", success_criteria: [], constraints: ["Do not change line 1"], guidance: [] };
+  await runtime.checkActionEffects(page, contract, { tool: "type", el, value: "100", valueKey: "price_a" }, []);
+  assert.deepEqual([seen.table_column, seen.table_row, seen.value_key], ["Unit Price", 2, "price_a"]);
+});
+
+// ccMonet's invoice (Mac rerun on 9a83708): the line's item text went into
+// the product picker ("Preferred Name"), though guidance said Description.
+test("the guards see the text a TYPE enters, never a secret one, and are told guidance says where a value goes", async () => {
+  let seen;
+  const asked = [];
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    seen = state.proposed_action;
+    if (questions.action_unrequested) asked.push(questions.action_unrequested.instructions);
+    return { answers: {}, ms: 1, tokens: 1 };
+  });
+  const picker = { i: 0, selector: "#product-1", tag: "input", role: "combobox", label: "Preferred Name", column: "Preferred Name", row: 1, value: "" };
+  const page = { url: "https://erp.test/invoices/new", title: "New Invoice", text: "Preferred Name Description", elements: [picker] };
+  const contract = { goal: "Fill line 1", success_criteria: [], constraints: ["Demo company only"], guidance: ["Line item text goes into Description, not Preferred Name"] };
+  await runtime.checkActionEffects(page, contract, { tool: "type", el: picker, valueKey: "item_a", value: "QA item A" }, []);
+  assert.deepEqual([seen.value_key, seen.value], ["item_a", "QA item A"]);
+  assert.match(asked[0], /or when it puts a task value \(value_key names it; value is the text it types\) into a field it does not belong in, such as a field other than the one task\.guidance says that value or that kind of text goes into: task\.guidance comes from the host, who knows the site/);
+  await runtime.checkConstraint(page, contract, { tool: "type", el: picker, valueKey: "item_a", value: "QA item A" }, []);
+  assert.equal(seen.value, "QA item A");
+  // Neither a secret value nor what a secret field takes is shown.
+  await runtime.checkActionEffects(page, contract, { tool: "type", el: picker, valueKey: "api_token", value: "tok-123" }, []);
+  assert.equal(seen.value, undefined);
+  await runtime.checkConstraint(page, contract, { tool: "type", el: { ...picker, label: "Card PIN" }, valueKey: "item_a", value: "1234" }, []);
+  assert.equal(seen.value, undefined);
+});
+
+// The bill filter's selects have no names: what each shows tells the guards
+// which one an action uses, as it tells Jev (Mac rerun on 9a83708).
+test("the guards see what an unnamed select shows, never a secret field's", async () => {
+  let seen;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state) => { seen = state.proposed_action; return { answers: {}, ms: 1, tokens: 1 }; });
+  const field = { i: 0, selector: "#field", tag: "input", type: "search", role: "combobox", label: "", value: "", display: "Status", expanded: true };
+  const page = { url: "https://erp.test/bills", title: "Bills", text: "Bills Filter records", elements: [field] };
+  const contract = { goal: "Filter bills by vendor", success_criteria: [], constraints: ["Change no bill"], guidance: [] };
+  const action = { tool: "type", el: field, valueKey: "filter_field", value: "Vendor" };
+  await runtime.checkActionEffects(page, contract, action, []);
+  assert.deepEqual([seen.element, seen.shows, seen.value], ["combobox", "Status", "Vendor"]);
+  await runtime.checkConstraint(page, contract, action, []);
+  assert.equal(seen.shows, "Status");
+  await runtime.checkActionEffects(page, contract, { ...action, el: { ...field, type: "password" } }, []);
+  assert.equal(seen.shows, undefined);
+});
+
+test("a task value the guard finds in a field it does not belong in is not typed, and Jev is told which value", async () => {
+  const picker = { i: 0, selector: "#product-1", tag: "input", role: "combobox", label: "Preferred Name", column: "Preferred Name", row: 1, value: "" };
+  const description = { i: 1, selector: "#desc-1", tag: "textarea", role: "textbox", label: "Description", column: "Description", row: 1, value: "" };
+  const k = new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Preferred Name Description", elements: [picker, description] });
+  k.onCommand = (command, args) => {
+    const field = k.page.elements.find((e) => e.selector === args?.selector);
+    if (command === "fill" && field) field.value = args.value;
+  };
+  let told;
+  const steps = scriptedDecider([
+    () => decision({ tool: "type", target: 0 }),
+    (state) => { told = state.task.history.at(-1); return decision({ tool: "type", target: 1 }); },
+    { tool: "none", done: 0.99 },
+  ]);
+  const guard = async (state, questions) => (questions.action_side_effect
+    ? { answers: { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, action_unrequested: { noul: state.proposed_action.element === 'combobox "Preferred Name"' && state.proposed_action.value === "QA item A" ? 0.9 : 0.05 } }, ms: 1, tokens: 1 }
+    : undefined);
+  const result = await memoryRuntime(k, async (s, q) => (await guard(s, q)) || steps(s, q)).run("Fill line 1", { values: { item_a: "QA item A" }, guidance: ["Line item text goes into Description"], maxActions: 5, evidenceLevel: "none" });
+  assert.equal(told.detail, 'combobox "Preferred Name" -> item_a: the task does not ask to set this field to that, so nothing was sent. Leave the field as it is, unless task.goal, task.values or task.guidance call for it.');
+  assert.deepEqual(k.commands.filter((c) => c.command === "fill").map((c) => c.args.selector), ["#desc-1"]);
+  assert.deepEqual([picker.value, k.page.elements[1].value], ["", "QA item A"]);
+  assert.equal(result.status, "completed_verified");
+});
+
+// Status and Resolution list the same "Closed". Status is open; its list
+// floats apart from it, so the option's own section and context say nothing
+// about which field it sets.
+test("the exact guards see an option chosen from an open list as a SELECT on its combobox", async () => {
+  const seen = {};
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    seen[Object.keys(questions).sort().join()] = JSON.parse(JSON.stringify(state.proposed_action));
+    return { answers: {}, ms: 1, tokens: 1 };
+  });
+  const status = { i: 0, selector: "#status", tag: "input", role: "combobox", label: "Status", value: "", display: "Open", expanded: true, scope: "Ticket 42", context: "Status Open", record_key: "Ticket 42" };
+  const resolution = { i: 1, selector: "#resolution", tag: "input", role: "combobox", label: "Resolution", value: "", display: "Fixed", expanded: false, scope: "Ticket 42", context: "Resolution Fixed", record_key: "Ticket 42" };
+  const open = { i: 2, selector: "#open", tag: "div", role: "option", label: "Open", popup_of: 0, selected: true, context: "Open Closed" };
+  const closed = { i: 3, selector: "#closed", tag: "div", role: "option", label: "Closed", popup_of: 0, selected: false, context: "Open Closed" };
+  const page = { url: "https://fixture.test/ticket", title: "Ticket 42", text: "Ticket 42 Status Open Resolution Fixed", elements: [status, resolution, open, closed] };
+  const contract = { goal: "Set the resolution to Closed", success_criteria: [], constraints: ["Do not change the ticket's Status"], guidance: [] };
+  const action = runtime.resolve(page, { ...decision({ tool: "select", target: null }), select_target: { choice: "0>3", probabilities: { "0>3": 0.99 } } }, {});
+  assert.deepEqual([action.tool, action.chosen_as, action.el.selector], ["click", "select", "#closed"]);
+  await runtime.checkActionEffects(page, contract, action, []);
+  await runtime.checkConstraint(page, contract, action, []);
+  // What the combobox shows ("Open") comes with it, as the target heads give it.
+  const asSelect = { tool: "select", element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", shows: "Open", selected_option: { text: "Closed" } };
+  // A SELECT sets a field: the guards also ask whether the task calls for it.
+  assert.deepEqual(seen, { "action_irreversible,action_side_effect,action_unrequested": asSelect, violates: asSelect });
+  // A CLICK on an option names its combobox, and whether the option is chosen
+  // now: a click on a chosen one of a multi-select takes it out. Such a click
+  // is checked before input as a SELECT is (see the driver).
+  for (const [option, selected] of [[closed, false], [open, true]]) {
+    const click = runtime.resolve(page, decision({ tool: "click", target: option.i }), {});
+    assert.deepEqual([click.tool, click.chosen_as, click.listed_in?.selector, click.el.selector], ["click", undefined, "#status", option.selector]);
+    await runtime.checkConstraint(page, contract, click, []);
+    assert.deepEqual(seen.violates, {
+      tool: "click", element: `option "${option.label}"`, context: "Open Closed",
+      option_of: { element: 'combobox "Status"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42", shows: "Open" }, selected,
+    });
+  }
+  // A secret field's option is not named.
+  await runtime.checkConstraint(page, contract, { ...action, listed_in: { ...status, label: "Security PIN" } }, []);
+  assert.deepEqual(seen.violates, { tool: "select", element: 'combobox "Security PIN"', scope: "Ticket 42", context: "Status Open", record: "Ticket 42" });
 });
 
 test("effect and constraint guards are separate requests; the constraint one sees page text only and blocks when unanswered", async () => {
@@ -307,10 +480,10 @@ test("effect and constraint guards are separate requests; the constraint one see
   reply = { action_side_effect: { noul: 0.9 }, action_irreversible: { noul: 0.1 } };
   assert.deepEqual(await runtime.checkActionEffects(page, contract, { tool: "click", el }, []), { sideEffect: 0.9, irreversible: 0.1 });
   reply = { violates: { noul: 0.2 } };
-  assert.equal(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), 0.2);
+  assert.deepEqual(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), { risk: 0.2, constraint: "Do not save" });
   reply = {};
   assert.deepEqual(await runtime.checkActionEffects(page, contract, { tool: "click", el }, [], 0.3, 0.4), { sideEffect: 0.3, irreversible: 0.4 });
-  assert.equal(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), 1);
+  assert.deepEqual(await runtime.checkConstraint(page, contract, { tool: "click", el }, []), { risk: 1, constraint: "Do not save" });
   assert.deepEqual(asked.map((a) => a.questions), [["action_irreversible", "action_side_effect"], ["violates"], ["action_irreversible", "action_side_effect"], ["violates"]]);
   assert.deepEqual(asked[1].page, ["text", "title", "url"]);
 });
@@ -327,6 +500,552 @@ test("a constraint block says allow_irreversible does not lift it and how to set
   assert.match(result.info, /allow_irreversible does not lift this check/);
   assert.equal(result.pending.p_constraint_risk, 0.74);
   assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+});
+
+// ccMonet's Save as Draft, next to Approve, was blocked at 0.63, then 0.89,
+// with nothing saying which constraint the guard feared (Mac rerun on
+// 9a83708).
+test("a constraint block names the constraint the guard fears, and the guards judge only the control acted on", async () => {
+  const draft = { i: 0, selector: "#draft", tag: "button", role: "button", label: "Save as Draft", context: "Save as Draft Approve" };
+  const constraints = ["Demo company only.", "Do not approve, send or email the invoice."];
+  const asked = [];
+  let named = "1";
+  const decider = async (state, questions) => {
+    if (questions.violates) {
+      asked.push({ questions, proposed: state.proposed_action });
+      return { answers: { violates: { noul: 0.63 }, violated: { choice: named, probabilities: { 0: 0.1, 1: 0.8, none: 0.1 } } }, ms: 1, tokens: 1 };
+    }
+    if (questions.action_side_effect) {
+      asked.push({ questions, proposed: state.proposed_action });
+      return { answers: { action_side_effect: { noul: 0.81 }, action_irreversible: { noul: 0.1 } }, ms: 1, tokens: 1 };
+    }
+    return { answers: decision(), ms: 1, tokens: 1 };
+  };
+  const k = new MemoryKapture({ title: "New Invoice", text: "New Invoice Save as Draft Approve", elements: [draft] });
+  const result = await memoryRuntime(k, decider).run("Save the invoice as a draft", { constraints, maxActions: 3, evidenceLevel: "none" });
+  assert.equal(result.status, "constraint_blocked");
+  assert.equal(result.pending.constraint, constraints[1]);
+  assert.equal(result.pending.p_constraint_risk, 0.63);
+  assert.match(result.info, /^The selected browser action may violate the task constraint "Do not approve, send or email the invoice\.", so execution stopped before acting\./);
+  const guard = asked.find((a) => a.questions.violates);
+  assert.deepEqual(guard.questions.violated.criteria, { 0: constraints[0], 1: constraints[1], none: "None of them" });
+  assert.deepEqual([guard.proposed.element, guard.proposed.context], ['button "Save as Draft"', "Save as Draft Approve"]);
+  // Each guard is told the context can name controls the action does not use.
+  const note = /proposed_action\.element is the one control this action uses; proposed_action\.context is the text of the row or box around it, which can name other controls beside it \(such as an Approve button next to Save as Draft\) that this action does not use\./;
+  for (const a of asked) for (const q of Object.values(a.questions)) assert.match(q.instructions, note);
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  // A guard that names none of them still blocks, and the block names none.
+  named = "none";
+  const unnamed = await memoryRuntime(new MemoryKapture({ elements: [draft] }), decider).run("Save the invoice as a draft", { constraints, maxActions: 3, evidenceLevel: "none" });
+  assert.equal(unnamed.status, "constraint_blocked");
+  assert.equal(unnamed.pending.constraint, undefined);
+  assert.match(unnamed.info, /^The selected browser action may violate an explicit task constraint, so execution stopped/);
+  // With one constraint, the guard is asked only whether it is violated.
+  asked.length = 0;
+  const one = await memoryRuntime(new MemoryKapture({ elements: [draft] }), decider).run("Save the invoice as a draft", { constraints: [constraints[1]], maxActions: 3, evidenceLevel: "none" });
+  assert.equal(one.pending.constraint, constraints[1]);
+  assert.deepEqual(Object.keys(asked.find((a) => a.questions.violates).questions), ["violates"]);
+});
+
+// ccMonet's Approve was blocked at 0.55 to 0.62 against one item that held
+// several rules, and the block named the whole item (Mac runs on 7519fff and
+// ebc7159).
+test("a constraint block names the one rule the guard fears, also when the host wrote several rules as one item", async () => {
+  const approve = { i: 0, selector: "#approve", tag: "button", role: "button", label: "Approve" };
+  const item = "Demo company only. Create only this one sales invoice and reconcile only this one deposit. Do not send emails or e-invoices, do not record other payments, do not delete anything.";
+  const rules = ["Demo company only.", "Create only this one sales invoice and reconcile only this one deposit.", "Do not send emails or e-invoices, do not record other payments, do not delete anything."];
+  let guard;
+  const decider = async (state, questions) => {
+    if (questions.violates) {
+      guard = { questions, constraints: state.task.constraints };
+      return { answers: { violates: { noul: 0.62 }, violated: { choice: "0", probabilities: { 0: 0.7, 1: 0.1, 2: 0.1, none: 0.1 } } }, ms: 1, tokens: 1 };
+    }
+    if (questions.action_side_effect) return { answers: { action_side_effect: { noul: 0.7 }, action_irreversible: { noul: 0.1 } }, ms: 1, tokens: 1 };
+    return { answers: decision(), ms: 1, tokens: 1 };
+  };
+  const result = await memoryRuntime(new MemoryKapture({ title: "New Invoice", text: "New Invoice Approve", elements: [approve] }), decider)
+    .run("Approve the sales invoice for JevSteer QA, 30,000.00", { constraints: [item], maxActions: 3, evidenceLevel: "none" });
+  assert.equal(result.status, "constraint_blocked");
+  assert.equal(result.pending.constraint, "Demo company only.");
+  assert.match(result.info, /^The selected browser action may violate the task constraint "Demo company only\.", so execution stopped before acting\./);
+  // The guard judges the constraints as the host wrote them; only the
+  // question that names one is asked rule by rule.
+  assert.deepEqual(guard.constraints, [item]);
+  assert.deepEqual(guard.questions.violated.criteria, { 0: rules[0], 1: rules[1], 2: rules[2], none: "None of them" });
+});
+
+test("constraint rules: sentences of each item, with abbreviations, numbers and single rules kept whole", async () => {
+  const { constraintRules } = await import("../src/runtime.mjs");
+  assert.deepEqual(constraintRules(["Demo company only. Do not send emails."]), ["Demo company only.", "Do not send emails."]);
+  assert.deepEqual(constraintRules(["Demo company only.", "Do not save. Keep it open!"]), ["Demo company only.", "Do not save.", "Keep it open!"]);
+  assert.deepEqual(constraintRules(["Name it e.g. Foo, and pay No. 5 only."]), ["Name it e.g. Foo, and pay No. 5 only."]);
+  assert.deepEqual(constraintRules(["The amount is 50.00. Do not save; do not submit."]), ["The amount is 50.00.", "Do not save; do not submit."]);
+  assert.deepEqual(constraintRules(["Keep \"Draft\". Then stop."]), ["Keep \"Draft\".", "Then stop."]);
+  assert.deepEqual(constraintRules(["只在演示公司操作。不要发送邮件。"]), ["只在演示公司操作。", "不要发送邮件。"]);
+  assert.deepEqual(constraintRules(["Do not save"]), ["Do not save"]);
+  // Too many rules to choose among: the items as written.
+  const many = [Array.from({ length: 17 }, (_, i) => `Rule ${i} holds.`).join(" ")];
+  assert.deepEqual(constraintRules(many), many);
+});
+
+// ccMonet refused a Save as Draft ("Please fill in all required fields :
+// Due Date"). With the date typed, the save was blocked at 0.82 to 0.92
+// against "Do not create duplicates", whatever the host's guidance said.
+test("the constraint guard takes the host's checked guidance as fact, and a refused save as nothing created", async () => {
+  let asked;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked = { task: state.task, instructions: questions.violates.instructions };
+    return { answers: { violates: { noul: 0.1 } }, ms: 1, tokens: 1 };
+  });
+  const el = { i: 0, selector: "#draft", tag: "button", role: "button", label: "Save as Draft" };
+  const page = { url: "https://erp.test/invoices", title: "New Invoice", text: "New Invoice Customer JevSteer QA Due Date 2026/11/30", elements: [el] };
+  const contract = normalizeTaskContract({ goal: "Save the invoice as a draft", constraints: ["Create one draft invoice for JevSteer QA. Do not create duplicates."],
+    guidance: ["The earlier Save as Draft was refused because Due Date was empty; it created nothing and no invoice exists"] });
+  assert.equal((await runtime.checkConstraint(page, contract, { tool: "click", el }, [])).risk, 0.1);
+  assert.deepEqual(asked.task.guidance, contract.guidance);
+  assert.match(asked.instructions, /task\.guidance comes from the host, who has checked the site: take what it says as fact/);
+  assert.match(asked.instructions, /refused with a validation message \(a required field it named\) normally created nothing: making it again once the form is fixed is not a duplicate/);
+});
+
+// ccMonet (Mac rerun on f462b95): with a filter popup left open, or the
+// global search's results showing, a click on a bill's vendor cell only closed
+// them. The page sent no request and no bill opened; Jev waited three times.
+// The filter popup is antd's popover, whose body is a tooltip: the snapshot
+// numbers it as the popup (`layer`) its controls are in.
+const vendorCell = { i: 0, selector: "#cp", tag: "td", label: "CP-MEIJI CO.,LTD.", record_key: "2" };
+const filterPopup = [{ i: 1, selector: "#add", tag: "button", label: "+ Add Filter", layer: "t:7" }, { i: 2, selector: "#field", tag: "input", role: "combobox", layer: "t:7" }];
+const billsWithPopup = { url: "https://erp.test/bills", title: "Vendor Bills", text: "Vendor Bills Filter + Add Filter CP-MEIJI CO.,LTD. ฿ 1,732.00", elements: [vendorCell, ...filterPopup] };
+
+test("a click that only closed what was open, sending no request, is told apart from one that did something", () => {
+  const after = { ...billsWithPopup, text: "Vendor Bills CP-MEIJI CO.,LTD. ฿ 1,732.00", elements: [vendorCell], requests_since_input: 0 };
+  const click = { tool: "click", el: vendorCell };
+  assert.deepEqual(closedOnly(billsWithPopup, after, click), { controls_gone: 2, such_as: ['button "+ Add Filter"', "combobox"] });
+  // A field's placeholder can show again once it loses focus.
+  assert.ok(closedOnly(billsWithPopup, { ...after, text: `${after.text} Search contacts, ...` }, click));
+  for (const [what, page] of [
+    ["sent a request", { ...after, requests_since_input: 1 }],
+    ["has a request open", { ...after, pending_requests: 1 }],
+    ["is loading", { ...after, loading: { busy: true } }],
+    ["counts no requests", { ...after, requests_since_input: undefined }],
+    ["opened something", { ...after, elements: [vendorCell, { i: 1, selector: "#edit", tag: "button", label: "Edit" }] }],
+    ["shows new text", { ...after, text: `${after.text} Bill 9001563832 due 2025/5/25 Unpaid` }],
+    ["loaded another page", { ...after, url: "https://erp.test/bills/2" }],
+    ["took its target away", { ...after, elements: [] }],
+    ["closed nothing", { ...billsWithPopup, requests_since_input: 0 }],
+    ["changed its target's state", { ...after, elements: [{ ...vendorCell, selected: true }] }],
+    ["left a control in the popup", { ...after, elements: [vendorCell, filterPopup[0]] }],
+  ]) assert.equal(closedOnly(billsWithPopup, page, click), undefined, what);
+  // Codex on 440e142: a button that collapses a section, showing no state of
+  // its own, took controls away that were in no popup. A second click would
+  // open the section again.
+  const section = billsWithPopup.elements.map((e) => ({ ...e, layer: undefined }));
+  assert.equal(closedOnly({ ...billsWithPopup, elements: section }, after, click), undefined);
+  assert.equal(closedOnly({ ...billsWithPopup, elements: [section[0], section[1], filterPopup[1]] }, after, click), undefined);
+  // A toggle that showed its own popup open took the click: it closed that popup.
+  const toggle = { ...vendorCell, expanded: true };
+  assert.equal(closedOnly({ ...billsWithPopup, elements: billsWithPopup.elements.map((e) => (e === vendorCell ? toggle : e)) }, { ...after, elements: [{ ...vendorCell, expanded: false }] }, { tool: "click", el: toggle }), undefined);
+  assert.equal(closedOnly(billsWithPopup, after, { tool: "press_key", key: "Escape" }), undefined);
+});
+
+test("after a click that only closed a popup, Jev sees it in history and clicks again instead of waiting", async () => {
+  const k = new MemoryKapture(structuredClone(billsWithPopup));
+  let clicks = 0;
+  k.onCommand = (command) => {
+    if (command !== "click") return;
+    clicks++;
+    // The first click closes the popup and goes no further; the second opens the bill.
+    k.page = k.page.elements.length > 1
+      ? { ...k.page, text: "Vendor Bills CP-MEIJI CO.,LTD. ฿ 1,732.00", elements: [vendorCell], requests_since_input: 0 }
+      : { ...k.page, url: "https://erp.test/bills/2", text: "Bill 9001563832 CP-MEIJI CO.,LTD. Unpaid", elements: [{ i: 0, selector: "#edit", tag: "button", label: "Edit" }], requests_since_input: 6 };
+  };
+  let last;
+  const runtime = memoryRuntime(k, scriptedDecider([
+    { tool: "click", target: 0 },
+    (state) => {
+      last = state.task.history.at(-1);
+      return decision(last.closed_only ? { tool: "click", target: 0 } : { tool: "wait" });
+    },
+    { tool: "none", done: 0.99 },
+  ]));
+  const result = await runtime.run("Open the CP-MEIJI bill", { maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual([last.action, last.requests, last.closed_only], ["click", 0, { controls_gone: 2, such_as: ['button "+ Add Filter"', "combobox"] }]);
+  assert.equal(clicks, 2);
+  assert.equal(result.status, "completed_verified");
+});
+
+// ccMonet (Mac rerun on f462b95): filling an invoice's lines, Jev chose
+// Tracking Category "Woodlands" on both lines, though nothing asked for one.
+const trackingLine = () => {
+  const tracking = { i: 0, selector: "#tracking", tag: "input", role: "combobox", label: "Tracking Category", column: "Tracking Category", record_key: "line-1", value: "", expanded: true };
+  const woodlands = { i: 1, selector: "#woodlands", tag: "div", role: "option", label: "Woodlands", popup_of: 0, selected: false };
+  const quantity = { i: 2, selector: "#qty", tag: "input", label: "QTY", column: "QTY", record_key: "line-1", value: "2" };
+  return new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Item QA item A QTY 2 Tracking Category Woodlands", elements: [tracking, woodlands, quantity] });
+};
+const pickWoodlands = { ...decision({ tool: "select", target: null }), select_target: { choice: "0>1", probabilities: { "0>1": 0.99 } } };
+// An invoice whose Currency shows the organization's default, with antd's
+// clear button next to it.
+const defaultCurrency = () => {
+  const currency = { i: 0, selector: "#currency", tag: "input", role: "combobox", label: "Currency", value: "", display: "SGD", expanded: false };
+  const clear = { i: 1, selector: "#clear-currency", tag: "span", role: "button", label: "close-circle", clears: 0 };
+  const quantity = { i: 2, selector: "#qty", tag: "input", label: "QTY", column: "QTY", record_key: "line-1", value: "2" };
+  return new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Currency SGD Item QA item A QTY 2", elements: [currency, clear, quantity] });
+};
+
+test("only an action that sets or empties a field is asked whether the task calls for it; an unanswered question holds nothing back", async () => {
+  const asked = [];
+  let reply = {};
+  let proposed;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked.push(Object.keys(questions).sort().join());
+    if (questions.action_unrequested) asked.push(questions.action_unrequested.instructions);
+    proposed = state.proposed_action;
+    return { answers: reply, ms: 1, tokens: 1 };
+  });
+  const page = trackingLine().page;
+  const contract = normalizeTaskContract({ goal: "Fill line 1: item QA item A, quantity 2" });
+  const select = runtime.resolve(page, pickWoodlands, {});
+  reply = { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, action_unrequested: { noul: 0.93 } };
+  assert.deepEqual(await runtime.checkActionEffects(page, contract, select, []), { sideEffect: 0.05, irreversible: 0.01, unrequested: 0.93 });
+  assert.match(asked[1], /puts a value of its own choosing into a field that task\.goal, task\.success_criteria and task\.guidance never mention/);
+  reply = { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 } };
+  assert.equal((await runtime.checkActionEffects(page, contract, select, [])).unrequested, 0);
+  const click = { tool: "click", el: { i: 3, selector: "#add", tag: "button", label: "Add New Line" } };
+  assert.equal("unrequested" in await runtime.checkActionEffects(page, contract, click, []), false);
+  assert.deepEqual(asked.filter((a) => !a.includes(" ")), ["action_irreversible,action_side_effect,action_unrequested", "action_irreversible,action_side_effect,action_unrequested", "action_irreversible,action_side_effect"]);
+  // A click on an open combobox's option sets that combobox.
+  reply = { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, action_unrequested: { noul: 0.91 } };
+  const option = runtime.resolve(page, decision({ tool: "click", target: 1 }), {});
+  assert.equal((await runtime.checkActionEffects(page, contract, option, [])).unrequested, 0.91);
+  assert.match(asked.at(-1), /^This EXACT proposed_action sets a field\./);
+  assert.equal(proposed.option_of.element, 'combobox "Tracking Category"');
+  // A click on a field's clear button empties that field, and is asked as such.
+  const currency = defaultCurrency().page;
+  const clear = runtime.resolve(currency, decision({ tool: "click", target: 1 }), {});
+  assert.equal((await runtime.checkActionEffects(currency, contract, clear, [])).unrequested, 0.91);
+  assert.match(asked.at(-1), /^This EXACT proposed_action empties the field that proposed_action\.clears names/);
+  assert.match(asked.at(-1), /Answer yes when the field holds a value the task asks for there \(task\.goal, task\.success_criteria, task\.values or task\.guidance name it for this field\), even one this run entered; /);
+  assert.match(asked.at(-1), /Answer no when the task asks to empty or change this field, when it holds a value this run entered that the task does not ask for there, when it holds a value that contradicts the task or belongs in another field/);
+  assert.equal(proposed.clears, '[0] combobox "Currency" showing "SGD"');
+});
+
+test("a field the task does not ask for is left as it is: nothing is sent, Jev is told why, and one who insists is stopped", async () => {
+  const unrequested = async (state, questions) => {
+    if (questions.action_side_effect) return { answers: { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, ...(questions.action_unrequested ? { action_unrequested: { noul: 0.9 } } : {}) }, ms: 1, tokens: 1 };
+    return undefined;
+  };
+  // Jev reads the refusal and moves on.
+  let k = trackingLine();
+  let told;
+  const steps = scriptedDecider([() => pickWoodlands, (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  let runtime = memoryRuntime(k, async (state, questions) => (await unrequested(state, questions)) || steps(state, questions));
+  let result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "not_requested", false]);
+  assert.match(told.detail, /^combobox "Tracking Category" -> Woodlands: the task does not ask to set this field to that, so nothing was sent/);
+  assert.equal(result.actions.find((a) => a.reason === "not_requested")?.detail, told.detail);
+  assert.equal(result.status, "completed_verified");
+  // Jev chooses it three times: the third stops the run for guidance.
+  k = trackingLine();
+  const insists = scriptedDecider([() => pickWoodlands]);
+  runtime = memoryRuntime(k, async (state, questions) => (await unrequested(state, questions)) || insists(state, questions));
+  result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 6, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev kept choosing to change fields the task does not ask for \(last: combobox "Tracking Category" -> Woodlands\), so no input was sent/);
+  assert.equal(result.pending.field, 'combobox "Tracking Category"');
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  // Clicked instead of chosen with SELECT, the option is refused the same way.
+  k = trackingLine();
+  told = undefined;
+  const clicks = scriptedDecider([() => decision({ tool: "click", target: 1 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  runtime = memoryRuntime(k, async (state, questions) => (await unrequested(state, questions)) || clicks(state, questions));
+  result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  assert.match(told.detail, /^combobox "Tracking Category" -> Woodlands: the task does not ask to set this field to that, so nothing was sent/);
+});
+
+// A field's clear button (round 4) could empty what the task never mentions,
+// such as a default currency.
+test("a field the task does not ask to empty keeps what it holds: its clear button is not clicked", async () => {
+  const guard = (unrequested) => async (state, questions) => (questions.action_side_effect
+    ? { answers: { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, ...(questions.action_unrequested ? { action_unrequested: { noul: unrequested } } : {}) }, ms: 1, tokens: 1 }
+    : undefined);
+  const emptyCurrency = () => decision({ tool: "click", target: 1 });
+  let k = defaultCurrency();
+  let told;
+  const steps = scriptedDecider([emptyCurrency, (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  let runtime = memoryRuntime(k, async (state, questions) => (await guard(0.9)(state, questions)) || steps(state, questions));
+  let result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "not_requested", false]);
+  assert.match(told.detail, /^button "close-circle" emptying \[0\] combobox "Currency" showing "SGD": the task does not ask to empty this field, so nothing was sent/);
+  assert.equal(result.status, "completed_verified");
+  // Jev chooses it three times: the third stops the run for guidance.
+  k = defaultCurrency();
+  const insists = scriptedDecider([emptyCurrency]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.9)(state, questions)) || insists(state, questions));
+  result = await runtime.run("Fill line 1: item QA item A, quantity 2", { maxActions: 6, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev kept choosing to change fields the task does not ask for \(last: button "close-circle" emptying \[0\] combobox "Currency" showing "SGD"\)/);
+  assert.equal(result.pending.field, '[0] combobox "Currency" showing "SGD"');
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 0);
+  // When the task asks for it, the clear button is clicked.
+  k = defaultCurrency();
+  const asked = scriptedDecider([emptyCurrency, () => decision({ tool: "none", done: 0.99 })]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.05)(state, questions)) || asked(state, questions));
+  result = await runtime.run("Empty the invoice's Currency", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(k.commands.filter((c) => c.command === "click").length, 1);
+});
+
+// ccMonet's Manual Match (Mac runs on 3fa0a57 and 37c131e): the tick of the
+// invoice to match was judged a write, and the run stopped for a host review
+// before Confirm match.
+// Only the host's checked word makes such a choice local: a control there
+// can also save on its own (Codex on b2d32ae).
+test("the side-effect guard is told that a choice stays local until its form's Save or Confirm is used only when task.guidance says that control applies it", async () => {
+  let asked;
+  const runtime = memoryRuntime(new MemoryKapture(), async (state, questions) => {
+    asked = questions.action_side_effect?.instructions;
+    return { answers: { action_side_effect: { noul: 0.1 }, action_irreversible: { noul: 0.01 } }, ms: 1, tokens: 1 };
+  });
+  const tick = { i: 0, selector: "#pick", tag: "input", type: "checkbox", role: "checkbox", label: "", context: "2026/4/17 JevSteer QA CHAIN1020A INVMNB5Q 50.00", checked: false };
+  const confirm = { i: 1, selector: "#confirm", tag: "button", role: "button", label: "Confirm match" };
+  const page = { url: "https://erp.test/reconcile", title: "Reconcile", text: "Manual Match 2026/4/17 JevSteer QA CHAIN1020A INVMNB5Q 50.00 Confirm match", elements: [tick, confirm] };
+  const contract = normalizeTaskContract({ goal: "Reconcile the 50.00 deposit of 2026/4/17 with invoice INVMNB5Q" });
+  assert.equal((await runtime.checkActionEffects(page, contract, { tool: "click", el: tick }, [])).sideEffect, 0.1);
+  assert.match(asked, /Do not attribute a later submit step to this action\. When task\.guidance says that a form, panel or dialog applies a choice only with its own Save, Confirm or Submit control \(such as "Ticking a candidate only selects it; Confirm match applies the match"\), a checkbox ticked, an option chosen or a value entered there stays local until that control is used, which is the later submit step\. Without such a fact, a control there can still save on its own: judge it as any other control\. task\.guidance and task\.constraints come from the host/);
+});
+
+// ccMonet's Manual Match (Mac runs on 3fa0a57, 37c131e and b2d32ae): Jev
+// ticked the invoice to match, half believed the deposit matched (0.61) and
+// chose Confirm match next (0.97), yet the run stopped for a host review
+// before that click.
+function manualMatch() {
+  const tick = { i: 0, selector: "#pick", tag: "input", type: "checkbox", role: "checkbox", label: "", context: "2026/4/18 JevSteer QA CHAIN1020A INVWIGG7 69,950.00", checked: false };
+  const confirm = { i: 1, selector: "#confirm", tag: "button", role: "button", label: "Confirm match" };
+  const k = new MemoryKapture({ url: "https://erp.test/reconcile", title: "Reconcile", text: "Manual Match 2026/4/18 69,950.00 JevSteer QA CHAIN1020A INVWIGG7 69,950.00 Confirm match", elements: [tick, confirm] });
+  k.onCommand = (command, args) => {
+    if (command !== "click") return;
+    if (args?.selector === "#pick") k.page.elements[0].checked = true;
+    if (args?.selector === "#confirm") Object.assign(k.page, { text: "Reconciled 2026/4/18 69,950.00 INVWIGG7", elements: [] });
+  };
+  return k;
+}
+const clicked = (k) => k.commands.filter((c) => c.command === "click").map((c) => c.args.selector);
+// Answers whether the click applies the choice; the rest as scripted.
+const applying = (steps, applies, asked) => {
+  const scripted = scriptedDecider(steps);
+  return async (state, questions) => {
+    if (!questions.applies_choice) return scripted(state, questions);
+    asked.push({ element: state.proposed_action.element, instructions: questions.applies_choice.instructions });
+    return { answers: applies == null ? {} : { applies_choice: { noul: applies } }, ms: 1, tokens: 1 };
+  };
+};
+const reconcile = "Reconcile the 69,950.00 deposit of 2026/4/18 with invoice INVWIGG7";
+
+// However sure Jev is, a goal checked before that click fails, or passes on
+// a choice not yet applied (Codex on 7519fff).
+test("a goal Jev believes reached, or half believes it, waits for the click that applies the choice it just made", async () => {
+  for (const sure of [{ done: 0.61, done_change: 0.61 }, { done: 0.9 }]) {
+    const k = manualMatch();
+    const asked = [];
+    const steps = [{ tool: "click", target: 0 }, { tool: "click", target: 1, side_effect: 0.9, ...sure }, { tool: "none", done: 0.95 }];
+    const result = await memoryRuntime(k, applying(steps, 0.9, asked)).run(reconcile, { evidenceLevel: "none", explain: true });
+    assert.equal(result.status, "completed_verified", String(sure.done));
+    // Confirm match was sent before the goal was checked, through the guards.
+    assert.deepEqual(clicked(k), ["#pick", "#confirm"]);
+    assert.deepEqual(asked.map((a) => a.element), ['button "Confirm match"']);
+    assert.match(asked[0].instructions, /^The last input in task\.history made a choice, such as ticking a checkbox, choosing an option or entering a value\. Such a choice, made in an open form, panel or dialog that has its own Save, Confirm or Submit control, can stay local until that control is used\. Is this EXACT proposed_action that control for the choice, .* and does task\.goal need the choice applied \(saved, submitted, confirmed or matched\), not only made\? Answer no when page shows the choice applied already/);
+    assert.equal(result.rounds[1].applies_choice, 0.9);
+    assert.equal(typeof result.rounds[1].side_effect_guard, "number");
+  }
+});
+
+test("a goal Jev believes reached is checked when its next click does not apply that choice, or the last input was a write, or no input may follow", async () => {
+  // The click does something else, or the answer is missing.
+  for (const applies of [0.1, undefined]) {
+    const k = manualMatch();
+    const asked = [];
+    const steps = [{ tool: "click", target: 0 }, { tool: "click", target: 1, done: 0.61, done_change: 0.61, side_effect: 0.9 }];
+    const result = await memoryRuntime(k, applying(steps, applies, asked)).run(reconcile, { evidenceLevel: "none" });
+    assert.equal(result.status, "completed_verified", String(applies));
+    assert.deepEqual(clicked(k), ["#pick"]);
+    assert.equal(asked.length, 1);
+  }
+  // The last input already wrote, or the round may send no more input.
+  const half = { tool: "click", target: 1, done: 0.61, done_change: 0.61, side_effect: 0.9 };
+  for (const [steps, maxActions] of [
+    [[{ tool: "click", target: 0, side_effect: 0.9 }, half]],
+    [[{ tool: "click", target: 0 }, half], 1],
+  ]) {
+    const k = manualMatch();
+    const asked = [];
+    const result = await memoryRuntime(k, applying(steps, 0.9, asked)).run(reconcile, { evidenceLevel: "none", ...(maxActions ? { maxActions } : {}) });
+    assert.equal(result.status, "completed_verified");
+    assert.deepEqual(clicked(k), ["#pick"]);
+    assert.deepEqual(asked, []);
+  }
+});
+
+// ccMonet's Tracking Category is a multi-select: its list stays open after a
+// choice, and a click on a chosen option takes it out. Filling an invoice
+// line, Jev chose "HQ", clicked it again and lost it (Mac run on 9a83708).
+const multiSelect = (row, { hq = false, woodlands = true } = {}) => [
+  { i: 0, selector: `#tracking-${row}`, tag: "input", role: "combobox", label: "Tracking Category", column: "Tracking Category", row, value: "", expanded: true },
+  { i: 1, selector: `#hq-${row}`, tag: "div", role: "option", label: "HQ", popup_of: 0, selected: hq },
+  { i: 2, selector: `#woodlands-${row}`, tag: "div", role: "option", label: "Woodlands", popup_of: 0, selected: woodlands },
+];
+
+test("an option this run chose, and its open list still shows chosen, is not offered again; one chosen before the run still is", async () => {
+  const k = new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Tracking Category Woodlands", elements: multiSelect(1) });
+  // The list stays open after a choice; a click on an option toggles it.
+  k.onCommand = (command, args) => {
+    const option = k.page.elements.find((e) => e.role === "option" && e.selector === args?.selector);
+    if (command === "click" && option) option.selected = !option.selected;
+  };
+  let offered;
+  let history;
+  const steps = scriptedDecider([
+    () => ({ ...decision({ tool: "select", target: null }), select_target: { choice: "0>1", probabilities: { "0>1": 0.99 } } }),
+    (state, questions) => {
+      offered = { click: Object.keys(questions.click_target?.criteria || {}), select: Object.keys(questions.select_target?.criteria || {}) };
+      history = state.task.history;
+      return decision({ tool: "none", done: 0.99 });
+    },
+  ]);
+  const result = await memoryRuntime(k, steps).run("Add HQ to line 1's Tracking Category", { maxActions: 4, evidenceLevel: "none" });
+  assert.equal(result.status, "completed_verified");
+  assert.deepEqual(k.commands.filter((c) => c.command === "click").map((c) => c.args.selector), ["#hq-1"]);
+  assert.equal(k.page.elements[1].selected, true);
+  // HQ, which this run chose, is offered for no click; Woodlands, chosen
+  // before the run, can still be taken out.
+  assert.deepEqual([offered.click.includes("1"), offered.click.includes("2"), offered.select.some((key) => key.endsWith(">1"))], [false, true, false]);
+  assert.deepEqual([history.at(-1).action, history.at(-1).element, history.at(-1).option_of], ["click", 'option "HQ"', 'combobox "Tracking Category"']);
+});
+
+test("an option chosen in one table line's list is still offered in another line's", async () => {
+  let offered;
+  const runtime = memoryRuntime(new MemoryKapture(), async (_state, questions) => {
+    offered = Object.keys(questions.click_target?.criteria || {});
+    return { answers: decision({ tool: "none" }), ms: 1, tokens: 1 };
+  });
+  const contract = { goal: "Set Tracking Category HQ on both lines", success_criteria: [], constraints: [], guidance: [] };
+  const chose = [{ option: 'option "HQ"', list: 'combobox "Tracking Category"', row: 1 }];
+  for (const [row, keys] of [[1, ["0", "2"]], [2, ["0", "1", "2"]]]) {
+    await runtime.decide({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice", elements: multiSelect(row, { hq: true }) }, contract, {}, [], null, null, [], chose);
+    assert.deepEqual(offered, keys, `table line ${row}`);
+  }
+});
+
+// A click on an option its open list shows chosen takes it out of a
+// multi-select's field. Asked whether it sets a field the task calls for,
+// the guard could pass it because the task asks for that option (Codex on
+// 3fa0a57).
+test("a click on a chosen option is asked as taking it out of the field, and one the task asks for stays chosen", async () => {
+  const tagged = (selected) => new MemoryKapture({ url: "https://erp.test/invoices/new", title: "New Invoice", text: "New Invoice Tracking Category HQ", elements: multiSelect(1, selected) });
+  const contract = normalizeTaskContract({ goal: "Add HQ to line 1's Tracking Category" });
+  const asked = [];
+  let proposed;
+  const guard = (unrequested) => async (state, questions) => {
+    if (!questions.action_side_effect) return undefined;
+    if (questions.action_unrequested) asked.push(questions.action_unrequested.instructions);
+    proposed = state.proposed_action;
+    return { answers: { action_side_effect: { noul: 0.05 }, action_irreversible: { noul: 0.01 }, action_unrequested: { noul: unrequested } }, ms: 1, tokens: 1 };
+  };
+  let runtime = memoryRuntime(new MemoryKapture(), guard(0.91));
+  const page = tagged({ hq: true, woodlands: false }).page;
+  const takeOut = runtime.resolve(page, decision({ tool: "click", target: 1 }), {});
+  assert.equal((await runtime.checkActionEffects(page, contract, takeOut, [])).unrequested, 0.91);
+  assert.match(asked.at(-1), /^This EXACT proposed_action clicks an option that is chosen now \(proposed_action\.selected\) in the open list of the field proposed_action\.option_of names: in a list that allows several choices, such as a multi-select's, the click takes that option out of the field\./);
+  assert.match(asked.at(-1), /Answer yes when the task asks for this option in this field \(task\.goal, task\.success_criteria, task\.values or task\.guidance name it for this field\), even one this run chose; /);
+  assert.deepEqual([proposed.element, proposed.selected, proposed.option_of.element], ['option "HQ"', true, 'combobox "Tracking Category"']);
+  // An option it shows unchosen sets the field.
+  const choose = runtime.resolve(page, decision({ tool: "click", target: 2 }), {});
+  await runtime.checkActionEffects(page, contract, choose, []);
+  assert.match(asked.at(-1), /^This EXACT proposed_action sets a field\./);
+  assert.equal(proposed.selected, false);
+
+  // In a run, nothing is sent: Jev is told the option stays.
+  const clicks = (k) => k.commands.filter((c) => c.command === "click").map((c) => c.args.selector);
+  let k = tagged({ hq: true });
+  let told;
+  const steps = scriptedDecider([() => decision({ tool: "click", target: 1 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.9)(state, questions)) || steps(state, questions));
+  let result = await runtime.run("Add HQ to line 1's Tracking Category", { maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual(clicks(k), []);
+  assert.equal(k.page.elements[1].selected, true);
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "not_requested", false]);
+  assert.equal(told.detail, 'combobox "Tracking Category" without HQ: the task does not ask to take that option out of this field, so nothing was sent. Leave the field as it is, unless task.goal, task.values or task.guidance call for it.');
+  assert.equal(result.status, "completed_verified");
+  // When the task asks to take it out, the click is sent.
+  k = tagged({ hq: true });
+  const asks = scriptedDecider([() => decision({ tool: "click", target: 2 }), () => decision({ tool: "none", done: 0.99 })]);
+  runtime = memoryRuntime(k, async (state, questions) => (await guard(0.05)(state, questions)) || asks(state, questions));
+  result = await runtime.run("Take Woodlands out of line 1's Tracking Category", { maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual(clicks(k), ["#woodlands-1"]);
+  assert.equal(asked.at(-1).startsWith("This EXACT proposed_action clicks an option that is chosen now"), true);
+});
+
+// ccMonet's invoice (Mac rerun on 9a83708): filling the lines, Jev chose Due
+// Date, which the milestone did not name; the value chooser turned it down,
+// and the run stopped there.
+test("a field no task value belongs in gets nothing typed, and Jev looks again; one who insists is stopped", async () => {
+  const reference = { i: 0, selector: "#ref", tag: "input", role: "textbox", label: "Reference", column: "Reference", row: 1, value: "" };
+  const values = { item_a: "QA item A", price_a: "100" };
+  const noValue = async (state, questions) => (questions.selected_value
+    ? { answers: { selected_value: { choice: "__none__", probabilities: { __none__: 0.9 } } }, ms: 1, tokens: 1 } : undefined);
+  const typed = (k) => k.commands.filter((c) => ["fill", "clear", "type"].includes(c.command)).length;
+  let k = new MemoryKapture({ elements: [reference] });
+  let told;
+  const steps = scriptedDecider([() => decision({ tool: "type", target: 0 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  let result = await memoryRuntime(k, async (s, q) => (await noValue(s, q)) || steps(s, q)).run("Fill line 1", { values, maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "no_value", false]);
+  assert.equal(told.detail, 'textbox "Reference" in table row 1: no task value belongs in this field, so nothing was typed. Type each value into the field it belongs in, and leave this field as it is unless task.goal or task.guidance call for it.');
+  assert.equal(result.status, "completed_verified");
+  assert.equal(typed(k), 0);
+  // Jev chooses it three times: the third stops the run for guidance.
+  k = new MemoryKapture({ elements: [reference] });
+  const insists = scriptedDecider([() => decision({ tool: "type", target: 0 })]);
+  result = await memoryRuntime(k, async (s, q) => (await noValue(s, q)) || insists(s, q)).run("Fill line 1", { values, maxActions: 6, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev kept choosing fields no task value belongs in \(last: textbox "Reference"\), so nothing was typed\./);
+  assert.deepEqual(result.pending, { question: "Which value belongs in the selected field?", field: 'textbox "Reference"' });
+  assert.equal(result.actions.filter((a) => a.reason === "no_value").length, 2);
+  assert.equal(typed(k), 0);
+});
+
+// ccMonet's invoice line (Mac run on 3fa0a57): a new run typed "Changi" into
+// a Tracking Category that already showed the tag "Changi", and stopped.
+test("a select that already shows the value gets nothing typed, and Jev looks again; one who insists is stopped", async () => {
+  // A multi-select's chosen options come apart (display_items), as the page
+  // parts them.
+  const tracking = (display, items) => ({ i: 0, selector: "#tracking", tag: "input", type: "search", role: "combobox", label: "Tracking Category", column: "Tracking Category", row: 1, value: "", display, ...(items ? { display_items: items } : {}) });
+  const values = { tracking_category: "changi" };
+  const typed = (k) => k.commands.filter((c) => ["fill", "clear", "type"].includes(c.command)).length;
+  let k = new MemoryKapture({ elements: [tracking("HQ, Changi", ["HQ", "Changi"])] });
+  let told;
+  const steps = scriptedDecider([() => decision({ tool: "type", target: 0 }), (s) => { told = s.task.history.at(-1); return decision({ tool: "none", done: 0.99 }); }]);
+  let result = await memoryRuntime(k, steps).run("Tag line 1 with Changi", { values, maxActions: 4, evidenceLevel: "none" });
+  assert.deepEqual([told.recovery, told.reason, told.input_sent], ["reobserve", "already_shown", false]);
+  assert.equal(told.detail, `combobox "Tracking Category" in table row 1 already shows the value of tracking_category, so nothing was typed: typing it again would only put it into the select's search box. The field is set; go on with the next step.`);
+  assert.equal(result.status, "completed_verified");
+  assert.equal(typed(k), 0);
+  // Jev chooses it three times: the third stops the run for guidance.
+  k = new MemoryKapture({ elements: [tracking("Changi")] });
+  const insists = scriptedDecider([() => decision({ tool: "type", target: 0 })]);
+  result = await memoryRuntime(k, insists).run("Tag line 1 with Changi", { values, maxActions: 6, evidenceLevel: "none" });
+  assert.equal(result.status, "needs_guidance");
+  assert.match(result.info, /^Jev kept choosing to type into a select that already shows the value of tracking_category \(last: combobox "Tracking Category" in table row 1\), so nothing was typed\./);
+  assert.equal(result.pending.question, "What is the next step, now that this field shows its value?");
+  assert.equal(result.actions.filter((a) => a.reason === "already_shown").length, 2);
+  assert.equal(typed(k), 0);
+  // Another option, or one with the value only as part of its text, is not
+  // the value: the select is typed into to find it. So is one option whose
+  // own text holds a comma: it is not split into two (Codex on 37c131e).
+  for (const [display, items] of [["HQ"], ["Changi Airport"], ["Changi, Singapore"], ["HQ, Changi Airport", ["HQ", "Changi Airport"]]]) {
+    k = new MemoryKapture({ elements: [tracking(display, items)] });
+    await memoryRuntime(k, scriptedDecider([{ tool: "type", target: 0 }, { tool: "none", done: 0.99 }])).run("Tag line 1 with Changi", { values, maxActions: 3, evidenceLevel: "none" });
+    assert.ok(typed(k) > 0, display);
+  }
 });
 
 test("Playwright rounds wait on full observations, not the URL/title metadata poll", async () => {

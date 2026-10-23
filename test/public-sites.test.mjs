@@ -98,6 +98,56 @@ test("navigation never accepts an unchanged page and does not hide permanent err
   await assert.rejects(observeUntilReady(async () => { throw new Error("command timeout"); }, { before, action: { tool: "click", el: { tag: "button" } } }), /command timeout/);
 });
 
+test("a page over the element limit is read again until it settles; one that stays over still rejects", async () => {
+  let time = 0, reads = 0;
+  const before = page([field]);
+  const over = () => { throw new Error("OBSERVATION_LIMIT: 1412 interactive elements, more than 1000; narrow the observation scope"); };
+  // A suggestion click is not a navigation, and the window still applies.
+  const action = { tool: "click", el: { tag: "li", role: "option" } };
+  const result = await observeUntilReady(async () => ++reads <= 2 ? over() : page([], "https://example.test/wiki/Target"), { before, action, maxMs: 3000, quietMs: 0, pollMs: 100, now: () => time, pause: async ms => { time += ms; } });
+  assert.equal(result.page.url, "https://example.test/wiki/Target");
+  assert.equal(reads, 3);
+  // Retries wait at least half a second: each read of a large page is slow.
+  assert.equal(time, 1000);
+  time = 0;
+  await assert.rejects(observeUntilReady(async () => over(), { before, action, maxMs: 3000, quietMs: 0, pollMs: 100, now: () => time, pause: async ms => { time += ms; } }), /OBSERVATION_LIMIT: 1412/);
+  assert.equal(time, 3000);
+});
+
+test("a run whose next page stays over the element limit stops with observation_limit and keeps its history", async () => {
+  const link = { i: 0, selector: "#target", tag: "a", role: "link", label: "Target", href: "/target" };
+  const k = new MemoryKapture(page([link]));
+  let clicked = false, reads = 0;
+  k.onCommand = command => { if (command === "click") clicked = true; };
+  k.dom = async () => ({ url: "https://example.test/target", title: "Huge list" });
+  const runtime = memoryRuntime(k, scriptedDecider([{ tool: "click" }, { tool: "none", done: 0.99 }]));
+  runtime.observation = { maxMs: 0, navigationMs: 100, quietMs: 0, pollMs: 1 };
+  runtime.snapshotter = async () => {
+    if (!clicked) return structuredClone(k.page);
+    reads++;
+    throw new Error("OBSERVATION_LIMIT: 1412 interactive elements, more than 1000; narrow the observation scope");
+  };
+  const result = await runtime.run("Open target", { tabId: "test", assertions: [{ type: "url_contains", value: "/target" }] });
+  assert.equal(result.status, "observation_limit");
+  assert.match(result.info, /1412 interactive elements/);
+  assert.equal(result.url, "https://example.test/target");
+  assert.deepEqual(result.actions.map((a) => a.action), ["click"]);
+  assert.equal(result.recovery.next_tool, "browser_screenshot");
+  assert.equal(k.commands.filter(c => c.command === "click").length, 1);
+  // Read only once per poll; readPage does not retry it five times.
+  assert(reads >= 2);
+  // The same page settling within the window is a normal run.
+  const k2 = new MemoryKapture(page([link]));
+  let clicked2 = false, reads2 = 0;
+  k2.onCommand = command => { if (command === "click") clicked2 = true; };
+  const settles = memoryRuntime(k2, scriptedDecider([{ tool: "click" }, { tool: "none", done: 0.99 }]));
+  settles.observation = { maxMs: 0, navigationMs: 3000, quietMs: 0, pollMs: 1 };
+  settles.snapshotter = async () => !clicked2 ? structuredClone(k2.page) : ++reads2 <= 2 ? (() => { throw new Error("OBSERVATION_LIMIT: 1412 interactive elements, more than 1000; narrow the observation scope"); })() : page([], "https://example.test/target");
+  const done = await settles.run("Open target", { tabId: "test", assertions: [{ type: "url_contains", value: "/target" }] });
+  assert.equal(done.status, "completed_verified");
+  assert.equal(k2.commands.filter(c => c.command === "click").length, 1);
+});
+
 test("search Enter tolerates a temporarily absent document during a full-page navigation", async () => {
   let time = 0, reads = 0;
   const before = page([field]);

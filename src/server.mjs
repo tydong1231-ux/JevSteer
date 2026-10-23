@@ -11,6 +11,7 @@ const SERVER_POLICY = [
   "Evidence Packets contain action-effect checks, final verification and filtered network evidence. Use browser_evidence only when a referenced request/response needs deeper inspection.",
   "Only completed_verified is automatic final success. milestone_ready_for_review means the executor passed its checks but the host still owns acceptance.",
   "Use verification_mode=host for complex outcomes: Jev executes, the runtime checks assertions, and the HOST independently judges the result. The default hybrid mode also hands uncertain Jev verification to the host. host_review_required is not success. Call browser_review with evidence for every criterion and constraints; the receipt is bound to the observed page and originating milestone. Never accept solely from Jev's completion claim or a transport ACK.",
+  "Name the business record in each write's goal, a milestone goal or goal on browser_act (\"Approve the sales invoice for ACME, 50.00\"): a confirmed write refuses the same input on the same page under the same goal, and a site can show many records on one address. Keep the goal unchanged for the same record.",
   "Put secrets only in values. Never bypass CAPTCHA, 2FA, security prompts, destructive confirmations or payment/legal submission confirmation.",
 ].join(" ");
 
@@ -64,7 +65,7 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
 
   server.registerTool("browser_open", {
     title: "Open URL",
-    description: "Open an absolute URL in the user's real Chrome session. Lost navigation acknowledgements are reconciled by observing the exact requested destination without replay. navigation_unconfirmed returns the tab_id for inspection; do not blindly retry.",
+    description: "Open an absolute URL in the user's real Chrome session. Lost navigation acknowledgements are reconciled by observing the exact requested destination without replay. navigation_unconfirmed returns the tab_id for inspection; do not blindly retry. While input in this browser session has no confirmed outcome, it opens only about:blank, because any address is a request that can change the site, even the one that input was chosen on, and it never navigates the tab that holds that input. Read what that input did from the open pages (browser_snapshot, browser_inspect) and resolve it first with browser_resolve_action.",
     inputSchema: z.object({
       url: z.string().url(),
       tab_id: z.string().optional(),
@@ -173,13 +174,14 @@ export function createServer({ runtime = new JevSteerRuntime() } = {}) {
 
   server.registerTool("browser_act", {
     title: "Manual Browser Action",
-    description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. Never replay an uncertain action.",
+    description: "RECOVERY ONLY. Perform one surgical DOM action. Guarded operations are journaled before dispatch and return action_unconfirmed plus action_id until their actual outcome is reviewed with browser_resolve_action. Resolve applied only when the site itself changed (a save, a submission, an autosave); then the same input on this page is refused as a replay under the same goal, or under any goal when none was given. Resolve not_applied when it only changed the page: a field set before saving, a menu, popup or dialog opened or closed. press_key Escape is journaled the same way, also with no element: a page can answer it (an autosave, a cancel). Resolve it not_applied when it only closed a menu, popup or dialog and nothing changed on the site, so it can be pressed again; applied when it changed something on the site. Never replay an uncertain action.",
     inputSchema: z.object({
       tab_id: z.string().optional(),
       action: z.enum(["click", "type", "press_enter", "press_key", "select", "hover", "scroll", "back", "wait"]),
       element: z.number().int().min(0).optional(),
       value: z.string().optional(),
       key: z.string().optional(),
+      goal: z.string().max(1000).optional().describe("The business operation this input belongs to, naming its record, as a milestone goal does (\"Approve the sales invoice for JevSteer QA CHAIN1020A, 50.00\"). Once applied, the same input is refused under this goal only; another record's goal is a different operation."),
     }),
   }, wrap(async ({ tab_id, ...rest }) => text(await runtime.actManual({ tabId: tab_id, ...rest }))));
 

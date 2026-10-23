@@ -59,3 +59,163 @@ test('an error toast after the ticket makes it stale, and the rerun re-observes 
     expect(clicks).toBe(0);
   } finally { await mcp.close(); }
 });
+
+// ccMonet's sidebar: the Todo count sits in div.unread, a Tailwind pill with no
+// role (read-only probe, 2026-10-19). Its success message has no role either,
+// and an app can rename antd's class prefix.
+const sidebar = `<nav>
+    <a href="#ai"><div class="flex items-center pr-2"><span>AI Insights</span><span id="ai" style="display:inline-block;height:16px;min-width:16px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;text-align:center">42</span></div></a>
+    <a href="#todo"><div class="flex items-center pr-2"><span>Todo</span><div class="unread ml-auto"><div class="rounded-full"><span id="todo">41</span></div></div></div></a>
+  </nav>`;
+const renamed = customer.replace("notice.className = 'ant-message-notice'", "notice.className = 'ccm-message-notice ccm-message-notice-success'");
+
+test('a sidebar count that grows after the ticket, and a message under a renamed prefix, do not make it stale', async ({ page }, testInfo) => {
+  await page.setContent(sidebar + renamed);
+  const mcp = await mcpFixture(page, testInfo, save());
+  try {
+    const ticket = await run(mcp);
+    expect(ticket.status).toBe('host_review_required');
+    expect(ticket.verification.observation.text).toContain('Update successfully');
+    // Creating the record added a to-do, as on ccMonet, and the message fades.
+    await page.evaluate(() => { document.querySelector('#todo').textContent = '42'; document.querySelector('#ai').textContent = '43'; });
+    await expect(page.locator('.ccm-message-notice')).toHaveCount(0);
+    expect((await review(mcp, ticket, 'accept')).status).toBe('completed_host_verified');
+  } finally { await mcp.close(); }
+});
+
+test('a changed record still makes the ticket stale when a count changed with it', async ({ page }, testInfo) => {
+  await page.setContent(sidebar + customer);
+  const mcp = await mcpFixture(page, testInfo, save());
+  try {
+    const ticket = await run(mcp);
+    expect(ticket.status).toBe('host_review_required');
+    await page.evaluate(() => { document.querySelector('#todo').textContent = '42'; state.textContent = 'Status: Draft'; });
+    expect((await review(mcp, ticket, 'accept')).status).toBe('host_review_stale');
+  } finally { await mcp.close(); }
+});
+
+// ccMonet's Save as Draft with a required field left empty: nothing visible
+// happens, no request goes out (Mac rerun, 2026-10-19). Or a message says
+// what is missing.
+const draft = (onSave = '') => `<div role="dialog" aria-modal="true" aria-label="New invoice"><h2>New invoice</h2>
+    <label>Payment Terms <input name="terms"></label><button>Save as Draft</button></div>
+  <div class="ant-message" style="position:fixed;top:8px;left:0;right:0"></div>
+  <script>
+    window.toast = (text, ms) => {
+      const notice = Object.assign(document.createElement('div'), { className: 'ant-message-notice', textContent: text });
+      document.querySelector('.ant-message').append(notice);
+      setTimeout(() => notice.remove(), ms);
+    };
+    document.querySelector('button').onclick = () => { ${onSave} };
+  </script>`;
+const unseen = () => scriptedDecider([
+  (state) => decision({ tool: 'click', target: state.page.elements.find((e) => e.label === 'Save as Draft').i, side_effect: 0.9 }),
+  { tool: 'none', done: 0.01 },
+]);
+
+for (const [name, onSave, said] of [
+  ['nothing', '', 'no message appeared after it'],
+  ['only a message', "toast('Please select Payment Terms', 3000);", 'the page then showed "Please select Payment Terms"'],
+]) {
+  test(`a save that shows ${name} goes to the host as a result Jev did not see`, async ({ page }, testInfo) => {
+    await page.setContent(draft(onSave));
+    const mcp = await mcpFixture(page, testInfo, unseen());
+    try {
+      const ticket = await run(mcp, { goal: 'Save the invoice as a draft' });
+      expect(ticket.status).toBe('host_review_required');
+      expect(ticket.info).toBe(`Jev did not find task.goal reached after a write this milestone sent (click on button "Save as Draft"): ${said}, and the page sent no data request after it. A required field or a rule on the page may have stopped the write. Check the site before accepting this result, and resolve the pending action from what it shows. No input was replayed.`);
+      expect(ticket.actions).toHaveLength(1);
+      // A message over the drawer is part of what the page says.
+      if (onSave) expect(ticket.verification.observation.text).toContain('Please select Payment Terms');
+    } finally { await mcp.close(); }
+  });
+}
+
+// A ticket binds the page without its toasts, and the host accepts after they
+// have gone. An assertion met only by a toast would no longer hold then.
+for (const [value, status] of [['Update successfully', 'verification_failed'], ['Status: Saved', 'completed_host_verified']]) {
+  test(`a ticket assertion on "${value}" is checked on what the ticket binds`, async ({ page }, testInfo) => {
+    await page.setContent(customer);
+    const mcp = await mcpFixture(page, testInfo, save());
+    // Bind at once, while the toast shows.
+    Object.assign(mcp.runtime.observation, { reviewToastWaitMs: 0 });
+    try {
+      const ticket = await run(mcp, { assertions: [{ type: 'text_contains', value }] });
+      if (status === 'verification_failed') {
+        expect(ticket.status).toBe('verification_failed');
+        expect(ticket.verification.assertions[0]).toMatchObject({ passed: false, error: expect.stringMatching(/met only by a message that fades/) });
+        expect(ticket.info).toMatch(/Assert what the page keeps/);
+        return;
+      }
+      expect(ticket.status).toBe('host_review_required');
+      await expect(page.locator('.ant-message-notice')).toHaveCount(0);
+      expect((await review(mcp, ticket, 'accept')).status).toBe(status);
+    } finally { await mcp.close(); }
+  });
+}
+
+// ccMonet after Create in its customer drawer: the success message shows, the
+// drawer closes, and the list reloads behind it a moment later (Mac rerun,
+// 2026-10-19). A ticket issued at once missed the new row.
+const created = `<h1>Customers</h1>
+  <table><tbody id="rows"><tr data-row-key="1"><td><input type="checkbox" aria-label="Select row"></td><td>Existing customer</td></tr></tbody></table>
+  <div role="dialog" aria-modal="true" aria-label="New customer" id="drawer"><label>Name <input name="name" value="JevSteer QA"></label><button>Create</button></div>
+  <div class="ant-message" style="position:fixed;top:8px;left:0;right:0"></div>
+  <script>
+    window.toast = (text, ms) => {
+      const notice = Object.assign(document.createElement('div'), { className: 'ant-message-notice', textContent: text });
+      document.querySelector('.ant-message').append(notice);
+      setTimeout(() => notice.remove(), ms);
+    };
+    document.querySelector('#drawer button').onclick = () => {
+      toast('Create successfully', 2500);
+      setTimeout(() => document.querySelector('#drawer').remove(), 200);
+      setTimeout(() => document.querySelector('#rows').insertAdjacentHTML('beforeend', '<tr data-row-key="2"><td><input type="checkbox" aria-label="Select row"></td><td>JevSteer QA</td></tr>'), 1500);
+    };
+  </script>`;
+
+for (const [waitMs, status] of [[4000, 'completed_host_verified'], [0, 'host_review_stale']]) {
+  test(`a new ticket waits for the message to go before binding the list (toast wait ${waitMs} ms)`, async ({ page }, testInfo) => {
+    await page.setContent(created);
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+      (state) => decision({ tool: 'click', target: state.page.elements.find((e) => e.label === 'Create').i, side_effect: 0.9 }),
+      { tool: 'none', done: 0.99 },
+    ]));
+    Object.assign(mcp.runtime.observation, { maxMs: 6000, reviewToastWaitMs: waitMs });
+    try {
+      const ticket = await run(mcp, { goal: 'Create customer JevSteer QA' });
+      expect(ticket.status).toBe('host_review_required');
+      await expect(page.locator('#rows tr')).toHaveCount(2);
+      await expect(page.locator('.ant-message-notice')).toHaveCount(0);
+      expect((await review(mcp, ticket, 'accept')).status).toBe(status);
+    } finally { await mcp.close(); }
+  });
+}
+
+// A badge the contract speaks of is part of what the host reviews: "Cart 2"
+// turning into "Cart 3" after the ticket makes it stale.
+const shop = `<nav><a href="#cart">Cart <span class="badge" id="cart">1</span></a></nav>
+  <h1>The Grand Design</h1><button>Add to cart</button>
+  <script>document.querySelector('button').onclick = () => { cart.textContent = '2'; };</script>`;
+
+// antd's Badge draws each digit of a count in its own element: the page text
+// reads 12 as "1 2". The counts after it in the text are still found, here
+// a cart count that no control's label holds.
+const antdInbox = `<nav><a href="#inbox"><span class="ant-badge"><span>Inbox</span><sup class="ant-scroll-number ant-badge-count" title="12"><bdi><span class="ant-scroll-number-only"><span class="ant-scroll-number-only-unit current">1</span></span><span class="ant-scroll-number-only"><span class="ant-scroll-number-only-unit current">2</span></span></bdi></sup></span></a></nav>`;
+const cartText = shop.replace('<nav><a href="#cart">Cart <span class="badge" id="cart">1</span></a></nav>', '<p>Cart <span class="badge" id="cart">1</span></p>');
+
+for (const [after, html] of [['', shop], [' after a count whose digits antd draws apart', antdInbox + cartText]]) {
+  test(`a count the contract names is bound into the ticket${after}`, async ({ page }, testInfo) => {
+    await page.setContent(html);
+    const mcp = await mcpFixture(page, testInfo, scriptedDecider([
+      (state) => decision({ tool: 'click', target: state.page.elements.find((e) => e.label === 'Add to cart').i, side_effect: 0.9 }),
+      { tool: 'none', done: 0.99 },
+    ]));
+    try {
+      const ticket = await run(mcp, { goal: 'Add The Grand Design to the cart once' });
+      expect(ticket.status).toBe('host_review_required');
+      await page.evaluate(() => { document.querySelector('#cart').textContent = '3'; });
+      expect((await review(mcp, ticket, 'accept')).status).toBe('host_review_stale');
+    } finally { await mcp.close(); }
+  });
+}

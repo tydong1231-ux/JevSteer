@@ -25,7 +25,7 @@ export function squash(value, max = 500) {
 export function brief(e) {
   if (!e) return "";
   const kind = e.role || e.tag || "element";
-  const label = squash(e.label || e.text || e.placeholder || e.name || e.href || "", 120);
+  const label = squash(e.label || e.text || e.placeholder || e.hint || e.name || e.href || "", 120);
   return label ? `${kind} "${label}"` : kind;
 }
 
@@ -59,13 +59,22 @@ function modelElement(e, multiFrame) {
   put("label", e.label);
   if (!secret && squash(e.text) !== squash(e.label)) put("text", e.text);
   put("placeholder", e.placeholder);
+  put("hint", e.hint);
   put("name", e.name);
   put("type", e.type);
   put("href", e.href);
   if (secret) out.value = "[REDACTED]";
   else if (e.value != null && (e.value !== "" || FORM_TAGS.has(e.tag) || e.contenteditable)) out.value = squash(e.value, 160);
+  // What a select-like combobox shows while its input holds only search text.
+  if (!secret) put("display", e.display && squash(e.display, 160));
+  put("column", e.column && squash(e.column, 60));
+  put("row", e.row);
+  put("more_options", e.more_options);
   if (typeof e.checked === "boolean" && (e.checked || CHECKABLE_TYPES.has(String(e.type || "").toLowerCase()) || CHECKABLE_ROLES.has(e.role))) out.checked = e.checked;
-  for (const flag of ["disabled", "readonly", "contenteditable", "invalid"]) if (e[flag]) out[flag] = true;
+  for (const flag of ["disabled", "readonly", "contenteditable", "required"]) if (e[flag]) out[flag] = true;
+  // Invalid by the browser's own check, or marked so by the page (see the
+  // snapshot's errorMark).
+  if (e.invalid || e.error_mark) out.invalid = true;
   if (e.options) out.options = e.options.map((o) => {
     const option = { text: o.text };
     if (o.value !== o.text) option.value = o.value;
@@ -81,17 +90,45 @@ function modelElement(e, multiFrame) {
   put("record_key", e.record_key);
   if (typeof e.expanded === "boolean") out.expanded = e.expanded;
   if (typeof e.selected === "boolean") out.selected = e.selected;
+  // The [i] of the field whose popup shows this element: an open combobox's
+  // option, or a result under a search box.
+  put("popup_of", e.popup_of);
+  // The [i] of the field this clear button empties.
+  put("clears", e.clears);
   put("validation_message", e.validation_message);
   return out;
+}
+
+// The focused field's popup and that field, as Jev and the host read them.
+// A secret field's popup can echo what was typed ("hunter2 is too common"),
+// so it is left out, like the text next to such a field.
+export function readablePopup(page) {
+  const field = page.popup && page.elements?.find((e) => e.i === page.popup.field);
+  if (!field || sensitiveField(field) || !squash(page.popup.text)) return undefined;
+  return { field, text: page.popup.text };
+}
+
+// What the focused field's popup shows, next to that field: search results
+// under a global search box read as that box's results, not as page text.
+function popupForModel(page) {
+  const { field } = readablePopup(page) || {};
+  if (!field) return undefined;
+  return {
+    field: `[${field.i}] ${brief(field)}`,
+    field_value: squash(field.value, 80),
+    shows: squash(page.popup.text, 600),
+  };
 }
 
 export function toModelPage(page) {
   const multiFrame = new Set(page.elements.map((e) => e.frame_id).filter(Boolean)).size > 1
     || Number(page.metrics?.frame_count) > 1;
+  const popup = popupForModel(page);
   return {
     url: page.url,
     title: page.title,
     ...(page.background_context ? { background_context: squash(page.background_context, 600) } : {}),
+    ...(popup ? { popup } : {}),
     text: squash(page.text, config.modelPageTextChars),
     metrics: page.metrics,
     loading: page.loading,
@@ -114,9 +151,13 @@ export function formatPage(page) {
       e.label ? `label=${JSON.stringify(squash(e.label, 120))}` : "",
       !e.label && e.text ? `text=${JSON.stringify(squash(e.text, 120))}` : "",
       e.placeholder ? `placeholder=${JSON.stringify(squash(e.placeholder, 80))}` : "",
+      e.hint ? `hint=${JSON.stringify(squash(e.hint, 80))}` : "",
       e.value && !sensitiveField(e) ? `value=${JSON.stringify(squash(e.value, 80))}` : "",
+      e.display && !sensitiveField(e) ? `shows=${JSON.stringify(squash(e.display, 80))}` : "",
       e.href ? `href=${JSON.stringify(squash(e.href, 120))}` : "",
       e.disabled ? "disabled" : "",
+      e.required ? "required" : "",
+      e.invalid || e.error_mark ? "invalid" : "",
       e.checked != null ? `checked=${e.checked}` : "",
     ].filter(Boolean);
     lines.push(`[${e.i}] <${e.tag}> ${attrs.join(" ")}`.trim());
@@ -143,7 +184,8 @@ export function pageDiff(before, after) {
     if (!current) continue;
     if (old.checked !== current.checked) changes.push(`${brief(current)} checked=${current.checked}`);
     if (old.value !== current.value) changes.push(`${brief(current)} field value changed`);
-    if (old.invalid !== current.invalid) changes.push(`${brief(current)} invalid=${current.invalid}`);
+    const invalid = (e) => !!(e.invalid || e.error_mark);
+    if (invalid(old) !== invalid(current)) changes.push(`${brief(current)} invalid=${invalid(current)}`);
     if (changes.length >= 12) break;
   }
   return changes.join("; ") || "no obvious visible change";

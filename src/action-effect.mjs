@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { elementFingerprint, pageDiff, squash } from "./page-model.mjs";
+import { brief, elementFingerprint, pageDiff, squash } from "./page-model.mjs";
 import { locateAfterAction } from "./element-identity.mjs";
 import { sameDateText } from "./date-text.mjs";
+import { numericField, sameNumberText } from "./number-text.mjs";
 
 // Kapture snapshots give rich-text editors and custom textboxes no value; their
 // content is element text, whitespace-collapsed and cut to this many chars.
@@ -41,6 +42,8 @@ export function verifyActionEffect(before, after, action) {
     if (actual === expected) return { status: "confirmed", check: "field_value" };
     // A date picker rewrites a committed date in its own format: 2026/01/01.
     if (sameDateText(actual, expected)) return { status: "confirmed", check: "field_value_date" };
+    // A number field groups the digits it took: 5000 shows as 5,000.
+    if (sameNumberText(actual, expected, { numeric: numericField(current) })) return { status: "confirmed", check: "field_value_number" };
     return { status: "failed", check: "field_value" };
   }
 
@@ -86,4 +89,42 @@ export function verifyActionEffect(before, after, action) {
   }
 
   return { status: "unknown", check: "none" };
+}
+
+// What a click did when all it did was close something. A popup, menu or list
+// that is open takes a click outside it: it closes, and the page need not
+// pass the click on to what it was aimed at. ccMonet's bill rows opened
+// nothing when clicked while a filter popup, or the global search's results,
+// were open; Jev then waited for a bill that was not coming. Such a click
+// took controls away and added none, on the same address, with a few new
+// words at most (a field's placeholder shows again once it loses focus); the
+// page sent no request, and the click's target is still there, as it was:
+// a toggle that shows its own popup open (aria-expanded) or changes its own
+// state took the click itself. Each control that went was in an open popup
+// (`layer`, Playwright driver: a field's popup, or a box with a popup's role
+// such as antd's popover), and no control is left in it: it closed. A
+// section that a button collapses without showing any state of its own is
+// no popup, and a second click would open it again (Codex on 440e142).
+// Returns how many controls went, and a few of them.
+export function closedOnly(before, after, action) {
+  if (action?.tool !== "click" || !before || !after || before.url !== after.url) return undefined;
+  if (after.requests_since_input !== 0 || after.pending_requests > 0 || after.loading?.busy) return undefined;
+  const target = findAfter(after, action, before);
+  if (!target || action.el?.expanded === true) return undefined;
+  if (["expanded", "checked", "selected"].some((key) => (target[key] ?? null) !== (action.el?.[key] ?? null))) return undefined;
+  const left = new Map();
+  for (const e of after.elements) left.set(elementFingerprint(e), (left.get(elementFingerprint(e)) || 0) + 1);
+  const gone = [];
+  for (const e of before.elements) {
+    const key = elementFingerprint(e);
+    if (left.get(key)) left.set(key, left.get(key) - 1);
+    else gone.push(e);
+  }
+  // What is still counted in `left` was not there before.
+  if (!gone.length || [...left.values()].some((n) => n > 0)) return undefined;
+  const popups = new Set(gone.map((e) => e.layer));
+  if (popups.has(undefined) || popups.has(null) || after.elements.some((e) => e.layer != null && popups.has(e.layer))) return undefined;
+  const words = new Set(squash(before.text, 6000).split(" "));
+  if (squash(after.text, 6000).split(" ").filter((w) => w && !words.has(w)).length > 3) return undefined;
+  return { controls_gone: gone.length, such_as: gone.slice(0, 3).map((e) => brief(e)) };
 }

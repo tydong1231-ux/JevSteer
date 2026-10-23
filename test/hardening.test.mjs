@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { KaptureClient } from "../src/kapture-client.mjs";
 import { TabLeaseManager } from "../src/lease.mjs";
 import { verifyActionEffect } from "../src/action-effect.mjs";
-import { sensitiveName } from "../src/sensitive.mjs";
+import { sensitiveName, sensitiveField } from "../src/sensitive.mjs";
 import { redact, safeUrl } from "../src/evidence.mjs";
 import { normalizeMilestonePlan } from "../src/milestones.mjs";
 import { normalizeAssertions } from "../src/task-contract.mjs";
@@ -145,6 +145,18 @@ test("secret fields are confirmed by the live value digest, never by their hidde
   // Kapture snapshots hide password values without a digest: never a false failure.
   const password = { selector: "#password", tag: "input", type: "password", value: "[REDACTED]" };
   assert.equal(verifyActionEffect(page([password]), page([password]), { tool: "type", el: password, expected_value: "hunter2" }).status, "unknown");
+});
+
+// A field with no name of its own is known by the text drawn over it, or
+// by its table column; the snapshot marks one it saw as secret (Codex on
+// ebc7159).
+test("a field is secret by its hint, its column, or the snapshot's mark, as by its name", () => {
+  for (const field of [{ type: "password" }, { label: "API key" }, { name: "pin" }, { placeholder: "Token" }, { hint: "API token" }, { column: "Password" }, { secret: true }]) {
+    assert.equal(sensitiveField(field), true, JSON.stringify(field));
+  }
+  for (const field of [{ hint: "Search contacts, vendor bills, sales invoices, payrolls..." }, { column: "Unit Price" }, { label: "Customer" }, { secret: "yes" }, {}]) {
+    assert.equal(sensitiveField(field), false, JSON.stringify(field));
+  }
 });
 
 test("secret detection keeps short tokens to whole words", () => {
