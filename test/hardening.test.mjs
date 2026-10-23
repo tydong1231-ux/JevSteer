@@ -15,6 +15,7 @@ import { normalizeMilestonePlan } from "../src/milestones.mjs";
 import { normalizeAssertions } from "../src/task-contract.mjs";
 import { buildSemanticPage } from "../src/semantic-snapshot.mjs";
 import { OfflineRuntime } from "./helpers/runtime.mjs";
+import { PlaywrightDriver } from "../src/browser/playwright-driver.mjs";
 
 async function withTempDir(fn) {
   const dir = await mkdtemp(join(tmpdir(), "jevsteer-hardening-"));
@@ -216,4 +217,14 @@ test("a target-only Jev request (large-page second stage) still validates its ta
     if (previousKey == null) delete process.env.TYPESAFE_API_KEY;
     else process.env.TYPESAFE_API_KEY = previousKey;
   }
+});
+
+test("listing an attached tab whose title never settles does not hang", async () => {
+  const driver = new PlaywrightDriver({ context: { on() {}, pages: () => [] } });
+  const asleep = { url: () => "https://example.test/sleeping", title: () => new Promise(() => {}) };
+  const started = Date.now();
+  const ref = await driver.pageRef({ pageId: "pw:sleeping", page: asleep });
+  assert.equal(ref.title, "");
+  assert.equal(ref.url, "https://example.test/sleeping");
+  assert.ok(Date.now() - started < 3000);
 });
