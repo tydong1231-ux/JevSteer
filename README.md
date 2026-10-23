@@ -18,6 +18,12 @@ JevSteer keeps expensive agents out of repetitive browser loops without asking J
 
 [Agent protocol](docs/PROTOCOL.md) · [Claude Code example](examples/claude-code.md)
 
+## Demo
+
+[▶ **Watch the 67-second JevSteer demo (MP4)**](https://github.com/tydong1231-ux/JevSteer/releases/download/demo-v1/jevsteer-demo.mp4)
+
+Real browser execution: JevSteer fills and submits a public form, then searches Wikipedia and opens its revision history. Recorded with OpenScreen.
+
 ## What problem does it solve?
 
 A powerful host agent is good at planning a multi-step business task, but spending that agent's time on every browser click is expensive. A smaller executor can be cheaper, but should not be entrusted with the entire business workflow.
@@ -87,7 +93,7 @@ JevSteer can search, inspect, and verify the observed result. **If it cannot con
 | Fast and strict review modes | Adapts human oversight to consequence and uncertainty | Strict review costs more time |
 | Fail closed for risky actions | Protects users when intent or authorization is unclear | Some operations require escalation |
 
-**Try it:** follow [Quick start](#quick-start), run `npm test`, connect the MCP server to Claude Code or Codex, and begin with a read-only browser task in a test application. A hosted public demo is not provided here; the repository documents a local setup.
+**Try it:** follow [Quick start](#quick-start), run `npm test`, connect the MCP server to Claude Code or Codex, and begin with a read-only browser task in a test application. See the [recorded demo](#demo) for an example of a live run.
 
 ## Ultrafast-inspired execution policy
 
