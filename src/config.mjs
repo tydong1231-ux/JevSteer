@@ -28,6 +28,11 @@ export const config = {
   driftStopAt: num("JEVSTEER_DRIFT_STOP_AT", 0.25),
   driftAutoRecoverAt: num("JEVSTEER_DRIFT_RECOVER_AT", 0.12),
   sideEffectSafeAt: num("JEVSTEER_SIDE_EFFECT_SAFE_AT", 0.2),
+  // An unconfirmed input judged at least this likely to change remote data
+  // blocks input on the session's other pages and new navigation until the
+  // host resolves it (see assertSessionClear). A less likely one blocks only
+  // its own repeat on its own page.
+  sessionLockRiskAt: num("JEVSTEER_SESSION_LOCK_RISK_AT", 0.5),
   constraintRiskAt: num("JEVSTEER_CONSTRAINT_RISK_AT", 0.55),
   // At or above this, the guards judge that the task does not call for the
   // field an action sets or empties (see checkActionEffects): nothing is sent.

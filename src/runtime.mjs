@@ -121,6 +121,17 @@ function actionError(error) {
 }
 
 
+// What a failed browser start needs, from its error.
+function browserFix(error, driverKind) {
+  const message = String(error?.message ?? error);
+  if (/Executable doesn't exist|executable.*not found/i.test(message)) return "The pinned Chromium is not installed: run `npm run browser:install`, or set JEVSTEER_BROWSER_CHANNEL=chrome to use the installed Chrome, or JEVSTEER_CDP_ENDPOINT to attach to a running one.";
+  if (/ECONNREFUSED|connect .*refused|ENOTFOUND|socket hang up|WebSocket/i.test(message)) return "Nothing answers at JEVSTEER_CDP_ENDPOINT: start Chrome with remote debugging, or for `chrome` allow it at chrome://inspect/#remote-debugging and accept Chrome's connection prompt.";
+  if (/one browser context|contexts/i.test(message)) return "The attached browser has more than one context (profile or incognito window): close the extra windows, or attach to a browser with one.";
+  if (/BROWSER_CONFIG/.test(message)) return "Fix the browser settings the error names: choose one of JEVSTEER_BROWSER_PROFILE and JEVSTEER_CDP_ENDPOINT.";
+  if (driverKind === "kapture") return "Start Chrome with the Kapture extension and click its toolbar icon in the tab to control.";
+  return "Read the error; the browser did not start or attach.";
+}
+
 function navigationLike(action) {
   if (!action) return false;
   if (action.tool === "click") return action.tag === "a" || action.role === "link";
@@ -589,9 +600,16 @@ export class JevSteerRuntime {
         browser_ready: false,
         ...(this.driver.kind === "kapture" ? { kapture_server: false } : {}),
         error: String(error?.message ?? error),
+        fix: browserFix(error, this.driver.kind),
       };
     }
     const tabs = await this.tabs();
+    // Whether each page answers and is on screen (see the driver's probe).
+    if (typeof this.driver.probe === "function") {
+      await Promise.all(tabs.map(async (tab) => Object.assign(tab, await this.driver.probe(tab.tab_id).catch(() => ({ responsive: false })))));
+    }
+    const asleep = tabs.filter((t) => t.responsive === false);
+    const hidden = tabs.filter((t) => t.responsive && t.visible === false);
     return {
       status: keyAvailable && tabs.length ? "ready" : "needs_setup",
       typesafe_key: !!process.env.TYPESAFE_API_KEY,
@@ -608,7 +626,11 @@ export class JevSteerRuntime {
         ? `Set ${config.jevProvider === "openrouter" ? "OPENROUTER_API_KEY" : "TYPESAFE_API_KEY"} for this MCP server.`
         : tabs.length === 0
           ? (this.driver.kind === "kapture" ? "Install/enable the Kapture browser extension and click its toolbar icon in the tab you want the agent to control." : "Call browser_open to create a managed page; select tab_id explicitly when multiple pages exist.")
-          : "Ready for browser_run.",
+          : asleep.length
+            ? `Ready, but ${asleep.length === 1 ? "a tab does" : `${asleep.length} tabs do`} not answer (${asleep.map((t) => t.tab_id).join(", ")}): a sleeping or discarded tab takes no input; reload or close it, and pass tab_id for the page to use.`
+            : hidden.length
+              ? `Ready. ${hidden.length === 1 ? "A tab is" : `${hidden.length} tabs are`} in the background (${hidden.map((t) => t.tab_id).join(", ")}); a page is brought on screen before input.`
+              : "Ready for browser_run.",
     };
   }
 
@@ -640,10 +662,16 @@ export class JevSteerRuntime {
     throw error;
   }
 
+  // Unconfirmed input that may well have changed remote data: a legacy record
+  // without a risk counts as one. A click judged unlikely to write (a menu, a
+  // tab, a filter) is still repeat-protected on its own page, but it does not
+  // stop work on the session's other pages or a new navigation.
+  blocksSession(record) { return (Number.isFinite(record.remote_risk) ? record.remote_risk : 1) >= config.sessionLockRiskAt; }
+
   async assertSessionClear(tabId) {
     const sessionId = this.driver.sessionId;
     if (!sessionId) return;
-    const foreign = (await this.journal.pendingSession(sessionId)).filter((r) => r.page_id !== tabId);
+    const foreign = (await this.journal.pendingSession(sessionId)).filter((r) => r.page_id !== tabId && this.blocksSession(r));
     // The page may be closed by now; its record still blocks this session and
     // browser_resolve_action still accepts its tab_id.
     if (foreign.length) throw new Error(`UNCONFIRMED_SESSION_ACTION: earlier input in this browser session has no confirmed outcome, so input on another page is blocked: ${foreign.map(pendingLine).join("; ")}. ${CHECK_UNCONFIRMED}, even if that page was closed.`);
@@ -658,7 +686,7 @@ export class JevSteerRuntime {
   async assertOpenClear(tabId, url) {
     const sessionId = this.driver.sessionId;
     if (!sessionId) return;
-    const pending = await this.journal.pendingSession(sessionId);
+    const pending = (await this.journal.pendingSession(sessionId)).filter((r) => this.blocksSession(r));
     if (!pending.length) return;
     const own = pending.some((r) => r.page_id === tabId);
     if (!own && url === "about:blank") return;
@@ -1422,6 +1450,9 @@ export class JevSteerRuntime {
       let refusedOn;
       let transitionObserved = false;
       let journalRecords = await this.journal.pending(tab.tabId);
+      // The record of the last acknowledged input, while it waits for its
+      // effect (see below); null once closed or when the input was low-risk.
+      let lastJournal = null;
       let formPlan;
 
       for (let round = 0; round <= maxActions; round++) {
@@ -1458,7 +1489,20 @@ export class JevSteerRuntime {
           const closed = prior && history.at(-1) === prior && closedOnly(previous, page, lastAction);
           if (closed) prior.closed_only = closed;
           if (lastEffect.status === "confirmed" && lastAction?.tool === "type") confirmedTypes.push({ field: rememberField(lastAction.el, previous), url: previous.url, value: lastAction.expected_value, entry: prior });
+          // Input judged possibly, but not likely, to write (see
+          // sessionLockRiskAt): once the page shows its effect, has nothing
+          // in flight and sent no write request after it, its record closes
+          // as a local effect, with no replay barrier. A likely write stays
+          // pending for verification or the host.
+          if (lastJournal && ["confirmed", "changed"].includes(lastEffect.status) && page.writes_since_input === 0
+              && !page.pending_requests && !page.loading?.busy && lastJournal.remote_risk < config.sessionLockRiskAt
+              && journalRecords.some((r) => r.id === lastJournal.id)) {
+            await this.journal.resolve(tab.tabId, lastJournal.id, "applied", `local ${lastEffect.check || lastEffect.status} observed after acknowledged input; no write request followed it`, { protectReplay: false });
+            journalRecords = await this.journal.pending(tab.tabId);
+            if (prior) prior.journal = "closed_local_effect";
+          }
         }
+        lastJournal = null;
         // A wait after which nothing changed, nothing is loading and the page
         // sent no request means the page is settled: the result Jev waits for
         // is not coming, as when a report was generated for the old period.
@@ -2041,6 +2085,8 @@ export class JevSteerRuntime {
           actionSucceeded = true;
           h.dispatch_state = action.dispatchState;
           h.input_mode = action.inputMode;
+          // Where the input landed on the page, for a host that records the run.
+          if (action.pointer) h.pointer = action.pointer;
           // An option this run chose from an open list (see decide).
           if (action.tool === "click" && action.el?.role === "option" && action.el.selected !== true && action.listed_in) {
             chosenOptions.push({ option: brief(action.el), list: brief(action.listed_in), row: action.listed_in.row });
@@ -2048,7 +2094,7 @@ export class JevSteerRuntime {
           if (journalRecord && sideEffect < 0.25) {
             await this.journal.resolve(tab.tabId, journalRecord.id, "applied", "acknowledged interaction classified as no remote mutation");
             journalRecords = await this.journal.pending(tab.tabId);
-          }
+          } else if (journalRecord) lastJournal = journalRecord;
         } catch (error) {
           h.dispatch_state = error.dispatchState;
           if (journalRecord && error.dispatchState === "predispatch_rejected") {
@@ -2114,6 +2160,17 @@ export class JevSteerRuntime {
               status = "max_actions";
               info = undefined;
               continue;
+            }
+            // Low-risk input whose acknowledgement was lost, with no effect
+            // seen, nothing in flight and no write request sent: nothing
+            // reached the site. Its record closes, so the host may rerun the
+            // milestone without resolving it by hand.
+            if (sideEffect < 0.25 && irreversibleRisk < config.sideEffectSafeAt && !["changed", "confirmed"].includes(observed.effect?.status)
+                && page.writes_since_input === 0 && !page.pending_requests && !page.loading?.busy) {
+              await this.journal.resolve(tab.tabId, journalRecord.id, "not_applied", "no observable effect, no open request and no write request after low-risk input with a lost acknowledgement");
+              journalRecords = await this.journal.pending(tab.tabId);
+              row.recovery = "no_effect_after_transport_error";
+              info = "The browser lost this action's acknowledgement, and the page shows no effect of it and sent no request: nothing reached the site. Inspect the page, then rerun the same milestone.";
             }
             if (["changed", "confirmed"].includes(observed.effect?.status) && !page.loading?.busy) {
               verification = await this.verify(page, contract, history, values, verificationMode);

@@ -125,7 +125,10 @@ export class PlaywrightDriver {
     // a request is open (see observeUntilReady).
     const requests = record.events.requests(record.inputAt ?? 0);
     if (requests.pending) result.observation.pending_requests = requests.pending;
-    if (record.inputAt != null) result.observation.requests_since_input = requests.started;
+    if (record.inputAt != null) {
+      result.observation.requests_since_input = requests.started;
+      result.observation.writes_since_input = record.events.writes(record.inputAt);
+    }
     return result.observation;
   }
   waitFor(ref, condition, budget = {}) { return observeUntilReady(() => this.observe(ref), { ...budget, ready: condition }); }
@@ -172,6 +175,11 @@ export class PlaywrightDriver {
     let wheel;
     return dispatchInput(async () => {
       if (record.events.pendingDialog) throw new Error('DIALOG_OPEN: browser dialog requires host handling');
+      // A background tab gets no animation frames, so the browser's checks
+      // before input (that the target holds still) never pass there: the
+      // page is brought on screen first. A tab that does not answer is left.
+      const state = await withTimeout(record.page.evaluate(() => document.visibilityState), 2000, null).catch(() => null);
+      if (state && state !== 'visible') await withTimeout(record.page.bringToFront(), 2000, null).catch(() => {});
       if (!['click', 'type', 'press_enter', 'press_key', 'select', 'hover', 'scroll', 'back', 'wait', 'none'].includes(action.tool)) throw new Error('UNSUPPORTED_ACTION');
       if (action.target == null) {
         if (['click', 'type', 'select', 'hover'].includes(action.tool)) throw new Error('STALE_TARGET: target required');
@@ -247,6 +255,13 @@ export class PlaywrightDriver {
         if (force) await (part || handle).hover({ trial: true, timeout });
       }
       const at = part || handle;
+      // Where the input lands, in viewport pixels, with the viewport's size:
+      // a host that records the run draws the pointer from it.
+      if (at) {
+        const box = await at.boundingBox().catch(() => null);
+        const view = await withTimeout(record.page.evaluate(() => ({ width: innerWidth, height: innerHeight })), 1000, null).catch(() => null);
+        if (box) action.pointer = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), at: Date.now(), ...(view ? { viewport: view } : {}) };
+      }
       // Requests the page starts from here on belong to this input; the next
       // observation waits for them (see observe).
       if (!['wait', 'none'].includes(action.tool)) {
@@ -307,6 +322,17 @@ export class PlaywrightDriver {
       return { input_mode: ['click', 'hover'].includes(action.tool) ? 'pointer' : 'keyboard' };
     }).finally(() => Promise.all([owner, part, scroller].map((h) => h?.dispose().catch(() => {}))));
   }
+  // Whether a page answers within a short wait, and whether it is on screen.
+  // A sleeping or discarded tab answers nothing; a background one is brought
+  // on screen before input (see perform). Reads nothing else of the page and
+  // starts no event capture on it.
+  async probe(ref, { timeoutMs = 1500 } = {}) {
+    await this.ready();
+    const record = this.records.get(typeof ref === 'string' ? ref : ref?.pageId);
+    if (!record || record.page.isClosed()) return { responsive: false, visible: false };
+    const state = await withTimeout(record.page.evaluate(() => document.visibilityState), timeoutMs, null).catch(() => null);
+    return { responsive: state != null, visible: state === 'visible' };
+  }
   async screenshot(ref, { format = 'png' } = {}) {
     const record = await this.record(ref);
     const data = await record.page.screenshot({ type: format, timeout: this.options.timeoutMs });
@@ -348,6 +374,12 @@ export class PlaywrightDriver {
 // a target inside one, input skips Playwright's checks. Playwright's trial
 // hover, which has no enabled check, first proves the target is visible,
 // stable and not covered.
+// `promise`, or `fallback` once `ms` have passed without it settling.
+function withTimeout(promise, ms, fallback) {
+  let timer;
+  return Promise.race([promise, new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), ms); })]).finally(() => clearTimeout(timer));
+}
+
 function forced(action, current) {
   return current.drag_disabled === true && ['click', 'type', 'select'].includes(action.tool);
 }
